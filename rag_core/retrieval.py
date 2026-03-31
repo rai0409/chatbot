@@ -1,0 +1,361 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import unicodedata
+from dataclasses import dataclass
+from threading import Lock
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import config
+from rank_bm25 import BM25Okapi
+from rag_core import embedder, store
+
+
+@dataclass
+class RetrievedChunk:
+    # Unified comparable score across vector/keyword/hybrid retrieval.
+    # Lower is better. This is not guaranteed to be a raw backend score:
+    # - vector hit: vector distance
+    # - keyword hit: rank-derived pseudo distance (raw BM25 is in metadata["bm25_score"])
+    # - hybrid hit: fusion-rank-derived pseudo distance (RRF is in metadata["rrf_score"])
+    # This unified score is used by downstream guard/order logic.
+    text: str
+    metadata: Dict
+    score: float
+
+
+@dataclass
+class _KeywordIndex:
+    tokenized_corpus: List[List[str]]
+    docs: List[str]
+    norm_docs: List[str]
+    metas: List[Dict]
+    bm25: BM25Okapi
+
+
+_INDEX_CACHE: Dict[str, object] = {"path": None, "mtime": None, "index": None}
+_INDEX_LOCK = Lock()
+
+
+def _build_base_where(allowed_types=None, allowed_qualities=None) -> Dict:
+    where = {}
+    if allowed_types:
+        where["type"] = {"$in": list(allowed_types)}
+    if allowed_qualities:
+        where["quality"] = {"$in": list(allowed_qualities)}
+    if not config.IGNORE_SEARCHABLE:
+        where["searchable"] = 1
+    if config.LOG_WHERE:
+        print("where:", json.dumps(where, ensure_ascii=False))
+    return where
+
+
+def _meta_matches_where(meta: Dict, where: Dict) -> bool:
+    if not where:
+        return True
+    if "type" in where:
+        allowed = set(where["type"].get("$in", []))
+        if meta.get("type") not in allowed:
+            return False
+    if "quality" in where:
+        allowed = set(where["quality"].get("$in", []))
+        if meta.get("quality") not in allowed:
+            return False
+    if where.get("searchable") == 1:
+        if int(meta.get("searchable", 1) or 0) != 1:
+            return False
+    return True
+
+
+def _normalize(text: str) -> str:
+    out = unicodedata.normalize("NFKC", text or "")
+    out = out.lower()
+    out = re.sub(r"\s+", " ", out).strip()
+    return out
+
+
+def _extract_quoted_terms(text: str) -> List[str]:
+    terms = []
+    terms += re.findall(r"「([^」]+)」", text or "")
+    terms += re.findall(r'"([^"]+)"', text or "")
+    terms += re.findall(r"'([^']+)'", text or "")
+    return [_normalize(t) for t in terms if _normalize(t)]
+
+
+def _unique_preserve(tokens: Sequence[str]) -> List[str]:
+    seen = set()
+    out = []
+    for tok in tokens:
+        if not tok:
+            continue
+        if tok in seen:
+            continue
+        seen.add(tok)
+        out.append(tok)
+    return out
+
+
+def _heuristic_tokenize(text: str) -> List[str]:
+    norm = _normalize(text)
+    tokens: List[str] = []
+    tokens.extend(_extract_quoted_terms(text))
+    tokens.extend(re.findall(r"[a-z0-9][a-z0-9._:/-]{1,}", norm))
+    tokens.extend(re.findall(r"[ァ-ヴー]{2,}", norm))
+    tokens.extend(re.findall(r"[一-龥々〆〤]{2,}", norm))
+    compact = re.sub(r"[^a-z0-9ぁ-んァ-ヴー一-龥々〆〤]", "", norm)
+    for i in range(0, max(0, len(compact) - 1)):
+        bg = compact[i : i + 2]
+        if re.fullmatch(r"[ぁ-ん]{2}", bg):
+            continue
+        tokens.append(bg)
+    tokens = [t for t in tokens if not re.fullmatch(r"[ぁ-ん]{1,3}", t)]
+    return _unique_preserve(tokens)
+
+
+def _query_match_terms(question: str) -> Tuple[List[str], List[str], List[str]]:
+    norm_q = _normalize(question)
+    quoted_terms = _extract_quoted_terms(question)
+    alnum_terms = re.findall(r"[a-z0-9][a-z0-9._:/-]{1,}", norm_q)
+    id_terms = [t for t in alnum_terms if re.search(r"\d", t)]
+    extra_terms = []
+    extra_terms.extend(re.findall(r"[ァ-ヴー]{2,}", norm_q))
+    extra_terms.extend(re.findall(r"[一-龥々〆〤]{2,}", norm_q))
+    exact_terms = _unique_preserve(quoted_terms + id_terms + alnum_terms + extra_terms)
+    return exact_terms, quoted_terms, _unique_preserve(id_terms)
+
+
+def _load_keyword_index() -> _KeywordIndex:
+    path = config.CHUNKS_JSONL_PATH
+    mtime = os.path.getmtime(path) if os.path.exists(path) else None
+    with _INDEX_LOCK:
+        if (
+            _INDEX_CACHE["index"] is not None
+            and _INDEX_CACHE["path"] == path
+            and _INDEX_CACHE["mtime"] == mtime
+        ):
+            return _INDEX_CACHE["index"]  # type: ignore[return-value]
+        docs: List[str] = []
+        norm_docs: List[str] = []
+        metas: List[Dict] = []
+        tokenized_corpus: List[List[str]] = []
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    raw = line.strip()
+                    if not raw:
+                        continue
+                    try:
+                        obj = json.loads(raw)
+                    except Exception:
+                        continue
+                    text = str(obj.get("text") or "")
+                    if not text:
+                        continue
+                    meta = {k: v for k, v in obj.items() if k != "text"}
+                    tokens = _heuristic_tokenize(text)
+                    if not tokens:
+                        tokens = [str(meta.get("id") or "")]
+                    docs.append(text)
+                    norm_docs.append(_normalize(text))
+                    metas.append(meta)
+                    tokenized_corpus.append(tokens)
+        bm25 = BM25Okapi(tokenized_corpus or [[""]])
+        index = _KeywordIndex(
+            tokenized_corpus=tokenized_corpus,
+            docs=docs,
+            norm_docs=norm_docs,
+            metas=metas,
+            bm25=bm25,
+        )
+        _INDEX_CACHE["path"] = path
+        _INDEX_CACHE["mtime"] = mtime
+        _INDEX_CACHE["index"] = index
+        return index
+
+
+def vector_retrieve(
+    question: str,
+    client,
+    top_k: int,
+    allowed_types=None,
+    allowed_qualities=None,
+) -> List[RetrievedChunk]:
+    collection = store.get_vectorstore()
+    where = _build_base_where(allowed_types, allowed_qualities)
+    embedding = embedder.embed_queries([question], client=client)[0]
+    res = collection.query(query_embeddings=[embedding], n_results=top_k, where=where)
+    docs = res.get("documents", [[]])[0]
+    metas = res.get("metadatas", [[]])[0]
+    dists = res.get("distances", [[]])[0]
+    out = []
+    for text, meta, dist in zip(docs, metas, dists):
+        m = dict(meta or {})
+        m["retrieval_source"] = "vector"
+        out.append(RetrievedChunk(text=text or "", metadata=m, score=float(dist)))
+    return out
+
+
+def keyword_retrieve(
+    question: str,
+    top_k: int,
+    allowed_types=None,
+    allowed_qualities=None,
+) -> List[RetrievedChunk]:
+    index = _load_keyword_index()
+    if not index.docs:
+        return []
+    where = _build_base_where(allowed_types, allowed_qualities)
+    query_tokens = _heuristic_tokenize(question)
+    if not query_tokens:
+        query_tokens = _heuristic_tokenize(_normalize(question))
+    if not query_tokens:
+        return []
+    bm25_scores = index.bm25.get_scores(query_tokens)
+    exact_terms, quoted_terms, id_terms = _query_match_terms(question)
+    ranked = []
+    for idx, bm25_score in enumerate(bm25_scores):
+        meta = index.metas[idx]
+        if not _meta_matches_where(meta, where):
+            continue
+        norm_text = index.norm_docs[idx]
+        quoted_hits = sum(1 for t in quoted_terms if t and t in norm_text)
+        id_hits = sum(1 for t in id_terms if t and t in norm_text)
+        exact_hits = sum(1 for t in exact_terms if t and t in norm_text)
+        rank_key = (
+            1 if quoted_hits > 0 else 0,
+            1 if id_hits > 0 else 0,
+            exact_hits,
+            float(bm25_score),
+        )
+        ranked.append((rank_key, idx, float(bm25_score)))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    out = []
+    for rank, (_, idx, bm25_score) in enumerate(ranked[:top_k], start=1):
+        m = dict(index.metas[idx] or {})
+        m["retrieval_source"] = "keyword"
+        m["bm25_score"] = bm25_score
+        # Common lower-is-better scale for downstream guard/order.
+        pseudo_distance = min(0.25 + (rank - 1) * 0.02, 0.95)
+        out.append(
+            RetrievedChunk(
+                text=index.docs[idx] or "",
+                metadata=m,
+                score=pseudo_distance,
+            )
+        )
+    return out
+
+
+def _chunk_key(ch: RetrievedChunk) -> str:
+    meta = ch.metadata or {}
+    return str(meta.get("id") or (ch.text[:120] + str(meta.get("doc_id"))))
+
+
+def hybrid_retrieve(
+    question: str,
+    client,
+    top_k: int,
+    allowed_types=None,
+    allowed_qualities=None,
+    vector_top_k: Optional[int] = None,
+    bm25_top_k: Optional[int] = None,
+    rrf_k: Optional[int] = None,
+) -> List[RetrievedChunk]:
+    if not config.ENABLE_HYBRID_RETRIEVAL:
+        return vector_retrieve(
+            question,
+            client,
+            top_k=top_k,
+            allowed_types=allowed_types,
+            allowed_qualities=allowed_qualities,
+        )
+
+    v_top_k = vector_top_k or config.VECTOR_TOP_K or top_k
+    k_top_k = bm25_top_k or config.BM25_TOP_K or top_k
+    k_rrf = rrf_k or config.HYBRID_RRF_K
+    vector_hits = vector_retrieve(
+        question,
+        client,
+        top_k=v_top_k,
+        allowed_types=allowed_types,
+        allowed_qualities=allowed_qualities,
+    )
+    keyword_hits = keyword_retrieve(
+        question,
+        top_k=k_top_k,
+        allowed_types=allowed_types,
+        allowed_qualities=allowed_qualities,
+    )
+
+    merged: Dict[str, Dict] = {}
+    for rank, ch in enumerate(vector_hits, start=1):
+        key = _chunk_key(ch)
+        bucket = merged.setdefault(key, {"vector": None, "keyword": None, "rrf": 0.0})
+        bucket["vector"] = ch
+        bucket["rrf"] += 1.0 / (k_rrf + rank)
+    for rank, ch in enumerate(keyword_hits, start=1):
+        key = _chunk_key(ch)
+        bucket = merged.setdefault(key, {"vector": None, "keyword": None, "rrf": 0.0})
+        bucket["keyword"] = ch
+        bucket["rrf"] += 1.0 / (k_rrf + rank)
+
+    ranked_items = sorted(merged.values(), key=lambda x: x["rrf"], reverse=True)
+    out: List[RetrievedChunk] = []
+    for rank, item in enumerate(ranked_items[:top_k], start=1):
+        v = item["vector"]
+        k = item["keyword"]
+        base = v or k
+        if base is None:
+            continue
+        m = dict(base.metadata or {})
+        if v is not None and k is not None:
+            m["retrieval_source"] = "hybrid"
+        elif v is not None:
+            m["retrieval_source"] = "vector"
+        else:
+            m["retrieval_source"] = "keyword"
+        m["rrf_score"] = float(item["rrf"])
+        # Common lower-is-better scale for downstream guard/order.
+        pseudo_distance = min(0.25 + (rank - 1) * 0.02, 0.95)
+        if v is not None:
+            score = min(float(v.score), pseudo_distance)
+        else:
+            score = pseudo_distance
+        out.append(
+            RetrievedChunk(
+                text=base.text,
+                metadata=m,
+                score=score,
+            )
+        )
+    return out
+
+
+def add_neighbor_chunks(seeds: Sequence[RetrievedChunk], window: int = 1) -> List[RetrievedChunk]:
+    collection = store.get_vectorstore()
+    out = list(seeds)
+    for seed in seeds:
+        doc_id = seed.metadata.get("doc_id")
+        idx = seed.metadata.get("chunk_index")
+        if doc_id is None or idx is None:
+            continue
+        for delta in range(-window, window + 1):
+            if delta == 0:
+                continue
+            try:
+                res = collection.get(where={"doc_id": doc_id, "chunk_index": idx + delta})
+                for text, meta in zip(res.get("documents", []), res.get("metadatas", [])):
+                    m = dict(meta or {})
+                    m["retrieval_source"] = "vector"
+                    out.append(
+                        RetrievedChunk(
+                            text=text or "",
+                            metadata=m,
+                            score=seed.score + 0.01,
+                        )
+                    )
+            except Exception:
+                continue
+    return out

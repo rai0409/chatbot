@@ -33,7 +33,7 @@ def _run_batch(client):
         if not q:
             continue
         ans = answer_query(q, client=client, top_k=config.TOP_K, max_context_chars=config.MAX_CONTEXT_CHARS)
-        console.print(ans)
+        console.print(ans.answer_with_footnotes)
 
 
 def main():
@@ -50,7 +50,7 @@ def main():
             if not q:
                 continue
             ans = answer_query(q, client=client, top_k=config.TOP_K, max_context_chars=config.MAX_CONTEXT_CHARS)
-            console.print(ans)
+            console.print(ans.answer_with_footnotes)
     except EOFError:
         return
 
