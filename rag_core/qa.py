@@ -1,73 +1,25 @@
 from __future__ import annotations
 
-import json
 import re
-from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import config
-from rag_core import embedder, store
+from rag_core.retrieval import RetrievedChunk, add_neighbor_chunks, hybrid_retrieve, vector_retrieve
 from rag_core.utils import ensure_openai_client
-from rag_grounded import Chunk, build_evidence_blocks, build_prompt, extractive_fallback, merge_by_page, rewrite_query, strip_reference_block, to_footnotes, validate_output
-
-
-@dataclass
-class RetrievedChunk:
-    text: str
-    metadata: Dict
-    score: float
-
-
-def _build_base_where(allowed_types=None, allowed_qualities=None) -> Dict:
-    where = {}
-    if allowed_types:
-        where["type"] = {"$in": list(allowed_types)}
-    if allowed_qualities:
-        where["quality"] = {"$in": list(allowed_qualities)}
-    if not config.IGNORE_SEARCHABLE:
-        where["searchable"] = 1
-    if config.LOG_WHERE:
-        print("where:", json.dumps(where, ensure_ascii=False))
-    return where
+from rag_grounded import Chunk, build_citation_payloads, build_evidence_blocks, build_prompt, extractive_fallback, merge_by_page, rewrite_query, strip_reference_block, strip_source_tags, to_footnotes, validate_output
+from schemas import AnswerResult, CitationOut, RetrievedChunkOut
 
 
 def retrieve_chunks(question: str, client, top_k: int, allowed_types=None, allowed_qualities=None) -> List[RetrievedChunk]:
-    collection = store.get_vectorstore()
-    where = _build_base_where(allowed_types, allowed_qualities)
-    embedding = embedder.embed_queries([question], client=client)[0]
-    res = collection.query(query_embeddings=[embedding], n_results=top_k, where=where)
-    docs = res.get("documents", [[]])[0]
-    metas = res.get("metadatas", [[]])[0]
-    dists = res.get("distances", [[]])[0]
-    out = []
-    for text, meta, dist in zip(docs, metas, dists):
-        out.append(RetrievedChunk(text=text or "", metadata=meta or {}, score=float(dist)))
-    return out
-
-
-def _add_neighbor_chunks(seeds: Sequence[RetrievedChunk], collection, window: int = 1) -> List[RetrievedChunk]:
-    out = list(seeds)
-    for seed in seeds:
-        doc_id = seed.metadata.get("doc_id")
-        idx = seed.metadata.get("chunk_index")
-        if doc_id is None or idx is None:
-            continue
-        for delta in range(-window, window + 1):
-            if delta == 0:
-                continue
-            try:
-                res = collection.get(where={"doc_id": doc_id, "chunk_index": idx + delta})
-                for text, meta in zip(res.get("documents", []), res.get("metadatas", [])):
-                    out.append(
-                        RetrievedChunk(
-                            text=text or "",
-                            metadata=meta or {},
-                            score=seed.score + 0.01,
-                        )
-                    )
-            except Exception:
-                continue
-    return out
+    # Vector-only helper kept for backward compatibility (/search endpoint).
+    # The primary answer path in answer_query() uses hybrid_retrieve().
+    return vector_retrieve(
+        question,
+        client,
+        top_k=top_k,
+        allowed_types=allowed_types,
+        allowed_qualities=allowed_qualities,
+    )
 
 
 def infer_intent(question: str) -> str:
@@ -236,7 +188,51 @@ def _cut_context(chunks: Sequence[Chunk], max_chars: int) -> List[Chunk]:
     return out
 
 
-def answer_query(question: str, client=None, top_k: int = 20, max_context_chars: int = 8000, intent_override: Optional[str] = None) -> str:
+def _to_retrieved_out(chunks: Sequence[RetrievedChunk]) -> List[RetrievedChunkOut]:
+    out: List[RetrievedChunkOut] = []
+    for ch in chunks:
+        meta = ch.metadata or {}
+        pages = meta.get("source_pages") or meta.get("pages") or []
+        if isinstance(pages, str):
+            pages = [p for p in re.findall(r"\d+", pages)]
+        out.append(
+            RetrievedChunkOut(
+                text=ch.text,
+                metadata=meta,
+                score=float(ch.score),
+                source_doc=str(meta.get("source_doc") or meta.get("doc") or "unknown"),
+                source_pages=[int(p) for p in pages] if pages else [],
+            )
+        )
+    return out
+
+
+def _build_answer_result(
+    answer_text: str,
+    answer_chunks: Sequence[Chunk],
+    *,
+    intent: str,
+    guard_reason: Optional[str],
+    used_fallback: bool,
+    retrieved: Sequence[RetrievedChunk],
+    rewritten_query: str,
+    augmented_query: str,
+) -> AnswerResult:
+    citations = [CitationOut(**item) for item in build_citation_payloads(answer_text, answer_chunks)]
+    return AnswerResult(
+        answer_text=strip_source_tags(answer_text),
+        answer_with_footnotes=to_footnotes(answer_text, answer_chunks),
+        intent=intent,
+        guard_reason=guard_reason,
+        used_fallback=used_fallback,
+        citations=citations,
+        retrieved=_to_retrieved_out(retrieved),
+        rewritten_query=rewritten_query,
+        augmented_query=augmented_query,
+    )
+
+
+def answer_query(question: str, client=None, top_k: int = 20, max_context_chars: int = 8000, intent_override: Optional[str] = None) -> AnswerResult:
     q = question.strip()
     q = re.sub(r"^質問\s*:\s*", "", q)
     q = q.strip().strip("「」\"'")
@@ -247,13 +243,26 @@ def answer_query(question: str, client=None, top_k: int = 20, max_context_chars:
 
     if client is None:
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
-    base = retrieve_chunks(q, client, top_k=top_k)
-    aug = retrieve_chunks(augmented, client, top_k=top_k)
+    base = hybrid_retrieve(
+        q,
+        client,
+        top_k=top_k,
+        vector_top_k=config.VECTOR_TOP_K,
+        bm25_top_k=config.BM25_TOP_K,
+        rrf_k=config.HYBRID_RRF_K,
+    )
+    aug = hybrid_retrieve(
+        augmented,
+        client,
+        top_k=top_k,
+        vector_top_k=config.VECTOR_TOP_K,
+        bm25_top_k=config.BM25_TOP_K,
+        rrf_k=config.HYBRID_RRF_K,
+    )
     retrieved = _unique_chunks(base + aug)
 
-    collection = store.get_vectorstore()
     if intent == "procedure":
-        retrieved = _unique_chunks(_add_neighbor_chunks(retrieved, collection))
+        retrieved = _unique_chunks(add_neighbor_chunks(retrieved))
 
     grounded = _to_grounded(retrieved)
     grounded = merge_by_page(grounded)
@@ -268,13 +277,34 @@ def answer_query(question: str, client=None, top_k: int = 20, max_context_chars:
     if intent in {"change", "reset"}:
         if not any(term in " ".join(ch.text for ch in grounded) for term in config.PROCEDURE_STRONG_TERMS):
             fallback = "- 手順の記載が見つかりません。OCR版を確認してください。 [S1]"
-            return to_footnotes(fallback + "\n不明: 手順不明 [S1]\n不足: OCR版確認 [S1]", grounded[:1] or [Chunk("1", "OCR", "unknown", tuple(), None)])
+            raw = fallback + "\n不明: 手順不明 [S1]\n不足: OCR版確認 [S1]"
+            answer_chunks = grounded[:1] or [Chunk("1", "OCR", "unknown", tuple(), None)]
+            return _build_answer_result(
+                raw,
+                answer_chunks,
+                intent=intent,
+                guard_reason="missing_procedure_evidence",
+                used_fallback=True,
+                retrieved=retrieved,
+                rewritten_query=rewritten,
+                augmented_query=augmented,
+            )
 
     guard_reason = guard_merged_top(q, intent, grounded, retrieved)
     if guard_reason:
         body = f"- 関連情報が見つかりませんでした。理由: {guard_reason} [S1]"
-        answer = body + "\n不明: 根拠不足 [S1]\n不足: 関連記載なし [S1]"
-        return to_footnotes(answer, grounded[:1] or [Chunk("1", "該当なし", "unknown", tuple(), None)])
+        raw = body + "\n不明: 根拠不足 [S1]\n不足: 関連記載なし [S1]"
+        answer_chunks = grounded[:1] or [Chunk("1", "該当なし", "unknown", tuple(), None)]
+        return _build_answer_result(
+            raw,
+            answer_chunks,
+            intent=intent,
+            guard_reason=guard_reason,
+            used_fallback=True,
+            retrieved=retrieved,
+            rewritten_query=rewritten,
+            augmented_query=augmented,
+        )
 
     grounded = _prefer_sort(grounded, intent)
     grounded = _cut_context(grounded, max_context_chars)
@@ -291,9 +321,20 @@ def answer_query(question: str, client=None, top_k: int = 20, max_context_chars:
     )
     raw = resp.choices[0].message.content or ""
     raw = strip_reference_block(raw)
+    used_fallback = False
     if not validate_output(raw, grounded, intent, config.PREFER_SORT_TERMS_CHANGE + config.PREFER_SORT_TERMS_RESET):
         raw = extractive_fallback(q, grounded)
+        used_fallback = True
 
     if "不足:" not in raw and "不明:" not in raw:
         raw = raw.strip() + "\n不足: なし [S1]"
-    return to_footnotes(raw, grounded)
+    return _build_answer_result(
+        raw,
+        grounded,
+        intent=intent,
+        guard_reason=None,
+        used_fallback=used_fallback,
+        retrieved=retrieved,
+        rewritten_query=rewritten,
+        augmented_query=augmented,
+    )

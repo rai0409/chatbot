@@ -76,6 +76,10 @@ EMBED_MODEL = getenv_first("EMBED_MODEL", default="text-embedding-3-small")
 OPENAI_EMBED_MODEL = getenv_first("OPENAI_EMBED_MODEL", default=EMBED_MODEL)
 
 TOP_K = int(getenv_first("TOP_K", default="20"))
+ENABLE_HYBRID_RETRIEVAL = _get_bool("ENABLE_HYBRID_RETRIEVAL", default=True)
+VECTOR_TOP_K = int(getenv_first("VECTOR_TOP_K", default=str(TOP_K)))
+BM25_TOP_K = int(getenv_first("BM25_TOP_K", default=str(TOP_K)))
+HYBRID_RRF_K = int(getenv_first("HYBRID_RRF_K", default="60"))
 MAX_CONTEXT_CHARS = int(getenv_first("MAX_CONTEXT_CHARS", default="8000"))
 
 RAG_HARD_MAX_DIST = _get_float("RAG_HARD_MAX_DIST", default=0.95)

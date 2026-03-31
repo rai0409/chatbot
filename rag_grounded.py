@@ -164,12 +164,21 @@ def strip_reference_block(text: str) -> str:
     return text.replace("回答:\n回答:\n", "回答:\n")
 
 
+def strip_source_tags(answer: str) -> str:
+    text = re.sub(r"\[S\d+\]", "", answer)
+    lines: List[str] = []
+    for ln in text.splitlines():
+        ln = re.sub(r"[ \t]+", " ", ln).strip()
+        if ln:
+            lines.append(ln)
+    return "\n".join(lines).strip()
+
+
 def to_footnotes(answer: str, chunks: Sequence[Chunk]) -> str:
-    order: List[str] = []
+    order = collect_source_order(answer)
+
     def _replace(match):
         sid = match.group(1)
-        if sid not in order:
-            order.append(sid)
         num = order.index(sid) + 1
         return f"[{num}]"
 
@@ -185,3 +194,38 @@ def to_footnotes(answer: str, chunks: Sequence[Chunk]) -> str:
         else:
             ref_lines.append(f"- [{order.index(sid)+1}] なし")
     return body.strip() + "\n" + "\n".join(ref_lines)
+
+
+def collect_source_order(answer: str) -> List[str]:
+    order: List[str] = []
+    for match in re.finditer(r"\[S(\d+)\]", answer):
+        sid = match.group(1)
+        if sid not in order:
+            order.append(sid)
+    return order
+
+
+def build_citation_payloads(answer: str, chunks: Sequence[Chunk]) -> List[Dict]:
+    payloads: List[Dict] = []
+    for num, sid in enumerate(collect_source_order(answer), start=1):
+        idx = int(sid) - 1
+        if 0 <= idx < len(chunks):
+            ch = chunks[idx]
+            payloads.append(
+                {
+                    "number": num,
+                    "source_doc": ch.source_doc,
+                    "source_pages": list(ch.source_pages),
+                    "chunk_id": ch.id,
+                }
+            )
+        else:
+            payloads.append(
+                {
+                    "number": num,
+                    "source_doc": "なし",
+                    "source_pages": [],
+                    "chunk_id": None,
+                }
+            )
+    return payloads

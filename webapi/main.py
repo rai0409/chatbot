@@ -58,7 +58,7 @@ def chat(req: ChatRequest):
             top_k=req.top_k or config.TOP_K,
             max_context_chars=req.max_context_chars or config.MAX_CONTEXT_CHARS,
         )
-        return {"answer": ans}
+        return ans.to_dict()
     except Exception:
         _error_requests += 1
         logging.exception("chat failed trace_id=%s", req.trace_id)
