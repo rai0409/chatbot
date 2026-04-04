@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import unicodedata
 from dataclasses import dataclass
 from threading import Lock
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -11,6 +10,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import config
 from rank_bm25 import BM25Okapi
 from rag_core import embedder, store
+from rag_core.ja_text import extract_salient_terms_ja, normalize_japanese_text
 
 
 @dataclass
@@ -70,17 +70,15 @@ def _meta_matches_where(meta: Dict, where: Dict) -> bool:
 
 
 def _normalize(text: str) -> str:
-    out = unicodedata.normalize("NFKC", text or "")
-    out = out.lower()
-    out = re.sub(r"\s+", " ", out).strip()
-    return out
+    return normalize_japanese_text(text).lower()
 
 
 def _extract_quoted_terms(text: str) -> List[str]:
+    norm = normalize_japanese_text(text or "")
     terms = []
-    terms += re.findall(r"「([^」]+)」", text or "")
-    terms += re.findall(r'"([^"]+)"', text or "")
-    terms += re.findall(r"'([^']+)'", text or "")
+    terms += re.findall(r"「([^」]+)」", norm)
+    terms += re.findall(r'"([^"]+)"', norm)
+    terms += re.findall(r"'([^']+)'", norm)
     return [_normalize(t) for t in terms if _normalize(t)]
 
 
@@ -115,14 +113,11 @@ def _heuristic_tokenize(text: str) -> List[str]:
 
 
 def _query_match_terms(question: str) -> Tuple[List[str], List[str], List[str]]:
-    norm_q = _normalize(question)
     quoted_terms = _extract_quoted_terms(question)
-    alnum_terms = re.findall(r"[a-z0-9][a-z0-9._:/-]{1,}", norm_q)
+    salient_terms = [_normalize(t) for t in extract_salient_terms_ja(question)]
+    alnum_terms = [t for t in salient_terms if re.fullmatch(r"[a-z0-9][a-z0-9._:/-]{1,}", t)]
     id_terms = [t for t in alnum_terms if re.search(r"\d", t)]
-    extra_terms = []
-    extra_terms.extend(re.findall(r"[ァ-ヴー]{2,}", norm_q))
-    extra_terms.extend(re.findall(r"[一-龥々〆〤]{2,}", norm_q))
-    exact_terms = _unique_preserve(quoted_terms + id_terms + alnum_terms + extra_terms)
+    exact_terms = _unique_preserve(quoted_terms + id_terms + alnum_terms + salient_terms)
     return exact_terms, quoted_terms, _unique_preserve(id_terms)
 
 
