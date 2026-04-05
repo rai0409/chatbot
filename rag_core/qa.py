@@ -4,6 +4,7 @@ import re
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import config
+from rag_core.reranker import rerank_chunks
 from rag_core.retrieval import RetrievedChunk, add_neighbor_chunks, hybrid_retrieve, vector_retrieve
 from rag_core.utils import ensure_openai_client
 from rag_grounded import Chunk, build_citation_payloads, build_evidence_blocks, build_prompt, extractive_fallback, merge_by_page, rewrite_query, strip_reference_block, strip_source_tags, to_footnotes, validate_output
@@ -263,6 +264,7 @@ def answer_query(question: str, client=None, top_k: int = 20, max_context_chars:
 
     if intent == "procedure":
         retrieved = _unique_chunks(add_neighbor_chunks(retrieved))
+    retrieved = rerank_chunks(q, retrieved, intent=intent)
 
     grounded = _to_grounded(retrieved)
     grounded = merge_by_page(grounded)
