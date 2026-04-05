@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import time
+import uuid
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import config
@@ -82,6 +84,17 @@ def _code_like_tokens(text: str) -> set[str]:
     return tokens
 
 
+def _short_lookup_core(question: str) -> str:
+    core = re.sub(r"[?？。!！]", "", question or "")
+    core = core.strip().strip("「」\"'")
+    core = re.sub(r"\s+", "", core)
+    for suffix in ("とは何か", "とは", "って何", "の意味", "の定義", "の仕様", "の確認方法"):
+        if core.endswith(suffix):
+            core = core[: -len(suffix)]
+            break
+    return core.strip("「」\"'")
+
+
 def _should_bypass_too_general(question: str, retrieved: Sequence[RetrievedChunk]) -> bool:
     if not retrieved:
         return False
@@ -104,6 +117,15 @@ def _should_bypass_too_general(question: str, retrieved: Sequence[RetrievedChunk
     for code in _code_like_tokens(question):
         if re.search(r"\d", code) and code in top_code_tokens:
             return True
+
+    # Japanese short lookup queries can be meaningful if top-1 evidence has a localized exact hit.
+    lookup_core = _short_lookup_core(question)
+    if 2 <= len(lookup_core) <= 12:
+        if re.search(r"\d", lookup_core) or re.search(r"[一-龥々〆〤ァ-ヴー]{2,}", lookup_core):
+            top_norm = re.sub(r"\s+", "", top_text)
+            second_norm = re.sub(r"\s+", "", second_text)
+            if lookup_core in top_norm and lookup_core not in second_norm:
+                return True
 
     glossary_terms = []
     glossary_terms += re.findall(r"[ァ-ヴー]{2,}語", question)
@@ -318,6 +340,10 @@ def _answer_query_impl(
     max_context_chars: int = 8000,
     intent_override: Optional[str] = None,
 ) -> Tuple[AnswerResult, Dict[str, object]]:
+    started_at = time.perf_counter()
+    request_id = uuid.uuid4().hex[:12]
+    original_question = question
+
     q = question.strip()
     q = re.sub(r"^質問\s*:\s*", "", q)
     q = q.strip().strip("「」\"'")
@@ -337,13 +363,30 @@ def _answer_query_impl(
     )
 
     trace = {
+        "request_id": request_id,
+        "original_query": original_question,
+        "normalized_query": q,
         "question": q,
         "intent": intent,
         "rewritten_query": rewritten,
         "augmented_query": augmented,
         "before_rerank": before_rerank,
         "after_rerank": retrieved,
+        "retrieval_before_rerank_count": len(before_rerank),
+        "retrieval_after_rerank_count": len(retrieved),
     }
+
+    def _finalize_trace(result: AnswerResult, answer_chunks: Sequence[Chunk], *, answer_mode: str) -> None:
+        # Option B semantics:
+        # - selected_context_*: final chunks passed to AnswerResult
+        # - grounded_candidate_chunk_ids: broader grounded candidates before final selection
+        trace["final_guard_reason"] = result.guard_reason
+        trace["final_used_fallback"] = result.used_fallback
+        trace["answer_mode"] = answer_mode
+        trace["selected_context_chunk_ids"] = [ch.id for ch in answer_chunks]
+        trace["selected_context_chars"] = sum(len(ch.text) for ch in answer_chunks)
+        trace["citations_count"] = len(result.citations)
+        trace["latency_ms"] = int((time.perf_counter() - started_at) * 1000)
 
     grounded = _to_grounded(retrieved)
     grounded = merge_by_page(grounded)
@@ -354,6 +397,7 @@ def _answer_query_impl(
     else:
         max_per_page = config.OTHER_MAX_PER_PAGE
     grounded = _page_diversity(grounded, max_per_page=max_per_page)
+    trace["grounded_candidate_chunk_ids"] = [ch.id for ch in grounded]
 
     if intent in {"change", "reset"}:
         if not any(term in " ".join(ch.text for ch in grounded) for term in config.PROCEDURE_STRONG_TERMS):
@@ -370,8 +414,7 @@ def _answer_query_impl(
                 rewritten_query=rewritten,
                 augmented_query=augmented,
             )
-            trace["final_guard_reason"] = result.guard_reason
-            trace["final_used_fallback"] = result.used_fallback
+            _finalize_trace(result, answer_chunks, answer_mode="fallback")
             return result, trace
 
     guard_reason = guard_merged_top(q, intent, grounded, retrieved)
@@ -389,8 +432,7 @@ def _answer_query_impl(
             rewritten_query=rewritten,
             augmented_query=augmented,
         )
-        trace["final_guard_reason"] = result.guard_reason
-        trace["final_used_fallback"] = result.used_fallback
+        _finalize_trace(result, answer_chunks, answer_mode="fallback")
         return result, trace
 
     grounded = _prefer_sort(grounded, intent)
@@ -415,9 +457,10 @@ def _answer_query_impl(
 
     if "不足:" not in raw and "不明:" not in raw:
         raw = raw.strip() + "\n不足: なし [S1]"
+    answer_chunks = grounded
     result = _build_answer_result(
         raw,
-        grounded,
+        answer_chunks,
         intent=intent,
         guard_reason=None,
         used_fallback=used_fallback,
@@ -425,8 +468,7 @@ def _answer_query_impl(
         rewritten_query=rewritten,
         augmented_query=augmented,
     )
-    trace["final_guard_reason"] = result.guard_reason
-    trace["final_used_fallback"] = result.used_fallback
+    _finalize_trace(result, answer_chunks, answer_mode="fallback" if used_fallback else "grounded")
     return result, trace
 
 
