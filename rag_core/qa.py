@@ -73,6 +73,51 @@ def _salient_terms(question: str) -> List[str]:
     return out
 
 
+def _code_like_tokens(text: str) -> set[str]:
+    tokens: set[str] = set()
+    for raw in re.findall(r"[A-Za-z0-9][A-Za-z0-9._:/-]{1,}", text or ""):
+        token = raw.lower().rstrip("._:/-")
+        if re.fullmatch(r"[a-z0-9][a-z0-9._:/-]{1,}", token):
+            tokens.add(token)
+    return tokens
+
+
+def _should_bypass_too_general(question: str, retrieved: Sequence[RetrievedChunk]) -> bool:
+    if not retrieved:
+        return False
+    top_text = retrieved[0].text or ""
+    second_text = retrieved[1].text if len(retrieved) > 1 else ""
+    top_code_tokens = _code_like_tokens(top_text)
+
+    quoted_terms = []
+    quoted_terms += re.findall(r"「([^」]+)」", question)
+    quoted_terms += re.findall(r'"([^"]+)"', question)
+    quoted_terms += re.findall(r"'([^']+)'", question)
+    for term in quoted_terms:
+        code = re.sub(r"\s+", "", term or "").lower()
+        if not code:
+            continue
+        if re.fullmatch(r"[a-z0-9][a-z0-9._:/-]{1,}", code) and re.search(r"\d", code):
+            if code in top_code_tokens:
+                return True
+
+    for code in _code_like_tokens(question):
+        if re.search(r"\d", code) and code in top_code_tokens:
+            return True
+
+    glossary_terms = []
+    glossary_terms += re.findall(r"[ァ-ヴー]{2,}語", question)
+    glossary_terms += re.findall(r"[一-龥々〆〤]{2,}語", question)
+    seen = set()
+    for term in glossary_terms:
+        if term in seen:
+            continue
+        seen.add(term)
+        if term in top_text and term not in second_text:
+            return True
+    return False
+
+
 def guard_merged_top(question: str, intent: str, chunks: Sequence[Chunk], retrieved: Sequence[RetrievedChunk]) -> Optional[str]:
     if config.DISABLE_GUARD:
         return None
@@ -101,6 +146,8 @@ def guard_merged_top(question: str, intent: str, chunks: Sequence[Chunk], retrie
         if len(re.findall(r"[A-Za-z0-9ぁ-んァ-ン一-龥]+", question)) <= 2:
             req = ["ID", "番号", "許容値", "フラグ"]
             if not any(r in question for r in req):
+                if _should_bypass_too_general(question, retrieved):
+                    return None
                 return "too_general"
     return None
 
