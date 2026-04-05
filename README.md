@@ -44,3 +44,22 @@ This repository is a good fit for teams that need:
 - citation-backed retrieval
 - traceable RAG workflows
 - API-first experimentation
+
+## Eval runner (lightweight smoke)
+
+`eval.runner` is a lightweight repo-native smoke evaluator for regression checks on the current grounded RAG path (retrieval, rerank, guard, fallback).
+
+- Default mode is deterministic/local-friendly.
+- Default mode uses deterministic stubbed generation.
+- Default mode stubs vector retrieval to empty unless `--real-vector` is enabled.
+- Default mode is not full live end-to-end answer quality evaluation.
+- `--real-vector` and `--real-generation` are opt-in and may be less deterministic.
+
+Run:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m eval.runner \
+  --cases eval/cases/smoke_cases.jsonl \
+  --chunks-jsonl eval/cases/smoke_chunks.jsonl \
+  --output runs/eval/smoke_results.json
+```
