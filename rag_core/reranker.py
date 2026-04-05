@@ -20,6 +20,7 @@ class _QuerySignals:
     alnum_terms: List[str]
     katakana_terms: List[str]
     kanji_terms: List[str]
+    short_lookup_terms: List[str]
 
 
 def _normalize(text: str) -> str:
@@ -63,6 +64,28 @@ def _extract_code_like_tokens(text: str) -> set[str]:
     return tokens
 
 
+def _extract_short_lookup_terms(question: str) -> List[str]:
+    norm = normalize_japanese_text(question or "").strip()
+    if not norm:
+        return []
+    has_lookup_marker = any(marker in norm for marker in ("とは", "って何", "の意味", "の定義", "の仕様"))
+    if not has_lookup_marker and re.search(r"\s", norm):
+        return []
+    core = re.sub(r"[?？。!！]", "", norm)
+    core = core.strip().strip("「」\"'")
+    core = re.sub(r"\s+", "", core)
+    for suffix in ("とは何か", "とは", "って何", "の意味", "の定義", "の仕様", "の確認方法"):
+        if core.endswith(suffix):
+            core = core[: -len(suffix)]
+            break
+    core = _normalize(core.strip("「」\"'"))
+    if not (2 <= len(core) <= 12):
+        return []
+    if not (re.search(r"\d", core) or re.search(r"[一-龥々〆〤ァ-ヴー]{2,}", core)):
+        return []
+    return [core]
+
+
 def _build_query_signals(question: str) -> _QuerySignals:
     quoted_terms = _extract_quoted_terms(question)
     quoted_code_terms = [t for t in quoted_terms if _is_code_like_term(t)]
@@ -83,6 +106,7 @@ def _build_query_signals(question: str) -> _QuerySignals:
         alnum_terms=_unique_preserve(alnum_terms),
         katakana_terms=_unique_preserve(katakana_terms),
         kanji_terms=_unique_preserve(kanji_terms),
+        short_lookup_terms=_extract_short_lookup_terms(question),
     )
 
 
@@ -97,7 +121,7 @@ def rerank_chunks(
 
     q = _build_query_signals(question)
     lexical_query_terms = _unique_preserve(q.alnum_terms + q.katakana_terms + q.kanji_terms)
-    if not (q.quoted_code_terms or q.quoted_text_terms or lexical_query_terms):
+    if not (q.quoted_code_terms or q.quoted_text_terms or lexical_query_terms or q.short_lookup_terms):
         return items
 
     scored = []
@@ -111,6 +135,7 @@ def rerank_chunks(
         alnum_hits = sum(1 for t in q.alnum_terms if t and t in code_tokens)
         katakana_hits = sum(1 for t in q.katakana_terms if t and t in norm_text)
         kanji_hits = sum(1 for t in q.kanji_terms if t and t in norm_text)
+        short_lookup_hits = sum(1 for t in q.short_lookup_terms if t and t in norm_text)
 
         has_strong = quoted_hits > 0 or id_hits > 0
         lexical_hits = alnum_hits + katakana_hits + kanji_hits
@@ -126,6 +151,8 @@ def rerank_chunks(
             boost += 2
         if kanji_hits:
             boost += 2
+        if short_lookup_hits:
+            boost += 1
 
         # For broad/ambiguous questions, avoid aggressive moves from a single weak match.
         if not has_strong and len(lexical_query_terms) > 1 and lexical_hits < 2:
@@ -143,6 +170,7 @@ def rerank_chunks(
                 target_rank,
                 0 if has_strong else 1,
                 -(quoted_hits + id_hits),
+                -short_lookup_hits,
                 -lexical_hits,
                 idx,
                 ch,
