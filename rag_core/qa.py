@@ -233,7 +233,44 @@ def _build_answer_result(
     )
 
 
-def answer_query(question: str, client=None, top_k: int = 20, max_context_chars: int = 8000, intent_override: Optional[str] = None) -> AnswerResult:
+def _retrieve_and_rerank(
+    question: str,
+    augmented_query: str,
+    *,
+    client,
+    top_k: int,
+    intent: str,
+) -> Tuple[List[RetrievedChunk], List[RetrievedChunk]]:
+    base = hybrid_retrieve(
+        question,
+        client,
+        top_k=top_k,
+        vector_top_k=config.VECTOR_TOP_K,
+        bm25_top_k=config.BM25_TOP_K,
+        rrf_k=config.HYBRID_RRF_K,
+    )
+    aug = hybrid_retrieve(
+        augmented_query,
+        client,
+        top_k=top_k,
+        vector_top_k=config.VECTOR_TOP_K,
+        bm25_top_k=config.BM25_TOP_K,
+        rrf_k=config.HYBRID_RRF_K,
+    )
+    before_rerank = _unique_chunks(base + aug)
+    if intent == "procedure":
+        before_rerank = _unique_chunks(add_neighbor_chunks(before_rerank))
+    after_rerank = rerank_chunks(question, before_rerank, intent=intent)
+    return before_rerank, after_rerank
+
+
+def _answer_query_impl(
+    question: str,
+    client=None,
+    top_k: int = 20,
+    max_context_chars: int = 8000,
+    intent_override: Optional[str] = None,
+) -> Tuple[AnswerResult, Dict[str, object]]:
     q = question.strip()
     q = re.sub(r"^質問\s*:\s*", "", q)
     q = q.strip().strip("「」\"'")
@@ -244,27 +281,22 @@ def answer_query(question: str, client=None, top_k: int = 20, max_context_chars:
 
     if client is None:
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
-    base = hybrid_retrieve(
+    before_rerank, retrieved = _retrieve_and_rerank(
         q,
-        client,
-        top_k=top_k,
-        vector_top_k=config.VECTOR_TOP_K,
-        bm25_top_k=config.BM25_TOP_K,
-        rrf_k=config.HYBRID_RRF_K,
-    )
-    aug = hybrid_retrieve(
         augmented,
-        client,
+        client=client,
         top_k=top_k,
-        vector_top_k=config.VECTOR_TOP_K,
-        bm25_top_k=config.BM25_TOP_K,
-        rrf_k=config.HYBRID_RRF_K,
+        intent=intent,
     )
-    retrieved = _unique_chunks(base + aug)
 
-    if intent == "procedure":
-        retrieved = _unique_chunks(add_neighbor_chunks(retrieved))
-    retrieved = rerank_chunks(q, retrieved, intent=intent)
+    trace = {
+        "question": q,
+        "intent": intent,
+        "rewritten_query": rewritten,
+        "augmented_query": augmented,
+        "before_rerank": before_rerank,
+        "after_rerank": retrieved,
+    }
 
     grounded = _to_grounded(retrieved)
     grounded = merge_by_page(grounded)
@@ -281,7 +313,7 @@ def answer_query(question: str, client=None, top_k: int = 20, max_context_chars:
             fallback = "- 手順の記載が見つかりません。OCR版を確認してください。 [S1]"
             raw = fallback + "\n不明: 手順不明 [S1]\n不足: OCR版確認 [S1]"
             answer_chunks = grounded[:1] or [Chunk("1", "OCR", "unknown", tuple(), None)]
-            return _build_answer_result(
+            result = _build_answer_result(
                 raw,
                 answer_chunks,
                 intent=intent,
@@ -291,13 +323,16 @@ def answer_query(question: str, client=None, top_k: int = 20, max_context_chars:
                 rewritten_query=rewritten,
                 augmented_query=augmented,
             )
+            trace["final_guard_reason"] = result.guard_reason
+            trace["final_used_fallback"] = result.used_fallback
+            return result, trace
 
     guard_reason = guard_merged_top(q, intent, grounded, retrieved)
     if guard_reason:
         body = f"- 関連情報が見つかりませんでした。理由: {guard_reason} [S1]"
         raw = body + "\n不明: 根拠不足 [S1]\n不足: 関連記載なし [S1]"
         answer_chunks = grounded[:1] or [Chunk("1", "該当なし", "unknown", tuple(), None)]
-        return _build_answer_result(
+        result = _build_answer_result(
             raw,
             answer_chunks,
             intent=intent,
@@ -307,6 +342,9 @@ def answer_query(question: str, client=None, top_k: int = 20, max_context_chars:
             rewritten_query=rewritten,
             augmented_query=augmented,
         )
+        trace["final_guard_reason"] = result.guard_reason
+        trace["final_used_fallback"] = result.used_fallback
+        return result, trace
 
     grounded = _prefer_sort(grounded, intent)
     grounded = _cut_context(grounded, max_context_chars)
@@ -330,7 +368,7 @@ def answer_query(question: str, client=None, top_k: int = 20, max_context_chars:
 
     if "不足:" not in raw and "不明:" not in raw:
         raw = raw.strip() + "\n不足: なし [S1]"
-    return _build_answer_result(
+    result = _build_answer_result(
         raw,
         grounded,
         intent=intent,
@@ -339,4 +377,34 @@ def answer_query(question: str, client=None, top_k: int = 20, max_context_chars:
         retrieved=retrieved,
         rewritten_query=rewritten,
         augmented_query=augmented,
+    )
+    trace["final_guard_reason"] = result.guard_reason
+    trace["final_used_fallback"] = result.used_fallback
+    return result, trace
+
+
+def answer_query(question: str, client=None, top_k: int = 20, max_context_chars: int = 8000, intent_override: Optional[str] = None) -> AnswerResult:
+    result, _ = _answer_query_impl(
+        question,
+        client=client,
+        top_k=top_k,
+        max_context_chars=max_context_chars,
+        intent_override=intent_override,
+    )
+    return result
+
+
+def answer_query_with_trace(
+    question: str,
+    client=None,
+    top_k: int = 20,
+    max_context_chars: int = 8000,
+    intent_override: Optional[str] = None,
+) -> Tuple[AnswerResult, Dict[str, object]]:
+    return _answer_query_impl(
+        question,
+        client=client,
+        top_k=top_k,
+        max_context_chars=max_context_chars,
+        intent_override=intent_override,
     )
