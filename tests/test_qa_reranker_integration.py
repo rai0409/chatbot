@@ -90,3 +90,51 @@ def test_answer_query_procedure_neighbor_context_keeps_stable_order_under_weak_e
     assert res.guard_reason == "soft_distance"
     assert [it.metadata["id"] for it in res.retrieved] == ["A", "B", "C", "D"]
     assert all(it.metadata.get("retrieval_source") == "hybrid" for it in res.retrieved)
+
+
+def test_answer_query_with_trace_matches_answer_query_and_exposes_core_trace(monkeypatch):
+    base_hits = [
+        _mk_chunk("A", "一般説明です。", 0.25),
+        _mk_chunk("B", "PR2 の説明です。", 0.27),
+    ]
+    aug_hits = []
+    calls = {"count": 0}
+
+    def _fake_hybrid(*args, **kwargs):
+        calls["count"] += 1
+        return base_hits if calls["count"] % 2 == 1 else aug_hits
+
+    monkeypatch.setattr(qa, "hybrid_retrieve", _fake_hybrid)
+    monkeypatch.setattr(qa, "rerank_chunks", lambda question, chunks, intent=None: list(reversed(chunks)))
+    monkeypatch.setattr(qa, "guard_merged_top", lambda *args, **kwargs: "soft_distance")
+
+    plain = qa.answer_query("PR2 を教えて", client=object(), top_k=5)
+    traced, trace = qa.answer_query_with_trace("PR2 を教えて", client=object(), top_k=5)
+
+    assert plain.to_dict() == traced.to_dict()
+    assert set(traced.to_dict().keys()) == {
+        "answer_text",
+        "answer_with_footnotes",
+        "intent",
+        "guard_reason",
+        "used_fallback",
+        "citations",
+        "retrieved",
+        "rewritten_query",
+        "augmented_query",
+    }
+
+    assert set(trace.keys()) >= {
+        "question",
+        "intent",
+        "rewritten_query",
+        "augmented_query",
+        "before_rerank",
+        "after_rerank",
+        "final_guard_reason",
+        "final_used_fallback",
+    }
+    assert [ch.metadata["id"] for ch in trace["before_rerank"]] == ["A", "B"]
+    assert [ch.metadata["id"] for ch in trace["after_rerank"]] == ["B", "A"]
+    assert trace["final_guard_reason"] == "soft_distance"
+    assert trace["final_used_fallback"] is True
