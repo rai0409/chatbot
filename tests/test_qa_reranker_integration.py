@@ -5,18 +5,18 @@ from rag_core import qa
 from rag_core.retrieval import RetrievedChunk
 
 
-def _mk_chunk(label: str, text: str, score: float) -> RetrievedChunk:
+def _mk_chunk(label: str, text: str, score: float, page: int = 1) -> RetrievedChunk:
     return RetrievedChunk(
         text=text,
-        metadata={"id": label, "source_doc": "doc", "source_pages": [1], "retrieval_source": "hybrid"},
+        metadata={"id": label, "source_doc": "doc", "source_pages": [page], "retrieval_source": "hybrid"},
         score=score,
     )
 
 
 def test_answer_query_uses_reranker_in_chat_path(monkeypatch):
     base_hits = [
-        _mk_chunk("A", "一般説明です。", 0.25),
-        _mk_chunk("B", "PR2 の説明です。", 0.27),
+        _mk_chunk("A", "一般説明です。", 0.25, page=1),
+        _mk_chunk("B", "PR2 の説明です。", 0.27, page=2),
     ]
     aug_hits = []
     calls = {"count": 0}
@@ -95,8 +95,8 @@ def test_answer_query_procedure_neighbor_context_keeps_stable_order_under_weak_e
 
 def test_answer_query_with_trace_matches_answer_query_and_exposes_core_trace(monkeypatch):
     base_hits = [
-        _mk_chunk("A", "一般説明です。", 0.25),
-        _mk_chunk("B", "PR2 の説明です。", 0.27),
+        _mk_chunk("A", "一般説明です。", 0.25, page=1),
+        _mk_chunk("B", "PR2 の説明です。", 0.27, page=2),
     ]
     aug_hits = []
     calls = {"count": 0}
@@ -126,19 +126,37 @@ def test_answer_query_with_trace_matches_answer_query_and_exposes_core_trace(mon
     }
 
     assert set(trace.keys()) >= {
+        "request_id",
+        "original_query",
+        "normalized_query",
         "question",
         "intent",
         "rewritten_query",
         "augmented_query",
         "before_rerank",
         "after_rerank",
+        "grounded_candidate_chunk_ids",
         "final_guard_reason",
         "final_used_fallback",
+        "answer_mode",
+        "selected_context_chunk_ids",
+        "selected_context_chars",
+        "citations_count",
+        "latency_ms",
     }
+    assert isinstance(trace["request_id"], str) and trace["request_id"] != ""
+    assert trace["original_query"] == "PR2 を教えて"
+    assert trace["normalized_query"] == "PR2 を教えて"
     assert [ch.metadata["id"] for ch in trace["before_rerank"]] == ["A", "B"]
     assert [ch.metadata["id"] for ch in trace["after_rerank"]] == ["B", "A"]
     assert trace["final_guard_reason"] == "soft_distance"
     assert trace["final_used_fallback"] is True
+    assert trace["answer_mode"] == "fallback"
+    assert trace["grounded_candidate_chunk_ids"] == ["B", "A"]
+    assert trace["selected_context_chunk_ids"] == ["B"]
+    assert trace["selected_context_chars"] == len("PR2 の説明です。")
+    assert isinstance(trace["citations_count"], int)
+    assert isinstance(trace["latency_ms"], int)
 
 
 def test_guard_too_general_keeps_vague_short_query():
@@ -166,3 +184,21 @@ def test_guard_too_general_bypass_for_short_glossary_style_japanese_term():
     ]
     chunks = [Chunk("A", "カタカナ語 は外来語の表記です。", "doc", (1,), 0.25)]
     assert qa.guard_merged_top("カタカナ語 の意味", "other", chunks, retrieved) is None
+
+
+def test_guard_too_general_bypass_for_short_kanji_lookup_with_localized_top_evidence():
+    retrieved = [
+        _mk_chunk("A", "返金条件 は契約別に定義されています。", 0.25),
+        _mk_chunk("B", "返金の一般説明です。", 0.27),
+    ]
+    chunks = [Chunk("A", "返金条件 は契約別に定義されています。", "doc", (1,), 0.25)]
+    assert qa.guard_merged_top("返金条件", "other", chunks, retrieved) is None
+
+
+def test_rerank_short_lookup_exact_match_bonus_promotes_exact_two_char_term():
+    chunks = [
+        _mk_chunk("A", "運用の一般説明です。", 0.25),
+        _mk_chunk("B", "返金 は申請後に処理されます。", 0.27),
+    ]
+    reranked = qa.rerank_chunks("返金とは", chunks, intent="other")
+    assert [c.metadata["id"] for c in reranked[:2]] == ["B", "A"]

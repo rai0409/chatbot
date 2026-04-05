@@ -18,3 +18,7 @@
 {"id":"mB","text":"QX120 の手順です。","source_doc":"movement.pdf","source_pages":[18],"doc_id":"movement.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
 {"id":"w1","text":"棚卸設定変更の概要です。","source_doc":"workflow.pdf","source_pages":[19],"doc_id":"workflow.pdf","chunk_index":1,"searchable":1,"type":"pdf","quality":"high"}
 {"id":"w2","text":"棚卸設定変更時の注意事項です。","source_doc":"workflow.pdf","source_pages":[20],"doc_id":"workflow.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"a1","text":"承認フラグ は承認可否の判定に使います。","source_doc":"approval.pdf","source_pages":[21],"doc_id":"approval.pdf","chunk_index":1,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"a2","text":"承認状態の一般説明です。","source_doc":"approval.pdf","source_pages":[22],"doc_id":"approval.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"r1","text":"返金条件 は契約別に定義されています。","source_doc":"refund.pdf","source_pages":[23],"doc_id":"refund.pdf","chunk_index":1,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"r2","text":"返金の一般説明です。","source_doc":"refund.pdf","source_pages":[24],"doc_id":"refund.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
