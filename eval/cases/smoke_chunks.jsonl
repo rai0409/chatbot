@@ -1,0 +1,20 @@
+{"id":"g1","text":"請求書ID は帳票ヘッダーで確認できます。","source_doc":"glossary.pdf","source_pages":[1],"doc_id":"glossary.pdf","chunk_index":1,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"g2","text":"請求書番号の一般説明です。","source_doc":"glossary.pdf","source_pages":[2],"doc_id":"glossary.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"i1","text":"PR2 エラーの対処手順です。","source_doc":"incident.pdf","source_pages":[3],"doc_id":"incident.pdf","chunk_index":1,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"i2","text":"PR20 エラーの概要です。","source_doc":"incident.pdf","source_pages":[4],"doc_id":"incident.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"k1","text":"カタカナ語 は外来語の表記です。","source_doc":"language.pdf","source_pages":[5],"doc_id":"language.pdf","chunk_index":1,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"k2","text":"カタカナ表記の一般説明です。","source_doc":"language.pdf","source_pages":[6],"doc_id":"language.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"j1","text":"漢字複合語 は複数の漢字からなる語です。","source_doc":"language.pdf","source_pages":[7],"doc_id":"language.pdf","chunk_index":3,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"j2","text":"複合語の一般説明です。","source_doc":"language.pdf","source_pages":[8],"doc_id":"language.pdf","chunk_index":4,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"p1","text":"初期化（再設定）の手順は設定画面から実行します。","source_doc":"operations.pdf","source_pages":[9],"doc_id":"operations.pdf","chunk_index":1,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"p2","text":"初期化の概要説明です。","source_doc":"operations.pdf","source_pages":[10],"doc_id":"operations.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"s1","text":"電子入札制度の概要を説明します。","source_doc":"policy.pdf","source_pages":[11],"doc_id":"policy.pdf","chunk_index":1,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"s2","text":"一般的な運用方針です。","source_doc":"policy.pdf","source_pages":[12],"doc_id":"policy.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"c1","text":"ABC123 の仕様です。","source_doc":"codes.pdf","source_pages":[13],"doc_id":"codes.pdf","chunk_index":1,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"c2","text":"XABC123Y の一般仕様です。","source_doc":"codes.pdf","source_pages":[14],"doc_id":"codes.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"n1","text":"申請区分 の定義です。","source_doc":"forms.pdf","source_pages":[15],"doc_id":"forms.pdf","chunk_index":1,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"n2","text":"申請区分外 の一般説明です。","source_doc":"forms.pdf","source_pages":[16],"doc_id":"forms.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"mA","text":"QX12 を確認できます。","source_doc":"movement.pdf","source_pages":[17],"doc_id":"movement.pdf","chunk_index":1,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"mB","text":"QX120 の手順です。","source_doc":"movement.pdf","source_pages":[18],"doc_id":"movement.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"w1","text":"棚卸設定変更の概要です。","source_doc":"workflow.pdf","source_pages":[19],"doc_id":"workflow.pdf","chunk_index":1,"searchable":1,"type":"pdf","quality":"high"}
+{"id":"w2","text":"棚卸設定変更時の注意事項です。","source_doc":"workflow.pdf","source_pages":[20],"doc_id":"workflow.pdf","chunk_index":2,"searchable":1,"type":"pdf","quality":"high"}
