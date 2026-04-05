@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from rag_grounded import Chunk
 from rag_core import qa
 from rag_core.retrieval import RetrievedChunk
 
@@ -138,3 +139,30 @@ def test_answer_query_with_trace_matches_answer_query_and_exposes_core_trace(mon
     assert [ch.metadata["id"] for ch in trace["after_rerank"]] == ["B", "A"]
     assert trace["final_guard_reason"] == "soft_distance"
     assert trace["final_used_fallback"] is True
+
+
+def test_guard_too_general_keeps_vague_short_query():
+    retrieved = [
+        _mk_chunk("A", "一般説明です。", 0.25),
+        _mk_chunk("B", "補足説明です。", 0.27),
+    ]
+    chunks = [Chunk("A", "一般説明です。", "doc", (1,), 0.25)]
+    assert qa.guard_merged_top("意味は？", "other", chunks, retrieved) == "too_general"
+
+
+def test_guard_too_general_bypass_for_short_quoted_code_like_query():
+    retrieved = [
+        _mk_chunk("A", "ABC123 の仕様です。", 0.25),
+        _mk_chunk("B", "XABC123Y の一般仕様です。", 0.27),
+    ]
+    chunks = [Chunk("A", "ABC123 の仕様です。", "doc", (1,), 0.25)]
+    assert qa.guard_merged_top('"ABC123" の仕様', "other", chunks, retrieved) is None
+
+
+def test_guard_too_general_bypass_for_short_glossary_style_japanese_term():
+    retrieved = [
+        _mk_chunk("A", "カタカナ語 は外来語の表記です。", 0.25),
+        _mk_chunk("B", "カタカナ表記の一般説明です。", 0.27),
+    ]
+    chunks = [Chunk("A", "カタカナ語 は外来語の表記です。", "doc", (1,), 0.25)]
+    assert qa.guard_merged_top("カタカナ語 の意味", "other", chunks, retrieved) is None
