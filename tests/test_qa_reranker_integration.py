@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+
 from rag_grounded import Chunk
 from rag_core import qa
+from rag_core import retrieval
 from rag_core.retrieval import RetrievedChunk
 
 
@@ -202,3 +205,70 @@ def test_rerank_short_lookup_exact_match_bonus_promotes_exact_two_char_term():
     ]
     reranked = qa.rerank_chunks("返金とは", chunks, intent="other")
     assert [c.metadata["id"] for c in reranked[:2]] == ["B", "A"]
+
+
+def test_answer_path_expands_child_hit_to_parent_context(monkeypatch, tmp_path):
+    parent_phrase = "親コンテキスト: 事前条件と注意事項を含む詳細な手順です。"
+    rows = [
+        {
+            "id": "parent-ctx",
+            "text": parent_phrase,
+            "display_text": parent_phrase,
+            "searchable_text": parent_phrase,
+            "source_doc": "ops.pdf",
+            "source_pages": [9],
+            "doc_id": "ops.pdf",
+            "chunk_index": 1,
+            "searchable": 1,
+            "type": "pdf",
+            "quality": "high",
+            "chunk_role": "parent",
+            "child_chunk_ids": ["child-ctx"],
+        },
+        {
+            "id": "child-ctx",
+            "text": "子チャンク: 再設定ボタンを押します。",
+            "display_text": "子チャンク: 再設定ボタンを押します。",
+            "searchable_text": "再設定ボタン",
+            "source_doc": "ops.pdf",
+            "source_pages": [10],
+            "doc_id": "ops.pdf",
+            "chunk_index": 2,
+            "searchable": 1,
+            "type": "pdf",
+            "quality": "high",
+            "chunk_role": "child",
+            "parent_chunk_id": "parent-ctx",
+        },
+    ]
+    chunks_path = tmp_path / "chunks.jsonl"
+    chunks_path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+    monkeypatch.setattr(retrieval.config, "CHUNKS_JSONL_PATH", str(chunks_path))
+    retrieval._INDEX_CACHE["path"] = None
+    retrieval._INDEX_CACHE["mtime"] = None
+    retrieval._INDEX_CACHE["index"] = None
+
+    child_hit = RetrievedChunk(
+        text="子チャンク: 再設定ボタンを押します。",
+        metadata={
+            "id": "child-ctx",
+            "parent_chunk_id": "parent-ctx",
+            "source_doc": "ops.pdf",
+            "source_pages": [10],
+            "retrieval_source": "hybrid",
+        },
+        score=0.24,
+    )
+    calls = {"count": 0}
+
+    def _fake_hybrid(*args, **kwargs):
+        calls["count"] += 1
+        return [child_hit] if calls["count"] == 1 else []
+
+    monkeypatch.setattr(qa, "hybrid_retrieve", _fake_hybrid)
+    monkeypatch.setattr(qa, "guard_merged_top", lambda *args, **kwargs: "soft_distance")
+
+    result, trace = qa.answer_query_with_trace("再設定の方法", client=object(), top_k=5, intent_override="procedure")
+    assert [it.metadata["id"] for it in result.retrieved] == ["child-ctx"]
+    assert trace["after_rerank"][0].metadata["id"] == "child-ctx"
+    assert parent_phrase in "\n".join(trace.get("selected_context_preview", []))

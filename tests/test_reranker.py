@@ -261,3 +261,59 @@ def test_rerank_quoted_non_code_like_keeps_conservative_text_matching():
     )
     after = rerank_chunks('「請求書ID」 の確認', chunks, intent="other")
     assert after[0].metadata["id"] == "B"
+
+
+def test_rerank_metadata_title_and_section_hits_can_lift_candidate():
+    chunks = [
+        RetrievedChunk(
+            text="一般説明です。",
+            metadata={
+                "id": "A",
+                "retrieval_source": "hybrid",
+                "title": "請求管理ガイド",
+                "section_path": ["概要"],
+            },
+            score=0.25,
+        ),
+        RetrievedChunk(
+            text="本文では略称のみ記載します。",
+            metadata={
+                "id": "B",
+                "retrieval_source": "hybrid",
+                "title": "請求書ID 運用手順",
+                "section_path": ["請求書ID の確認方法"],
+            },
+            score=0.27,
+        ),
+    ]
+    after = rerank_chunks("請求書ID の確認方法", chunks, intent="other")
+    assert after[0].metadata["id"] == "B"
+
+
+def test_rerank_metadata_faq_question_and_alias_hits():
+    chunks = [
+        RetrievedChunk(
+            text="一般的な問い合わせ先の説明です。",
+            metadata={
+                "id": "A",
+                "retrieval_source": "hybrid",
+                "doc_type": "faq_glossary",
+                "faq_question": "問い合わせ先はどこですか",
+                "aliases": ["連絡窓口"],
+            },
+            score=0.25,
+        ),
+        RetrievedChunk(
+            text="一般論です。",
+            metadata={
+                "id": "B",
+                "retrieval_source": "hybrid",
+                "doc_type": "policy_spec",
+                "faq_question": "",
+                "aliases": ["汎用説明"],
+            },
+            score=0.27,
+        ),
+    ]
+    after = rerank_chunks("連絡窓口 とは", chunks, intent="other")
+    assert after[0].metadata["id"] == "A"

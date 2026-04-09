@@ -5,7 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 from threading import Lock
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import config
 from rank_bm25 import BM25Okapi
@@ -29,9 +29,11 @@ class RetrievedChunk:
 @dataclass
 class _KeywordIndex:
     tokenized_corpus: List[List[str]]
-    docs: List[str]
+    searchable_docs: List[str]
+    display_docs: List[str]
     norm_docs: List[str]
     metas: List[Dict]
+    rows_by_id: Dict[str, Dict[str, Any]]
     bm25: BM25Okapi
 
 
@@ -67,6 +69,39 @@ def _meta_matches_where(meta: Dict, where: Dict) -> bool:
         if int(meta.get("searchable", 1) or 0) != 1:
             return False
     return True
+
+
+def _child_role_values() -> set[str]:
+    raw = getattr(config, "CHILD_CHUNK_ROLE_VALUES", ["child", "leaf"])
+    vals = [str(v).strip().lower() for v in raw if str(v).strip()]
+    return set(vals or ["child"])
+
+
+def _is_parent_chunk(meta: Dict) -> bool:
+    role = str((meta or {}).get("chunk_role") or "").strip().lower()
+    return role == "parent"
+
+
+def _is_child_chunk(meta: Dict) -> bool:
+    role = str((meta or {}).get("chunk_role") or "").strip().lower()
+    if not role:
+        # Backward compatibility with older records that had no role metadata.
+        return True
+    return role in _child_role_values()
+
+
+def _extract_display_text(*, text: str, meta: Dict) -> str:
+    display = str((meta or {}).get("display_text") or "").strip()
+    if display:
+        return display
+    return text or ""
+
+
+def _extract_searchable_text(*, text: str, obj: Dict) -> str:
+    searchable = str((obj or {}).get("searchable_text") or "").strip()
+    if searchable:
+        return searchable
+    return text or ""
 
 
 def _normalize(text: str) -> str:
@@ -131,9 +166,11 @@ def _load_keyword_index() -> _KeywordIndex:
             and _INDEX_CACHE["mtime"] == mtime
         ):
             return _INDEX_CACHE["index"]  # type: ignore[return-value]
-        docs: List[str] = []
+        searchable_docs: List[str] = []
+        display_docs: List[str] = []
         norm_docs: List[str] = []
         metas: List[Dict] = []
+        rows_by_id: Dict[str, Dict[str, Any]] = {}
         tokenized_corpus: List[List[str]] = []
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
@@ -149,19 +186,27 @@ def _load_keyword_index() -> _KeywordIndex:
                     if not text:
                         continue
                     meta = {k: v for k, v in obj.items() if k != "text"}
-                    tokens = _heuristic_tokenize(text)
+                    searchable_text = _extract_searchable_text(text=text, obj=obj)
+                    display_text = str(obj.get("display_text") or text)
+                    tokens = _heuristic_tokenize(searchable_text)
                     if not tokens:
                         tokens = [str(meta.get("id") or "")]
-                    docs.append(text)
-                    norm_docs.append(_normalize(text))
+                    searchable_docs.append(searchable_text)
+                    display_docs.append(display_text)
+                    norm_docs.append(_normalize(searchable_text))
                     metas.append(meta)
                     tokenized_corpus.append(tokens)
+                    chunk_id = str(meta.get("id") or "").strip()
+                    if chunk_id:
+                        rows_by_id[chunk_id] = dict(obj)
         bm25 = BM25Okapi(tokenized_corpus or [[""]])
         index = _KeywordIndex(
             tokenized_corpus=tokenized_corpus,
-            docs=docs,
+            searchable_docs=searchable_docs,
+            display_docs=display_docs,
             norm_docs=norm_docs,
             metas=metas,
+            rows_by_id=rows_by_id,
             bm25=bm25,
         )
         _INDEX_CACHE["path"] = path
@@ -180,16 +225,25 @@ def vector_retrieve(
     collection = store.get_vectorstore()
     where = _build_base_where(allowed_types, allowed_qualities)
     embedding = embedder.embed_queries([question], client=client)[0]
-    res = collection.query(query_embeddings=[embedding], n_results=top_k, where=where)
+    oversample = max(1, int(getattr(config, "CHILD_RETRIEVAL_OVERSAMPLE", 2)))
+    n_results = max(top_k, top_k * oversample)
+    res = collection.query(query_embeddings=[embedding], n_results=n_results, where=where)
     docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
     dists = res.get("distances", [[]])[0]
-    out = []
+    out: List[RetrievedChunk] = []
     for text, meta, dist in zip(docs, metas, dists):
         m = dict(meta or {})
         m["retrieval_source"] = "vector"
-        out.append(RetrievedChunk(text=text or "", metadata=m, score=float(dist)))
-    return out
+        out.append(
+            RetrievedChunk(
+                text=_extract_display_text(text=text or "", meta=m),
+                metadata=m,
+                score=float(dist),
+            )
+        )
+    out.sort(key=lambda ch: (0 if _is_child_chunk(ch.metadata) else 1, float(ch.score)))
+    return out[:top_k]
 
 
 def keyword_retrieve(
@@ -199,7 +253,7 @@ def keyword_retrieve(
     allowed_qualities=None,
 ) -> List[RetrievedChunk]:
     index = _load_keyword_index()
-    if not index.docs:
+    if not index.searchable_docs:
         return []
     where = _build_base_where(allowed_types, allowed_qualities)
     query_tokens = _heuristic_tokenize(question)
@@ -219,6 +273,7 @@ def keyword_retrieve(
         id_hits = sum(1 for t in id_terms if t and t in norm_text)
         exact_hits = sum(1 for t in exact_terms if t and t in norm_text)
         rank_key = (
+            1 if _is_child_chunk(meta) else 0,
             1 if quoted_hits > 0 else 0,
             1 if id_hits > 0 else 0,
             exact_hits,
@@ -235,7 +290,7 @@ def keyword_retrieve(
         pseudo_distance = min(0.25 + (rank - 1) * 0.02, 0.95)
         out.append(
             RetrievedChunk(
-                text=index.docs[idx] or "",
+                text=index.display_docs[idx] or "",
                 metadata=m,
                 score=pseudo_distance,
             )
@@ -246,6 +301,23 @@ def keyword_retrieve(
 def _chunk_key(ch: RetrievedChunk) -> str:
     meta = ch.metadata or {}
     return str(meta.get("id") or (ch.text[:120] + str(meta.get("doc_id"))))
+
+
+def _bucket_base_chunk(bucket: Dict[str, Any]) -> Optional[RetrievedChunk]:
+    vec = bucket.get("vector")
+    if isinstance(vec, RetrievedChunk):
+        return vec
+    kw = bucket.get("keyword")
+    if isinstance(kw, RetrievedChunk):
+        return kw
+    return None
+
+
+def _bucket_child_priority(bucket: Dict[str, Any]) -> int:
+    base = _bucket_base_chunk(bucket)
+    if base is None:
+        return 1
+    return 1 if _is_child_chunk(base.metadata) else 0
 
 
 def hybrid_retrieve(
@@ -296,7 +368,14 @@ def hybrid_retrieve(
         bucket["keyword"] = ch
         bucket["rrf"] += 1.0 / (k_rrf + rank)
 
-    ranked_items = sorted(merged.values(), key=lambda x: x["rrf"], reverse=True)
+    ranked_items = sorted(
+        merged.values(),
+        key=lambda x: (
+            _bucket_child_priority(x),
+            float(x["rrf"]),
+        ),
+        reverse=True,
+    )
     out: List[RetrievedChunk] = []
     for rank, item in enumerate(ranked_items[:top_k], start=1):
         v = item["vector"]
@@ -328,6 +407,99 @@ def hybrid_retrieve(
     return out
 
 
+def expand_parent_chunks(
+    chunks: Sequence[RetrievedChunk],
+    *,
+    max_parent_chunks: Optional[int] = None,
+    max_parent_context_chars: Optional[int] = None,
+) -> List[RetrievedChunk]:
+    if not getattr(config, "ENABLE_PARENT_EXPANSION", True):
+        return list(chunks)
+    if not chunks:
+        return []
+    index = _load_keyword_index()
+    if not index.rows_by_id:
+        return list(chunks)
+
+    parent_limit = max_parent_chunks or int(getattr(config, "MAX_PARENT_EXPANDED_CHUNKS", len(chunks)))
+    char_limit = max_parent_context_chars or int(getattr(config, "MAX_PARENT_CONTEXT_CHARS", 2400))
+
+    out: List[RetrievedChunk] = []
+    parent_positions: Dict[str, int] = {}
+    total_parent_chars = 0
+
+    for ch in chunks:
+        meta = dict(ch.metadata or {})
+        child_id = str(meta.get("id") or "").strip()
+        parent_id = str(meta.get("parent_chunk_id") or "").strip()
+        if not parent_id or parent_id == child_id:
+            out.append(ch)
+            continue
+
+        parent_row = index.rows_by_id.get(parent_id)
+        if not parent_row:
+            out.append(ch)
+            continue
+
+        if parent_id in parent_positions:
+            pos = parent_positions[parent_id]
+            prev = out[pos]
+            prev_meta = dict(prev.metadata or {})
+            child_ids = [str(x) for x in (prev_meta.get("child_chunk_ids") or []) if str(x).strip()]
+            if child_id and child_id not in child_ids:
+                child_ids.append(child_id)
+            prev_meta["child_chunk_ids"] = child_ids
+            if float(ch.score) < float(prev.score):
+                prev_meta["primary_child_chunk_id"] = child_id
+                prev_meta["source_pages"] = meta.get("source_pages") or prev_meta.get("source_pages") or []
+                prev = RetrievedChunk(text=prev.text, metadata=prev_meta, score=float(ch.score))
+                out[pos] = prev
+            else:
+                out[pos] = RetrievedChunk(text=prev.text, metadata=prev_meta, score=float(prev.score))
+            continue
+
+        if len(parent_positions) >= parent_limit:
+            out.append(ch)
+            continue
+
+        parent_meta = {k: v for k, v in parent_row.items() if k != "text"}
+        parent_text = str(parent_row.get("display_text") or parent_row.get("text") or "").strip()
+        if not parent_text:
+            out.append(ch)
+            continue
+
+        if char_limit > 0 and total_parent_chars + len(parent_text) > char_limit:
+            out.append(ch)
+            continue
+
+        merged_meta = dict(parent_meta)
+        merged_meta["retrieval_source"] = meta.get("retrieval_source") or merged_meta.get("retrieval_source")
+        merged_meta["parent_chunk_id"] = parent_id
+        merged_meta["chunk_role"] = "parent"
+        merged_meta["expanded_from_parent"] = 1
+        merged_meta["retrieved_child_chunk_id"] = child_id
+        merged_meta["primary_child_chunk_id"] = child_id or merged_meta.get("primary_child_chunk_id")
+        merged_meta["child_chunk_ids"] = [child_id] if child_id else list(merged_meta.get("child_chunk_ids") or [])
+        merged_meta["source_doc"] = meta.get("source_doc") or merged_meta.get("source_doc")
+        merged_meta["source_pages"] = meta.get("source_pages") or merged_meta.get("source_pages") or []
+        merged_meta["parent_source_pages"] = parent_meta.get("source_pages") or []
+        merged_meta["searchable_text"] = str(
+            parent_row.get("searchable_text") or merged_meta.get("searchable_text") or parent_text
+        )
+        merged_meta["display_text"] = str(parent_row.get("display_text") or parent_text)
+
+        parent_chunk = RetrievedChunk(
+            text=merged_meta["display_text"],
+            metadata=merged_meta,
+            score=float(ch.score),
+        )
+        parent_positions[parent_id] = len(out)
+        out.append(parent_chunk)
+        total_parent_chars += len(parent_text)
+
+    return out
+
+
 def add_neighbor_chunks(seeds: Sequence[RetrievedChunk], window: int = 1) -> List[RetrievedChunk]:
     collection = store.get_vectorstore()
     out = list(seeds)
@@ -346,7 +518,7 @@ def add_neighbor_chunks(seeds: Sequence[RetrievedChunk], window: int = 1) -> Lis
                     m["retrieval_source"] = "vector"
                     out.append(
                         RetrievedChunk(
-                            text=text or "",
+                            text=_extract_display_text(text=text or "", meta=m),
                             metadata=m,
                             score=seed.score + 0.01,
                         )
