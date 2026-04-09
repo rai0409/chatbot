@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import config
 from rag_core.reranker import rerank_chunks
-from rag_core.retrieval import RetrievedChunk, add_neighbor_chunks, hybrid_retrieve, vector_retrieve
+from rag_core.retrieval import RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, hybrid_retrieve, vector_retrieve
 from rag_core.utils import ensure_openai_client
 from rag_grounded import Chunk, build_citation_payloads, build_evidence_blocks, build_prompt, extractive_fallback, merge_by_page, rewrite_query, strip_reference_block, strip_source_tags, to_footnotes, validate_output
 from schemas import AnswerResult, CitationOut, RetrievedChunkOut
@@ -203,9 +203,10 @@ def _to_grounded(chunks: Sequence[RetrievedChunk]) -> List[Chunk]:
         if isinstance(pages, str):
             pages = [p for p in re.findall(r"\d+", pages)]
         pages = tuple(int(p) for p in pages) if pages else tuple()
+        citation_id = str(meta.get("primary_child_chunk_id") or meta.get("id") or idx)
         out.append(
             Chunk(
-                id=str(meta.get("id") or idx),
+                id=citation_id,
                 text=ch.text,
                 source_doc=str(meta.get("source_doc") or meta.get("doc") or "unknown"),
                 source_pages=pages,
@@ -309,7 +310,7 @@ def _retrieve_and_rerank(
     client,
     top_k: int,
     intent: str,
-) -> Tuple[List[RetrievedChunk], List[RetrievedChunk]]:
+) -> Tuple[List[RetrievedChunk], List[RetrievedChunk], List[RetrievedChunk]]:
     base = hybrid_retrieve(
         question,
         client,
@@ -329,8 +330,13 @@ def _retrieve_and_rerank(
     before_rerank = _unique_chunks(base + aug)
     if intent == "procedure":
         before_rerank = _unique_chunks(add_neighbor_chunks(before_rerank))
-    after_rerank = rerank_chunks(question, before_rerank, intent=intent)
-    return before_rerank, after_rerank
+    child_ranked = rerank_chunks(question, before_rerank, intent=intent)
+    context_ranked = expand_parent_chunks(
+        child_ranked,
+        max_parent_chunks=getattr(config, "MAX_PARENT_EXPANDED_CHUNKS", top_k),
+        max_parent_context_chars=getattr(config, "MAX_PARENT_CONTEXT_CHARS", max(1200, top_k * 400)),
+    )
+    return before_rerank, child_ranked, context_ranked
 
 
 def _answer_query_impl(
@@ -354,7 +360,7 @@ def _answer_query_impl(
 
     if client is None:
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
-    before_rerank, retrieved = _retrieve_and_rerank(
+    before_rerank, retrieved, context_candidates = _retrieve_and_rerank(
         q,
         augmented,
         client=client,
@@ -372,8 +378,10 @@ def _answer_query_impl(
         "augmented_query": augmented,
         "before_rerank": before_rerank,
         "after_rerank": retrieved,
+        "after_parent_expansion": context_candidates,
         "retrieval_before_rerank_count": len(before_rerank),
         "retrieval_after_rerank_count": len(retrieved),
+        "retrieval_after_parent_expansion_count": len(context_candidates),
     }
 
     def _finalize_trace(result: AnswerResult, answer_chunks: Sequence[Chunk], *, answer_mode: str) -> None:
@@ -385,17 +393,23 @@ def _answer_query_impl(
         trace["answer_mode"] = answer_mode
         trace["selected_context_chunk_ids"] = [ch.id for ch in answer_chunks]
         trace["selected_context_chars"] = sum(len(ch.text) for ch in answer_chunks)
+        trace["selected_context_preview"] = [ch.text[:160] for ch in answer_chunks[:3]]
         trace["citations_count"] = len(result.citations)
         trace["latency_ms"] = int((time.perf_counter() - started_at) * 1000)
 
-    grounded = _to_grounded(retrieved)
-    grounded = merge_by_page(grounded)
+    guard_grounded = _to_grounded(retrieved)
+    guard_grounded = merge_by_page(guard_grounded)
     if intent == "procedure":
         max_per_page = config.PROCEDURE_MAX_PER_PAGE
     elif intent in {"change", "reset"}:
         max_per_page = config.CHANGE_RESET_MAX_PER_PAGE
     else:
         max_per_page = config.OTHER_MAX_PER_PAGE
+    guard_grounded = _page_diversity(guard_grounded, max_per_page=max_per_page)
+    trace["guard_candidate_chunk_ids"] = [ch.id for ch in guard_grounded]
+
+    grounded = _to_grounded(context_candidates)
+    grounded = merge_by_page(grounded)
     grounded = _page_diversity(grounded, max_per_page=max_per_page)
     trace["grounded_candidate_chunk_ids"] = [ch.id for ch in grounded]
 
@@ -417,7 +431,7 @@ def _answer_query_impl(
             _finalize_trace(result, answer_chunks, answer_mode="fallback")
             return result, trace
 
-    guard_reason = guard_merged_top(q, intent, grounded, retrieved)
+    guard_reason = guard_merged_top(q, intent, guard_grounded, retrieved)
     if guard_reason:
         body = f"- 関連情報が見つかりませんでした。理由: {guard_reason} [S1]"
         raw = body + "\n不明: 根拠不足 [S1]\n不足: 関連記載なし [S1]"

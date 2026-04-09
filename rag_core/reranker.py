@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Sequence
 
+import config
 from rag_core.ja_text import extract_salient_terms_ja, normalize_japanese_text
 from rag_core.retrieval import RetrievedChunk
 
@@ -68,7 +69,9 @@ def _extract_short_lookup_terms(question: str) -> List[str]:
     norm = normalize_japanese_text(question or "").strip()
     if not norm:
         return []
-    has_lookup_marker = any(marker in norm for marker in ("とは", "って何", "の意味", "の定義", "の仕様"))
+    has_lookup_marker = any(
+        marker in norm for marker in ("とは", "って何", "の意味", "の定義", "の仕様", "の確認方法")
+    )
     if not has_lookup_marker and re.search(r"\s", norm):
         return []
     core = re.sub(r"[?？。!！]", "", norm)
@@ -110,6 +113,36 @@ def _build_query_signals(question: str) -> _QuerySignals:
     )
 
 
+def _normalize_meta_text(value) -> str:
+    if isinstance(value, list):
+        return _normalize(" ".join(str(v) for v in value if str(v).strip()))
+    if value is None:
+        return ""
+    return _normalize(str(value))
+
+
+def _meta_alias_blob(meta: dict) -> str:
+    aliases = meta.get("aliases")
+    if aliases is None:
+        aliases = meta.get("alias")
+    if isinstance(aliases, list):
+        values = [str(v).strip() for v in aliases if str(v).strip()]
+        return _normalize(" ".join(values))
+    return _normalize(str(aliases or ""))
+
+
+def _doc_type_value(meta: dict) -> str:
+    return _normalize(str(meta.get("doc_type") or ""))
+
+
+def _is_faq_like(doc_type: str) -> bool:
+    return doc_type in {"faq", "glossary", "faq_glossary"}
+
+
+def _is_procedure_like(doc_type: str) -> bool:
+    return doc_type in {"procedure", "howto", "procedure_howto", "manual"}
+
+
 def rerank_chunks(
     question: str,
     chunks: Sequence[RetrievedChunk],
@@ -126,16 +159,40 @@ def rerank_chunks(
 
     scored = []
     for idx, ch in enumerate(items):
+        meta = dict(ch.metadata or {})
         norm_text = _normalize(ch.text)
         code_tokens = _extract_code_like_tokens(norm_text)
+        title_norm = _normalize_meta_text(meta.get("title"))
+        section_norm = _normalize_meta_text(meta.get("section_path"))
+        question_norm = _normalize_meta_text(meta.get("faq_question") or meta.get("question"))
+        searchable_norm = _normalize_meta_text(meta.get("searchable_text"))
+        alias_norm = _meta_alias_blob(meta)
+        all_text_norm = " ".join(
+            x for x in [norm_text, searchable_norm, title_norm, section_norm, question_norm, alias_norm] if x
+        )
+        all_code_tokens = _extract_code_like_tokens(all_text_norm)
+        doc_type = _doc_type_value(meta)
+        metadata_terms = _unique_preserve(
+            q.short_lookup_terms + q.quoted_text_terms + q.katakana_terms + q.kanji_terms + q.alnum_terms
+        )
+
         quoted_code_hits = sum(1 for t in q.quoted_code_terms if t and t in code_tokens)
         quoted_text_hits = sum(1 for t in q.quoted_text_terms if t and t in norm_text)
         quoted_hits = quoted_code_hits + quoted_text_hits
-        id_hits = sum(1 for t in q.id_terms if t and t in code_tokens)
-        alnum_hits = sum(1 for t in q.alnum_terms if t and t in code_tokens)
+        id_hits = sum(1 for t in q.id_terms if t and t in all_code_tokens)
+        alnum_hits = sum(1 for t in q.alnum_terms if t and t in all_code_tokens)
         katakana_hits = sum(1 for t in q.katakana_terms if t and t in norm_text)
         kanji_hits = sum(1 for t in q.kanji_terms if t and t in norm_text)
-        short_lookup_hits = sum(1 for t in q.short_lookup_terms if t and t in norm_text)
+        short_lookup_hits = sum(1 for t in q.short_lookup_terms if t and t in all_text_norm)
+        title_hits = sum(1 for t in metadata_terms if t and t in title_norm)
+        section_hits = sum(1 for t in metadata_terms if t and t in section_norm)
+        question_hits = sum(
+            1 for t in metadata_terms if t and t in question_norm
+        )
+        alias_hits = sum(1 for t in q.alnum_terms + q.short_lookup_terms if t and t in alias_norm)
+        exact_code_hits = sum(
+            1 for t in q.id_terms + q.quoted_code_terms if t and t in all_code_tokens
+        )
 
         has_strong = quoted_hits > 0 or id_hits > 0
         lexical_hits = alnum_hits + katakana_hits + kanji_hits
@@ -153,15 +210,32 @@ def rerank_chunks(
             boost += 2
         if short_lookup_hits:
             boost += 1
+        if title_hits:
+            boost += min(2, title_hits)
+        if section_hits:
+            boost += 1
+        if question_hits:
+            boost += 2
+        if alias_hits:
+            boost += 1
+        if exact_code_hits:
+            boost += 1
+
+        if short_lookup_hits and _is_faq_like(doc_type):
+            boost += int(getattr(config, "RERANK_BOOST_FAQ_SHORT_LOOKUP", 2))
+        if intent == "procedure" and _is_procedure_like(doc_type):
+            boost += int(getattr(config, "RERANK_BOOST_PROCEDURE_DOC_TYPE", 1))
 
         # For broad/ambiguous questions, avoid aggressive moves from a single weak match.
-        if not has_strong and len(lexical_query_terms) > 1 and lexical_hits < 2:
+        if not has_strong and len(lexical_query_terms) > 1 and lexical_hits < 2 and title_hits == 0 and question_hits == 0:
             boost = 0
 
         if intent == "other" and not has_strong:
-            boost = min(boost, 2)
+            boost = min(boost, int(getattr(config, "RERANK_MAX_LIFT_OTHER_WEAK", 2)))
 
-        max_lift = 3 if has_strong else 2
+        max_lift = int(getattr(config, "RERANK_MAX_LIFT_STRONG", 3)) if has_strong else int(
+            getattr(config, "RERANK_MAX_LIFT_WEAK", 2)
+        )
         lift = min(boost, max_lift)
         target_rank = max(0, idx - lift)
 
@@ -169,8 +243,9 @@ def rerank_chunks(
             (
                 target_rank,
                 0 if has_strong else 1,
-                -(quoted_hits + id_hits),
+                -(quoted_hits + id_hits + exact_code_hits),
                 -short_lookup_hits,
+                -(title_hits + section_hits + question_hits + alias_hits),
                 -lexical_hits,
                 idx,
                 ch,
