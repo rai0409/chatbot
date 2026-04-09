@@ -22,6 +22,7 @@ _EXPECTATION_FIELDS = (
     "expected_used_fallback",
     "answer_must_contain",
     "answer_must_not_contain",
+    "selected_context_must_contain",
 )
 
 
@@ -37,6 +38,7 @@ class EvalCase:
     expected_used_fallback: Optional[bool]
     answer_must_contain: Tuple[str, ...]
     answer_must_not_contain: Tuple[str, ...]
+    selected_context_must_contain: Tuple[str, ...]
     notes: str
     expectation_keys: Tuple[str, ...]
 
@@ -111,6 +113,7 @@ def _normalize_case_record(record: Dict[str, Any], line_no: int) -> EvalCase:
     present_expectations = tuple(k for k in _EXPECTATION_FIELDS if k in record)
     must_contain = tuple(str(x) for x in (record.get("answer_must_contain") or []))
     must_not_contain = tuple(str(x) for x in (record.get("answer_must_not_contain") or []))
+    context_must_contain = tuple(str(x) for x in (record.get("selected_context_must_contain") or []))
 
     expected_used_fallback = record.get("expected_used_fallback")
     if expected_used_fallback is not None:
@@ -141,6 +144,7 @@ def _normalize_case_record(record: Dict[str, Any], line_no: int) -> EvalCase:
         expected_used_fallback=expected_used_fallback,
         answer_must_contain=must_contain,
         answer_must_not_contain=must_not_contain,
+        selected_context_must_contain=context_must_contain,
         notes=str(record.get("notes") or record.get("why") or ""),
         expectation_keys=present_expectations,
     )
@@ -223,6 +227,7 @@ def _expectations_dict(case: EvalCase) -> Dict[str, Any]:
         "expected_used_fallback": case.expected_used_fallback,
         "answer_must_contain": list(case.answer_must_contain),
         "answer_must_not_contain": list(case.answer_must_not_contain),
+        "selected_context_must_contain": list(case.selected_context_must_contain),
     }
     return {k: values[k] for k in case.expectation_keys}
 
@@ -234,6 +239,7 @@ def evaluate_expectations(
     guard_reason: Optional[str],
     used_fallback: bool,
     answer_text: str,
+    selected_context_preview: Sequence[str],
 ) -> Dict[str, Dict[str, Any]]:
     checks: Dict[str, Dict[str, Any]] = {}
     top = after_rerank_top[0] if after_rerank_top else {}
@@ -288,6 +294,15 @@ def evaluate_expectations(
             "pass": not present,
             "expected": list(case.answer_must_not_contain),
             "actual": {"present": present},
+        }
+
+    if "selected_context_must_contain" in case.expectation_keys:
+        context_blob = "\n".join(str(x) for x in selected_context_preview)
+        missing = [term for term in case.selected_context_must_contain if term not in context_blob]
+        checks["selected_context_must_contain"] = {
+            "pass": not missing,
+            "expected": list(case.selected_context_must_contain),
+            "actual": {"missing": missing},
         }
 
     return checks
@@ -364,6 +379,7 @@ def run_eval(
                 guard_reason=answer.guard_reason,
                 used_fallback=answer.used_fallback,
                 answer_text=answer.answer_text,
+                selected_context_preview=trace.get("selected_context_preview", []),
             )
             case_pass = _overall_pass(checks)
 
@@ -377,6 +393,7 @@ def run_eval(
                 "final_guard_reason": answer.guard_reason,
                 "final_used_fallback": answer.used_fallback,
                 "final_answer_summary": _answer_summary(answer.answer_text),
+                "selected_context_preview": trace.get("selected_context_preview", []),
                 "expectations": _expectations_dict(case),
                 "checks": checks,
                 "overall_pass": case_pass,

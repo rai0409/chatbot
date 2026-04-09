@@ -66,6 +66,7 @@ def test_evaluate_expectations_checks_core_fields(tmp_path):
         guard_reason="too_general",
         used_fallback=True,
         answer_text="関連情報が見つかりませんでした。",
+        selected_context_preview=[],
     )
 
     assert checks["expected_top_chunk_id"]["pass"] is True
@@ -156,6 +157,7 @@ def test_run_eval_outputs_before_after_and_json_keys(tmp_path):
         "checks",
         "overall_pass",
         "evaluation_mode",
+        "selected_context_preview",
     }
     assert case["before_rerank_top"]
     assert case["after_rerank_top"]
