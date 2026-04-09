@@ -80,7 +80,26 @@ ENABLE_HYBRID_RETRIEVAL = _get_bool("ENABLE_HYBRID_RETRIEVAL", default=True)
 VECTOR_TOP_K = int(getenv_first("VECTOR_TOP_K", default=str(TOP_K)))
 BM25_TOP_K = int(getenv_first("BM25_TOP_K", default=str(TOP_K)))
 HYBRID_RRF_K = int(getenv_first("HYBRID_RRF_K", default="60"))
+CHILD_RETRIEVAL_OVERSAMPLE = int(getenv_first("CHILD_RETRIEVAL_OVERSAMPLE", default="2"))
+CHILD_CHUNK_ROLE_VALUES = _get_list("CHILD_CHUNK_ROLE_VALUES", ["child", "leaf"])
+ENABLE_PARENT_EXPANSION = _get_bool("ENABLE_PARENT_EXPANSION", default=True)
+MAX_PARENT_EXPANDED_CHUNKS = int(getenv_first("MAX_PARENT_EXPANDED_CHUNKS", default=str(TOP_K)))
+MAX_PARENT_CONTEXT_CHARS = int(getenv_first("MAX_PARENT_CONTEXT_CHARS", default="2400"))
 MAX_CONTEXT_CHARS = int(getenv_first("MAX_CONTEXT_CHARS", default="8000"))
+
+JA_CHUNK_TARGET_FAQ_MIN_CHARS = int(getenv_first("JA_CHUNK_TARGET_FAQ_MIN_CHARS", default="80"))
+JA_CHUNK_TARGET_FAQ_MAX_CHARS = int(getenv_first("JA_CHUNK_TARGET_FAQ_MAX_CHARS", default="300"))
+JA_CHUNK_TARGET_PROCEDURE_MIN_CHARS = int(
+    getenv_first("JA_CHUNK_TARGET_PROCEDURE_MIN_CHARS", default="300")
+)
+JA_CHUNK_TARGET_PROCEDURE_MAX_CHARS = int(
+    getenv_first("JA_CHUNK_TARGET_PROCEDURE_MAX_CHARS", default="900")
+)
+JA_CHUNK_TARGET_POLICY_MIN_CHARS = int(getenv_first("JA_CHUNK_TARGET_POLICY_MIN_CHARS", default="400"))
+JA_CHUNK_TARGET_POLICY_MAX_CHARS = int(getenv_first("JA_CHUNK_TARGET_POLICY_MAX_CHARS", default="1200"))
+JA_CHUNK_TARGET_TABLE_MIN_CHARS = int(getenv_first("JA_CHUNK_TARGET_TABLE_MIN_CHARS", default="80"))
+JA_CHUNK_TARGET_TABLE_MAX_CHARS = int(getenv_first("JA_CHUNK_TARGET_TABLE_MAX_CHARS", default="500"))
+JA_CHUNK_FALLBACK_OVERLAP_CHARS = int(getenv_first("JA_CHUNK_FALLBACK_OVERLAP_CHARS", default="80"))
 
 RAG_HARD_MAX_DIST = _get_float("RAG_HARD_MAX_DIST", default=0.95)
 RAG_HARD_MAX_DIST = _get_float("RAG_MAX_DISTANCE", default=RAG_HARD_MAX_DIST)
@@ -155,6 +174,12 @@ PREFER_SORT_TERMS_CHANGE = _get_list("PREFER_SORT_TERMS_CHANGE", ["変更", "更
 PREFER_SORT_TERMS_PROCEDURE = _get_list(
     "PREFER_SORT_TERMS_PROCEDURE", ["手順", "方法", "操作"]
 )
+
+RERANK_BOOST_FAQ_SHORT_LOOKUP = int(getenv_first("RERANK_BOOST_FAQ_SHORT_LOOKUP", default="2"))
+RERANK_BOOST_PROCEDURE_DOC_TYPE = int(getenv_first("RERANK_BOOST_PROCEDURE_DOC_TYPE", default="1"))
+RERANK_MAX_LIFT_STRONG = int(getenv_first("RERANK_MAX_LIFT_STRONG", default="3"))
+RERANK_MAX_LIFT_WEAK = int(getenv_first("RERANK_MAX_LIFT_WEAK", default="2"))
+RERANK_MAX_LIFT_OTHER_WEAK = int(getenv_first("RERANK_MAX_LIFT_OTHER_WEAK", default="2"))
 
 DISABLE_GUARD = _get_bool("DISABLE_GUARD", default=False)
 IGNORE_SEARCHABLE = _get_bool("IGNORE_SEARCHABLE", default=False)
