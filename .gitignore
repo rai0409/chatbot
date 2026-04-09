@@ -8,3 +8,13 @@ node_modules/
 dist/
 build/
 .DS_Store
+
+# local eval outputs
+runs/
+
+# local vectorstore artifacts
+vectorstore/chroma.sqlite3
+
+chatbot_src.zip
+output_app.zip
+output_ops.zip

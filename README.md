@@ -1,34 +1,58 @@
 # chatbot
 
-Citation-first RAG template for internal knowledge workflows.
+Citation-first Japanese RAG service for internal knowledge and support operations.
 
-This project is built for teams that need retrieval-backed answers, traceable evidence, and reproducible chunk preparation instead of opaque chatbot responses.
+This repository focuses on one practical goal: produce grounded answers with inspectable evidence instead of opaque chat responses.
 
-## What it does
+## Problem this solves
 
-- Ingests and prepares internal document chunks
-- Supports retrieval and citation-backed answers
-- Exposes FastAPI endpoints for chat and search
-- Keeps chunk preparation reproducible for verification
-- Provides scripts for chunk validation and maintenance
+Internal support and operations teams need answers they can trust. In Japanese enterprise documents, relevant facts are often split across headings, procedures, FAQ fragments, and table rows. This project provides a production-oriented retrieval stack that keeps citations first and fallback behavior explicit.
 
-## Typical use cases
+## Why Japanese retrieval is hard
 
-- Internal document Q&A
-- Retrieval-backed support tools
-- Citation-first knowledge workflows
-- Small FastAPI-based RAG services
-- Search and evidence inspection tools
+- Mixed scripts (kanji, kana, alnum IDs) reduce naive token match quality.
+- Important terms are often short (`PR2`, `請求書ID`, `承認フラグ`) and easy to confuse with supersets (`PR20`).
+- Procedural evidence is distributed across neighboring lines and sections.
+- Table content is frequently semi-structured and not searchable as-is.
 
-## Stack
+## What the service provides
 
-Python, FastAPI, Chroma, OpenAI-compatible APIs
+- FastAPI endpoints for chat (`/chat`) and retrieval inspection (`/search`)
+- Citation-first grounded answer flow with guard and extractive fallback
+- Hybrid retrieval (vector + keyword + RRF-style fusion)
+- Japanese-aware metadata/rerank path for short lookup and code-like terms
+- Lightweight deterministic eval runner for regression checks
 
-## Why this repo matters
+## Retrieval architecture
 
-Many chat-style knowledge tools fail because users cannot inspect why an answer was produced. This repository prioritizes evidence, traceability, and reproducibility, making it more suitable for practical internal use.
+1. First-stage retrieval: hybrid retrieval over vector + keyword candidates.
+2. Candidate rerank: lexical + metadata-aware boosts (title/section/question/alias/code-aware).
+3. Context shaping: child chunks are retrieval units; parent chunks can expand answer context after ranking.
+4. Answering: grounded prompt with citation tags, validation, and fallback when needed.
 
-## Quick start
+## Japanese chunking strategy
+
+The repository now includes `rag_core/chunking_ja.py` with document-type-aware chunk construction:
+
+- FAQ / glossary: short chunks, one Q&A or one term-definition per unit
+- Procedure / how-to: medium chunks, preserves prerequisites + steps + notes
+- Policy / spec: heading/section-oriented chunks to avoid brittle clause splits
+- Table-like text: flattened row chunks with table title/header context
+
+Default character targets:
+
+- FAQ / glossary: 80-300 chars
+- Procedure / how-to: 300-900 chars
+- Policy / spec: 400-1200 chars
+
+Chunk metadata includes:
+
+- `doc_type`, `title`, `section_path`, `chunk_role`
+- `parent_chunk_id`, `child_chunk_ids`
+- `searchable_text`, `display_text`
+- plus backward-compatible fields such as `doc_id`, `source_doc`, `source_pages`, `chunk_index`, `type`, `quality`, `searchable`
+
+## Setup
 
 ```bash
 python -m venv .venv
@@ -37,25 +61,35 @@ pip install -r requirements.txt
 uvicorn webapi.main:app --reload
 ```
 
-## Notes
+## Ingestion
 
-This repository is a good fit for teams that need:
-- internal knowledge search
-- citation-backed retrieval
-- traceable RAG workflows
-- API-first experimentation
+Legacy fixed-window PDF chunking still works. Japanese doc-type-aware chunking is available as an additive option.
 
-## Eval runner (lightweight smoke)
+```bash
+PYTHONPATH=. .venv/bin/python scripts/pdf_to_canonical_jsonl.py \
+  --pdf pdfs/your_doc.pdf \
+  --out index/your_doc.jsonl \
+  --doc-type procedure \
+  --title "運用手順書"
+```
 
-`eval.runner` is a lightweight repo-native smoke evaluator for regression checks on the current grounded RAG path (retrieval, rerank, guard, fallback).
+Then ingest:
 
-- Default mode is deterministic/local-friendly.
-- Default mode uses deterministic stubbed generation.
-- Default mode stubs vector retrieval to empty unless `--real-vector` is enabled.
-- Default mode is not full live end-to-end answer quality evaluation.
-- `--real-vector` and `--real-generation` are opt-in and may be less deterministic.
+```bash
+PYTHONPATH=. .venv/bin/python scripts/ingest_canonical_jsonl.py index/your_doc.jsonl --reset
+```
 
-Run:
+`searchable_text` is used for indexing/retrieval when present, while `display_text` is preserved for answer presentation.
+
+## Evaluation
+
+`eval.runner` is a lightweight repo-native smoke evaluator for retrieval/rerank/guard/fallback regression checks.
+
+- Deterministic default: stubbed generation and local-friendly behavior
+- Optional live toggles: `--real-vector`, `--real-generation`
+- Supports expectations on top hit, guard/fallback, answer constraints, and selected context checks
+
+Run deterministic smoke:
 
 ```bash
 PYTHONPATH=. .venv/bin/python -m eval.runner \
@@ -63,3 +97,23 @@ PYTHONPATH=. .venv/bin/python -m eval.runner \
   --chunks-jsonl eval/cases/smoke_chunks.jsonl \
   --output runs/eval/smoke_results.json
 ```
+
+## Production-ready vs experimental
+
+Production-ready:
+
+- Citation-first answer path
+- Hybrid retrieval flow
+- Guard/fallback behavior
+- FastAPI endpoints
+- Deterministic smoke eval workflow
+
+Experimental / tuning surface:
+
+- Doc-type heuristics in Japanese chunk construction
+- Parent expansion limits (`ENABLE_PARENT_EXPANSION`, `MAX_PARENT_CONTEXT_CHARS`)
+- Metadata boost strength in reranker
+
+## License
+
+See [LICENSE](LICENSE).
