@@ -112,6 +112,11 @@ PYTHONPATH=. .venv/bin/python -m eval.runner \
 ```
 
 Per-query rows include retrieval hit/rank signals (`gold_doc_hit`, `gold_chunk_hit`, `best_rank_before_rerank`, `best_rank_after_rerank`, `rerank_gain`) and guard/abstain signals (`guard_reason`, `used_fallback`, `expected_abstain`, `abstain_correct`).
+Retrieval-aware summary uses `abstain_labeled_cases` (cases with explicit abstain labels), `abstain_expected_cases` (`expected_abstain=true`), and `abstain_passes` (`abstain_correct=true`).
+
+Case sets:
+- `eval/cases/smoke_cases.jsonl`: lightweight regression checks
+- `eval/cases/retrieval_cases.jsonl`: labeled retrieval comparison cases (gold IDs + abstain labels)
 
 ## Production-ready vs experimental
 
