@@ -98,6 +98,21 @@ PYTHONPATH=. .venv/bin/python -m eval.runner \
   --output runs/eval/smoke_results.json
 ```
 
+Retrieval-aware evaluation (Phase 1, additive) can run baseline modes and save both per-query rows (JSONL) and mode-level summary (JSON):
+
+```bash
+PYTHONPATH=. .venv/bin/python -m eval.runner \
+  --retrieval-aware \
+  --cases eval/cases/smoke_cases.jsonl \
+  --chunks-jsonl eval/cases/smoke_chunks.jsonl \
+  --modes bm25_only,dense_only,hybrid,hybrid_rerank \
+  --per-query-output runs/eval/retrieval_rows.jsonl \
+  --summary-output runs/eval/retrieval_summary.json \
+  --eval-k 5
+```
+
+Per-query rows include retrieval hit/rank signals (`gold_doc_hit`, `gold_chunk_hit`, `best_rank_before_rerank`, `best_rank_after_rerank`, `rerank_gain`) and guard/abstain signals (`guard_reason`, `used_fallback`, `expected_abstain`, `abstain_correct`).
+
 ## Production-ready vs experimental
 
 Production-ready:
