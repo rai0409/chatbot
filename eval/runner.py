@@ -15,6 +15,7 @@ from rag_core.utils import ensure_openai_client
 
 SCHEMA_VERSION = "eval_runner.v1"
 RUNNER_VERSION = "pr5a-lightweight"
+_COMPACT_ID_LIMIT = 5
 _EXPECTATION_FIELDS = (
     "expected_top_chunk_id",
     "expected_top_source_doc",
@@ -39,6 +40,9 @@ class EvalCase:
     answer_must_contain: Tuple[str, ...]
     answer_must_not_contain: Tuple[str, ...]
     selected_context_must_contain: Tuple[str, ...]
+    gold_doc_ids: Tuple[str, ...]
+    gold_chunk_ids: Tuple[str, ...]
+    should_abstain: Optional[bool]
     notes: str
     expectation_keys: Tuple[str, ...]
 
@@ -118,6 +122,15 @@ def _normalize_case_record(record: Dict[str, Any], line_no: int) -> EvalCase:
     expected_used_fallback = record.get("expected_used_fallback")
     if expected_used_fallback is not None:
         expected_used_fallback = bool(expected_used_fallback)
+    should_abstain = record.get("should_abstain")
+    if should_abstain is not None:
+        should_abstain = bool(should_abstain)
+    gold_doc_raw = record.get("gold_doc_ids") or []
+    if isinstance(gold_doc_raw, str):
+        gold_doc_raw = [gold_doc_raw]
+    gold_chunk_raw = record.get("gold_chunk_ids") or []
+    if isinstance(gold_chunk_raw, str):
+        gold_chunk_raw = [gold_chunk_raw]
 
     return EvalCase(
         case_id=str(record["case_id"]),
@@ -145,6 +158,9 @@ def _normalize_case_record(record: Dict[str, Any], line_no: int) -> EvalCase:
         answer_must_contain=must_contain,
         answer_must_not_contain=must_not_contain,
         selected_context_must_contain=context_must_contain,
+        gold_doc_ids=tuple(str(x) for x in gold_doc_raw),
+        gold_chunk_ids=tuple(str(x) for x in gold_chunk_raw),
+        should_abstain=should_abstain,
         notes=str(record.get("notes") or record.get("why") or ""),
         expectation_keys=present_expectations,
     )
@@ -328,6 +344,59 @@ def _format_top(items: Sequence[Dict[str, Any]]) -> str:
     return ", ".join(f"{it.get('chunk_id') or '?'}@{it.get('source_doc') or '?'}" for it in items)
 
 
+def _chunk_id(ch: RetrievedChunk) -> str:
+    meta = ch.metadata or {}
+    return str(meta.get("id") or "")
+
+
+def _source_doc(ch: RetrievedChunk) -> str:
+    meta = ch.metadata or {}
+    return str(meta.get("source_doc") or meta.get("doc") or "unknown")
+
+
+def _best_rank_by_chunk_id(chunks: Sequence[RetrievedChunk], gold_chunk_ids: Sequence[str]) -> Optional[int]:
+    if not gold_chunk_ids:
+        return None
+    targets = {str(x) for x in gold_chunk_ids if str(x)}
+    if not targets:
+        return None
+    for rank, ch in enumerate(chunks, start=1):
+        if _chunk_id(ch) in targets:
+            return rank
+    return None
+
+
+def _best_rank_by_doc_id(chunks: Sequence[RetrievedChunk], gold_doc_ids: Sequence[str]) -> Optional[int]:
+    if not gold_doc_ids:
+        return None
+    targets = {str(x) for x in gold_doc_ids if str(x)}
+    if not targets:
+        return None
+    for rank, ch in enumerate(chunks, start=1):
+        if _source_doc(ch) in targets:
+            return rank
+    return None
+
+
+def _rerank_gain(before_rank: Optional[int], after_rank: Optional[int]) -> Optional[int]:
+    if before_rank is None or after_rank is None:
+        return None
+    return before_rank - after_rank
+
+
+def _trace_chunk_list(trace: Dict[str, Any], key: str) -> Optional[Sequence[RetrievedChunk]]:
+    raw = trace.get(key)
+    if isinstance(raw, (list, tuple)):
+        return raw
+    return None
+
+
+def _compact_ids(chunks: Optional[Sequence[RetrievedChunk]], limit: int = _COMPACT_ID_LIMIT) -> Optional[List[str]]:
+    if chunks is None:
+        return None
+    return [_chunk_id(ch) for ch in chunks[:limit]]
+
+
 def run_eval(
     *,
     cases_path: Path,
@@ -370,8 +439,24 @@ def run_eval(
                 max_context_chars=max_context_chars,
                 intent_override=case.intent_override,
             )
-            before = top_entries(trace.get("before_rerank", []), top_n)
-            after = top_entries(trace.get("after_rerank", []), top_n)
+            before_raw = _trace_chunk_list(trace, "before_rerank")
+            after_raw = _trace_chunk_list(trace, "after_rerank")
+            before = top_entries(before_raw or [], top_n)
+            after = top_entries(after_raw or [], top_n)
+
+            gold_chunk_best_rank_before = _best_rank_by_chunk_id(before_raw or [], case.gold_chunk_ids)
+            gold_chunk_best_rank_after = _best_rank_by_chunk_id(after_raw or [], case.gold_chunk_ids)
+            gold_doc_best_rank_before = _best_rank_by_doc_id(before_raw or [], case.gold_doc_ids)
+            gold_doc_best_rank_after = _best_rank_by_doc_id(after_raw or [], case.gold_doc_ids)
+
+            rerank_gain: Optional[int] = None
+            if case.gold_chunk_ids:
+                rerank_gain = _rerank_gain(gold_chunk_best_rank_before, gold_chunk_best_rank_after)
+            elif case.gold_doc_ids:
+                rerank_gain = _rerank_gain(gold_doc_best_rank_before, gold_doc_best_rank_after)
+            abstain_check_pass: Optional[bool] = None
+            if case.should_abstain is not None:
+                abstain_check_pass = bool(answer.used_fallback) == bool(case.should_abstain)
 
             checks = evaluate_expectations(
                 case,
@@ -382,6 +467,11 @@ def run_eval(
                 selected_context_preview=trace.get("selected_context_preview", []),
             )
             case_pass = _overall_pass(checks)
+            before_top_id = before[0].get("chunk_id") if before else None
+            after_top_id = after[0].get("chunk_id") if after else None
+            rerank_top_changed: Optional[bool] = None
+            if before_top_id is not None and after_top_id is not None:
+                rerank_top_changed = bool(before_top_id != after_top_id)
 
             record = {
                 "case_id": case.case_id,
@@ -400,6 +490,24 @@ def run_eval(
                 "evaluation_mode": mode,
                 "rewritten_query": answer.rewritten_query,
                 "augmented_query": answer.augmented_query,
+                "gold_doc_ids": list(case.gold_doc_ids),
+                "gold_chunk_ids": list(case.gold_chunk_ids),
+                "should_abstain": case.should_abstain,
+                "gold_chunk_hit": (
+                    (gold_chunk_best_rank_after is not None) if case.gold_chunk_ids else None
+                ),
+                "gold_chunk_best_rank": gold_chunk_best_rank_after,
+                "gold_chunk_best_rank_before": gold_chunk_best_rank_before,
+                "gold_chunk_best_rank_after": gold_chunk_best_rank_after,
+                "gold_doc_hit": (gold_doc_best_rank_after is not None) if case.gold_doc_ids else None,
+                "gold_doc_best_rank": gold_doc_best_rank_after,
+                "gold_doc_best_rank_before": gold_doc_best_rank_before,
+                "gold_doc_best_rank_after": gold_doc_best_rank_after,
+                "abstain_check_pass": abstain_check_pass,
+                "rerank_top_changed": rerank_top_changed,
+                "rerank_gain": rerank_gain,
+                "before_rerank_ids": _compact_ids(before_raw),
+                "after_rerank_ids": _compact_ids(after_raw),
             }
             results.append(record)
 
@@ -421,6 +529,12 @@ def run_eval(
         "total_cases": len(results),
         "passed_cases": passed,
         "failed_cases": failed,
+        "gold_chunk_cases": sum(1 for r in results if r.get("gold_chunk_ids")),
+        "gold_chunk_hits": sum(1 for r in results if r.get("gold_chunk_hit") is True),
+        "gold_doc_cases": sum(1 for r in results if r.get("gold_doc_ids")),
+        "gold_doc_hits": sum(1 for r in results if r.get("gold_doc_hit") is True),
+        "abstain_cases": sum(1 for r in results if r.get("should_abstain") is not None),
+        "abstain_passes": sum(1 for r in results if r.get("abstain_check_pass") is True),
     }
     payload = {
         "summary": summary,
