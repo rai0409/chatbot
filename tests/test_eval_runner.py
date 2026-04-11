@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 runner = importlib.import_module("eval.runner")
 
 
@@ -437,3 +439,159 @@ def test_compact_ids_top5_and_missing_trace_is_null(tmp_path, monkeypatch):
     assert missing["after_rerank_ids"] is None
     assert missing["rerank_top_changed"] is None
     assert missing["abstain_check_pass"] is False
+
+
+def test_run_retrieval_aware_eval_writes_jsonl_and_summary(tmp_path, monkeypatch):
+    from rag_core.retrieval import RetrievedChunk
+
+    cases_path = tmp_path / "cases.jsonl"
+    _write_jsonl(
+        cases_path,
+        [
+            {
+                "case_id": "ra1",
+                "category": "retrieval",
+                "query": "QX12",
+                "gold_chunk_ids": ["c2"],
+                "gold_doc_ids": ["doc2"],
+                "expected_abstain": False,
+                "query_type": "id_lookup",
+            },
+            {
+                "case_id": "ra2",
+                "category": "retrieval",
+                "query": "unknown",
+                "gold_chunk_ids": ["missing"],
+                "answerable": False,
+            },
+        ],
+    )
+
+    def _fake_answer_query_with_trace(question, **kwargs):
+        del kwargs
+        if question == "QX12":
+            return (
+                SimpleNamespace(
+                    intent="other",
+                    guard_reason=None,
+                    used_fallback=False,
+                    answer_text="ok",
+                    rewritten_query=question,
+                    augmented_query=question,
+                ),
+                {
+                    "before_rerank": [
+                        RetrievedChunk(text="t", metadata={"id": "c1", "source_doc": "doc1"}, score=0.4),
+                        RetrievedChunk(text="t", metadata={"id": "c2", "source_doc": "doc2"}, score=0.5),
+                    ],
+                    "after_rerank": [
+                        RetrievedChunk(text="t", metadata={"id": "c2", "source_doc": "doc2"}, score=0.2),
+                        RetrievedChunk(text="t", metadata={"id": "c1", "source_doc": "doc1"}, score=0.3),
+                    ],
+                    "selected_context_preview": [],
+                },
+            )
+        return (
+            SimpleNamespace(
+                intent="other",
+                guard_reason="no_results",
+                used_fallback=True,
+                answer_text="no",
+                rewritten_query=question,
+                augmented_query=question,
+            ),
+            {
+                "before_rerank": [],
+                "after_rerank": [],
+                "selected_context_preview": [],
+            },
+        )
+
+    monkeypatch.setattr(runner.qa, "answer_query_with_trace", _fake_answer_query_with_trace)
+
+    per_query = tmp_path / "rows.jsonl"
+    summary = tmp_path / "summary.json"
+    payload = runner.run_retrieval_aware_eval(
+        cases_path=cases_path,
+        chunks_jsonl=None,
+        per_query_output_path=per_query,
+        summary_output_path=summary,
+        modes=["bm25_only", "dense_only", "hybrid", "hybrid_rerank"],
+        top_k=10,
+        max_context_chars=2000,
+        real_vector=False,
+        real_generation=False,
+        eval_k=5,
+        quiet=True,
+    )
+
+    assert per_query.exists()
+    assert summary.exists()
+    lines = [json.loads(line) for line in per_query.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines) == 8
+    first = lines[0]
+    assert set(first.keys()) >= {
+        "question",
+        "mode",
+        "gold_doc_hit",
+        "gold_chunk_hit",
+        "best_rank_before_rerank",
+        "best_rank_after_rerank",
+        "rerank_gain",
+        "guard_reason",
+        "used_fallback",
+        "expected_abstain",
+        "abstain_correct",
+        "before_rerank_ids",
+        "after_rerank_ids",
+        "mrr_at_k",
+        "ndcg_at_k",
+    }
+    assert first["best_rank_before_rerank"] == 2
+    assert first["best_rank_after_rerank"] == 1
+    assert first["rerank_gain"] == 1
+    assert first["gold_chunk_hit"] is True
+    assert first["gold_doc_hit"] is True
+    assert first["expected_abstain"] is False
+    assert first["abstain_correct"] is True
+    assert len(first["before_rerank_ids"]) <= 5
+    assert len(first["after_rerank_ids"]) <= 5
+
+    second_case_rows = [r for r in lines if r["case_id"] == "ra2"]
+    assert all(r["expected_abstain"] is True for r in second_case_rows)
+    assert all(r["abstain_correct"] is True for r in second_case_rows)
+    assert all(r["gold_chunk_hit"] is None for r in second_case_rows)
+    assert payload["summary"]["total_rows"] == 8
+    assert set(payload["summary"]["by_mode"].keys()) == {
+        "bm25_only",
+        "dense_only",
+        "hybrid",
+        "hybrid_rerank",
+    }
+
+
+def test_run_retrieval_aware_eval_rejects_unknown_mode(tmp_path):
+    cases_path = tmp_path / "cases.jsonl"
+    _write_jsonl(
+        cases_path,
+        [
+            {
+                "case_id": "x",
+                "category": "c",
+                "query": "q",
+            }
+        ],
+    )
+    with pytest.raises(ValueError):
+        runner.run_retrieval_aware_eval(
+            cases_path=cases_path,
+            chunks_jsonl=None,
+            per_query_output_path=tmp_path / "rows.jsonl",
+            summary_output_path=tmp_path / "summary.json",
+            modes=["unknown_mode"],
+            top_k=5,
+            max_context_chars=1000,
+            real_vector=False,
+            real_generation=False,
+            quiet=True,
+        )
