@@ -568,6 +568,11 @@ def test_run_retrieval_aware_eval_writes_jsonl_and_summary(tmp_path, monkeypatch
         "hybrid",
         "hybrid_rerank",
     }
+    for mode in payload["summary"]["by_mode"].values():
+        assert mode["abstain_labeled_cases"] == 2
+        assert mode["abstain_expected_cases"] == 1
+        assert mode["abstain_passes"] == 2
+        assert "abstain_cases" not in mode
 
 
 def test_run_retrieval_aware_eval_rejects_unknown_mode(tmp_path):
@@ -595,3 +600,31 @@ def test_run_retrieval_aware_eval_rejects_unknown_mode(tmp_path):
             real_generation=False,
             quiet=True,
         )
+
+
+def test_retrieval_cases_file_has_labels_and_abstain_coverage(tmp_path):
+    cases_path = Path("eval/cases/retrieval_cases.jsonl")
+    cases = runner.load_cases(cases_path)
+    assert 20 <= len(cases) <= 30
+
+    out_rows = tmp_path / "retrieval_rows.jsonl"
+    out_summary = tmp_path / "retrieval_summary.json"
+    payload = runner.run_retrieval_aware_eval(
+        cases_path=cases_path,
+        chunks_jsonl=runner._default_chunks_path(),
+        per_query_output_path=out_rows,
+        summary_output_path=out_summary,
+        modes=["hybrid_rerank"],
+        top_k=20,
+        max_context_chars=8000,
+        real_vector=False,
+        real_generation=False,
+        eval_k=5,
+        quiet=True,
+    )
+
+    mode_summary = payload["summary"]["by_mode"]["hybrid_rerank"]
+    assert mode_summary["cases"] == len(cases)
+    assert (mode_summary["gold_chunk_cases"] > 0) or (mode_summary["gold_doc_cases"] > 0)
+    assert mode_summary["abstain_labeled_cases"] > 0
+    assert mode_summary["abstain_expected_cases"] > 0
