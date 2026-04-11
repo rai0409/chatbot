@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from rag_core.utils import ensure_openai_client
 SCHEMA_VERSION = "eval_runner.v1"
 RUNNER_VERSION = "pr5a-lightweight"
 _COMPACT_ID_LIMIT = 5
+_RETRIEVAL_MODES = ("bm25_only", "dense_only", "hybrid", "hybrid_rerank")
 _EXPECTATION_FIELDS = (
     "expected_top_chunk_id",
     "expected_top_source_doc",
@@ -43,6 +45,10 @@ class EvalCase:
     gold_doc_ids: Tuple[str, ...]
     gold_chunk_ids: Tuple[str, ...]
     should_abstain: Optional[bool]
+    expected_abstain: Optional[bool]
+    answerable: Optional[bool]
+    query_type: Optional[str]
+    expected_answer: Optional[str]
     notes: str
     expectation_keys: Tuple[str, ...]
 
@@ -125,6 +131,12 @@ def _normalize_case_record(record: Dict[str, Any], line_no: int) -> EvalCase:
     should_abstain = record.get("should_abstain")
     if should_abstain is not None:
         should_abstain = bool(should_abstain)
+    expected_abstain = record.get("expected_abstain")
+    if expected_abstain is not None:
+        expected_abstain = bool(expected_abstain)
+    answerable = record.get("answerable")
+    if answerable is not None:
+        answerable = bool(answerable)
     gold_doc_raw = record.get("gold_doc_ids") or []
     if isinstance(gold_doc_raw, str):
         gold_doc_raw = [gold_doc_raw]
@@ -161,6 +173,12 @@ def _normalize_case_record(record: Dict[str, Any], line_no: int) -> EvalCase:
         gold_doc_ids=tuple(str(x) for x in gold_doc_raw),
         gold_chunk_ids=tuple(str(x) for x in gold_chunk_raw),
         should_abstain=should_abstain,
+        expected_abstain=expected_abstain,
+        answerable=answerable,
+        query_type=(str(record["query_type"]) if record.get("query_type") not in (None, "") else None),
+        expected_answer=(
+            str(record["expected_answer"]) if record.get("expected_answer") not in (None, "") else None
+        ),
         notes=str(record.get("notes") or record.get("why") or ""),
         expectation_keys=present_expectations,
     )
@@ -215,6 +233,98 @@ def _build_eval_client(real_vector: bool, real_generation: bool):
             return _ClientWithStubbedChat(client)
         return client
     return _StubClient()
+
+
+@contextmanager
+def _retrieval_mode_runtime(mode: str):
+    if mode not in _RETRIEVAL_MODES:
+        raise ValueError(f"unsupported retrieval mode: {mode}")
+    prev_hybrid = qa.hybrid_retrieve
+    prev_rerank = qa.rerank_chunks
+
+    def _hybrid_bridge(
+        question: str,
+        client: Any,
+        top_k: int,
+        allowed_types=None,
+        allowed_qualities=None,
+        vector_top_k: Optional[int] = None,
+        bm25_top_k: Optional[int] = None,
+        rrf_k: Optional[int] = None,
+    ):
+        return retrieval.hybrid_retrieve(
+            question,
+            client,
+            top_k=top_k,
+            allowed_types=allowed_types,
+            allowed_qualities=allowed_qualities,
+            vector_top_k=vector_top_k,
+            bm25_top_k=bm25_top_k,
+            rrf_k=rrf_k,
+        )
+
+    def _bm25_only_bridge(
+        question: str,
+        client: Any,
+        top_k: int,
+        allowed_types=None,
+        allowed_qualities=None,
+        vector_top_k: Optional[int] = None,
+        bm25_top_k: Optional[int] = None,
+        rrf_k: Optional[int] = None,
+    ):
+        del client, vector_top_k, rrf_k
+        return retrieval.keyword_retrieve(
+            question,
+            top_k=bm25_top_k or top_k,
+            allowed_types=allowed_types,
+            allowed_qualities=allowed_qualities,
+        )
+
+    def _dense_only_bridge(
+        question: str,
+        client: Any,
+        top_k: int,
+        allowed_types=None,
+        allowed_qualities=None,
+        vector_top_k: Optional[int] = None,
+        bm25_top_k: Optional[int] = None,
+        rrf_k: Optional[int] = None,
+    ):
+        del bm25_top_k, rrf_k
+        return retrieval.vector_retrieve(
+            question,
+            client,
+            top_k=vector_top_k or top_k,
+            allowed_types=allowed_types,
+            allowed_qualities=allowed_qualities,
+        )
+
+    def _identity_rerank(
+        question: str,
+        chunks: Sequence[RetrievedChunk],
+        intent: str = "other",
+    ):
+        del question, intent
+        return list(chunks)
+
+    if mode == "bm25_only":
+        qa.hybrid_retrieve = _bm25_only_bridge  # type: ignore[assignment]
+        qa.rerank_chunks = _identity_rerank  # type: ignore[assignment]
+    elif mode == "dense_only":
+        qa.hybrid_retrieve = _dense_only_bridge  # type: ignore[assignment]
+        qa.rerank_chunks = _identity_rerank  # type: ignore[assignment]
+    elif mode == "hybrid":
+        qa.hybrid_retrieve = _hybrid_bridge  # type: ignore[assignment]
+        qa.rerank_chunks = _identity_rerank  # type: ignore[assignment]
+    else:
+        qa.hybrid_retrieve = _hybrid_bridge  # type: ignore[assignment]
+
+    try:
+        yield
+    finally:
+        qa.hybrid_retrieve = prev_hybrid  # type: ignore[assignment]
+        qa.rerank_chunks = prev_rerank  # type: ignore[assignment]
 
 
 def _chunk_to_view(rank: int, ch: RetrievedChunk) -> Dict[str, Any]:
@@ -397,6 +507,62 @@ def _compact_ids(chunks: Optional[Sequence[RetrievedChunk]], limit: int = _COMPA
     return [_chunk_id(ch) for ch in chunks[:limit]]
 
 
+def _expected_abstain(case: EvalCase) -> Optional[bool]:
+    if case.expected_abstain is not None:
+        return bool(case.expected_abstain)
+    if case.should_abstain is not None:
+        return bool(case.should_abstain)
+    if case.answerable is not None:
+        return not bool(case.answerable)
+    return None
+
+
+def _best_rank_from_ids(ranked_ids: Sequence[str], gold_ids: Sequence[str]) -> Optional[int]:
+    if not gold_ids:
+        return None
+    targets = {str(x) for x in gold_ids if str(x)}
+    if not targets:
+        return None
+    for rank, value in enumerate(ranked_ids, start=1):
+        if value in targets:
+            return rank
+    return None
+
+
+def _hit_at_k(best_rank: Optional[int], k: int) -> Optional[bool]:
+    if best_rank is None:
+        return None
+    return best_rank <= k
+
+
+def _mrr_at_k(best_rank: Optional[int], k: int) -> Optional[float]:
+    if best_rank is None:
+        return None
+    if best_rank > k:
+        return 0.0
+    return 1.0 / float(best_rank)
+
+
+def _ndcg_at_k(ranked_ids: Sequence[str], gold_ids: Sequence[str], k: int) -> Optional[float]:
+    targets = [str(x) for x in gold_ids if str(x)]
+    if not targets:
+        return None
+    target_set = set(targets)
+    if not target_set:
+        return None
+    dcg = 0.0
+    for i, value in enumerate(ranked_ids[:k], start=1):
+        if value in target_set:
+            dcg += 1.0 / math.log2(i + 1.0)
+    ideal_hits = min(len(target_set), k)
+    if ideal_hits <= 0:
+        return None
+    idcg = sum(1.0 / math.log2(i + 1.0) for i in range(1, ideal_hits + 1))
+    if idcg <= 0:
+        return None
+    return dcg / idcg
+
+
 def run_eval(
     *,
     cases_path: Path,
@@ -552,6 +718,164 @@ def run_eval(
     return payload
 
 
+def run_retrieval_aware_eval(
+    *,
+    cases_path: Path,
+    chunks_jsonl: Optional[Path],
+    per_query_output_path: Path,
+    summary_output_path: Path,
+    modes: Sequence[str],
+    top_k: int,
+    max_context_chars: int,
+    real_vector: bool,
+    real_generation: bool,
+    eval_k: int = 5,
+    quiet: bool = False,
+) -> Dict[str, Any]:
+    mode_list = [str(m).strip() for m in modes if str(m).strip()]
+    if not mode_list:
+        raise ValueError("at least one retrieval mode is required")
+    invalid = [m for m in mode_list if m not in _RETRIEVAL_MODES]
+    if invalid:
+        raise ValueError(f"unsupported retrieval modes: {', '.join(invalid)}")
+
+    cases = load_cases(cases_path)
+    client = _build_eval_client(real_vector=real_vector, real_generation=real_generation)
+    rows: List[Dict[str, Any]] = []
+
+    with _eval_runtime(chunks_jsonl=chunks_jsonl, stub_vector=not real_vector):
+        for mode in mode_list:
+            with _retrieval_mode_runtime(mode):
+                for case in cases:
+                    answer, trace = qa.answer_query_with_trace(
+                        case.query,
+                        client=client,
+                        top_k=top_k,
+                        max_context_chars=max_context_chars,
+                        intent_override=case.intent_override,
+                    )
+                    before_raw = _trace_chunk_list(trace, "before_rerank")
+                    after_raw = _trace_chunk_list(trace, "after_rerank")
+
+                    before_chunk_ids = _compact_ids(before_raw)
+                    after_chunk_ids = _compact_ids(after_raw)
+                    before_chunk_ids_full = [_chunk_id(ch) for ch in (before_raw or [])]
+                    after_chunk_ids_full = [_chunk_id(ch) for ch in (after_raw or [])]
+                    before_doc_ids = (
+                        [_source_doc(ch) for ch in before_raw[:_COMPACT_ID_LIMIT]]
+                        if before_raw is not None
+                        else None
+                    )
+                    after_doc_ids = (
+                        [_source_doc(ch) for ch in after_raw[:_COMPACT_ID_LIMIT]]
+                        if after_raw is not None
+                        else None
+                    )
+                    before_doc_ids_full = [_source_doc(ch) for ch in (before_raw or [])]
+                    after_doc_ids_full = [_source_doc(ch) for ch in (after_raw or [])]
+
+                    gold_chunk_best_rank_before = _best_rank_from_ids(before_chunk_ids_full, case.gold_chunk_ids)
+                    gold_chunk_best_rank_after = _best_rank_from_ids(after_chunk_ids_full, case.gold_chunk_ids)
+                    gold_doc_best_rank_before = _best_rank_from_ids(before_doc_ids_full, case.gold_doc_ids)
+                    gold_doc_best_rank_after = _best_rank_from_ids(after_doc_ids_full, case.gold_doc_ids)
+
+                    if case.gold_chunk_ids:
+                        best_before = gold_chunk_best_rank_before
+                        best_after = gold_chunk_best_rank_after
+                        ranked_for_metric = after_chunk_ids_full
+                        gold_for_metric = list(case.gold_chunk_ids)
+                    else:
+                        best_before = gold_doc_best_rank_before
+                        best_after = gold_doc_best_rank_after
+                        ranked_for_metric = after_doc_ids_full
+                        gold_for_metric = list(case.gold_doc_ids)
+
+                    expected_abstain = _expected_abstain(case)
+                    abstain_correct: Optional[bool] = None
+                    if expected_abstain is not None:
+                        abstain_correct = bool(answer.used_fallback) == bool(expected_abstain)
+
+                    before_top = before_chunk_ids[0] if before_chunk_ids else None
+                    after_top = after_chunk_ids[0] if after_chunk_ids else None
+                    rerank_top_changed: Optional[bool] = None
+                    if before_top is not None and after_top is not None:
+                        rerank_top_changed = bool(before_top != after_top)
+
+                    row = {
+                        "case_id": case.case_id,
+                        "question": case.query,
+                        "mode": mode,
+                        "query_type": case.query_type,
+                        "gold_doc_ids": list(case.gold_doc_ids),
+                        "gold_chunk_ids": list(case.gold_chunk_ids),
+                        "gold_doc_hit": _hit_at_k(gold_doc_best_rank_after, eval_k),
+                        "gold_chunk_hit": _hit_at_k(gold_chunk_best_rank_after, eval_k),
+                        "gold_doc_hit_at_k": _hit_at_k(gold_doc_best_rank_after, eval_k),
+                        "gold_chunk_hit_at_k": _hit_at_k(gold_chunk_best_rank_after, eval_k),
+                        "best_rank_before_rerank": best_before,
+                        "best_rank_after_rerank": best_after,
+                        "gold_doc_best_rank_before": gold_doc_best_rank_before,
+                        "gold_doc_best_rank_after": gold_doc_best_rank_after,
+                        "gold_chunk_best_rank_before": gold_chunk_best_rank_before,
+                        "gold_chunk_best_rank_after": gold_chunk_best_rank_after,
+                        "rerank_gain": _rerank_gain(best_before, best_after),
+                        "rerank_top_changed": rerank_top_changed,
+                        "before_rerank_ids": before_chunk_ids,
+                        "after_rerank_ids": after_chunk_ids,
+                        "guard_reason": answer.guard_reason,
+                        "used_fallback": bool(answer.used_fallback),
+                        "expected_abstain": expected_abstain,
+                        "abstain_correct": abstain_correct,
+                        "mrr_at_k": _mrr_at_k(best_after, eval_k),
+                        "ndcg_at_k": _ndcg_at_k(ranked_for_metric, gold_for_metric, eval_k),
+                        "eval_k": eval_k,
+                    }
+                    rows.append(row)
+                    if not quiet:
+                        print(
+                            f"[{mode}] {case.case_id} "
+                            f"gold_doc_hit={row['gold_doc_hit']} "
+                            f"gold_chunk_hit={row['gold_chunk_hit']} "
+                            f"guard={row['guard_reason']} fallback={row['used_fallback']}"
+                        )
+
+    summary_by_mode: Dict[str, Dict[str, Any]] = {}
+    for mode in mode_list:
+        mode_rows = [r for r in rows if r["mode"] == mode]
+        mrr_vals = [float(v) for v in (r.get("mrr_at_k") for r in mode_rows) if isinstance(v, (int, float))]
+        ndcg_vals = [float(v) for v in (r.get("ndcg_at_k") for r in mode_rows) if isinstance(v, (int, float))]
+        summary_by_mode[mode] = {
+            "cases": len(mode_rows),
+            "gold_chunk_cases": sum(1 for r in mode_rows if r.get("gold_chunk_ids")),
+            "gold_chunk_hits": sum(1 for r in mode_rows if r.get("gold_chunk_hit") is True),
+            "gold_doc_cases": sum(1 for r in mode_rows if r.get("gold_doc_ids")),
+            "gold_doc_hits": sum(1 for r in mode_rows if r.get("gold_doc_hit") is True),
+            "abstain_cases": sum(1 for r in mode_rows if r.get("expected_abstain") is not None),
+            "abstain_passes": sum(1 for r in mode_rows if r.get("abstain_correct") is True),
+            "mean_mrr_at_k": (sum(mrr_vals) / len(mrr_vals)) if mrr_vals else None,
+            "mean_ndcg_at_k": (sum(ndcg_vals) / len(ndcg_vals)) if ndcg_vals else None,
+        }
+
+    summary = {
+        "schema_version": SCHEMA_VERSION,
+        "runner_version": RUNNER_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "eval_k": int(eval_k),
+        "modes": mode_list,
+        "total_rows": len(rows),
+        "by_mode": summary_by_mode,
+    }
+
+    per_query_output_path.parent.mkdir(parents=True, exist_ok=True)
+    with per_query_output_path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    summary_output_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return {"summary": summary, "rows": rows}
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -584,6 +908,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Enable real chat generation (default: deterministic stubbed generation).",
     )
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument(
+        "--retrieval-aware",
+        action="store_true",
+        help="Run retrieval-aware eval (per-query JSONL + aggregate summary JSON).",
+    )
+    parser.add_argument(
+        "--modes",
+        default="bm25_only,dense_only,hybrid,hybrid_rerank",
+        help="Comma-separated retrieval modes for retrieval-aware eval.",
+    )
+    parser.add_argument("--per-query-output", default="")
+    parser.add_argument("--summary-output", default="")
+    parser.add_argument("--eval-k", type=int, default=5)
     return parser
 
 
@@ -595,23 +932,46 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     chunks_arg = str(args.chunks_jsonl).strip()
     chunks_jsonl = Path(chunks_arg) if chunks_arg else None
 
-    if not args.output:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = Path(config.RUNS_DIR) / "eval" / f"results_{ts}.json"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if bool(args.retrieval_aware):
+        if args.per_query_output:
+            per_query_output = Path(args.per_query_output)
+        else:
+            per_query_output = Path(config.RUNS_DIR) / "eval" / f"retrieval_rows_{ts}.jsonl"
+        if args.summary_output:
+            summary_output = Path(args.summary_output)
+        else:
+            summary_output = Path(config.RUNS_DIR) / "eval" / f"retrieval_summary_{ts}.json"
+        modes = [m.strip() for m in str(args.modes).split(",") if m.strip()]
+        run_retrieval_aware_eval(
+            cases_path=cases_path,
+            chunks_jsonl=chunks_jsonl,
+            per_query_output_path=per_query_output,
+            summary_output_path=summary_output,
+            modes=modes,
+            top_k=args.top_k,
+            max_context_chars=args.max_context_chars,
+            real_vector=bool(args.real_vector),
+            real_generation=bool(args.real_generation),
+            eval_k=int(args.eval_k),
+            quiet=bool(args.quiet),
+        )
     else:
-        output_path = Path(args.output)
-
-    run_eval(
-        cases_path=cases_path,
-        chunks_jsonl=chunks_jsonl,
-        output_path=output_path,
-        top_k=args.top_k,
-        max_context_chars=args.max_context_chars,
-        top_n=args.top_n,
-        real_vector=bool(args.real_vector),
-        real_generation=bool(args.real_generation),
-        quiet=bool(args.quiet),
-    )
+        if not args.output:
+            output_path = Path(config.RUNS_DIR) / "eval" / f"results_{ts}.json"
+        else:
+            output_path = Path(args.output)
+        run_eval(
+            cases_path=cases_path,
+            chunks_jsonl=chunks_jsonl,
+            output_path=output_path,
+            top_k=args.top_k,
+            max_context_chars=args.max_context_chars,
+            top_n=args.top_n,
+            real_vector=bool(args.real_vector),
+            real_generation=bool(args.real_generation),
+            quiet=bool(args.quiet),
+        )
     return 0
 
 
