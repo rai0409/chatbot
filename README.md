@@ -265,68 +265,68 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn webapi.main:app --reload
-Ingestion
+```
+
+## Ingestion
 
 Legacy fixed-window PDF chunking still works.
 Japanese doc-type-aware chunking is available as an additive option.
 
 Example:
 
+```bash
 PYTHONPATH=. .venv/bin/python scripts/pdf_to_canonical_jsonl.py \
   --pdf pdfs/your_doc.pdf \
   --out index/your_doc.jsonl \
   --doc-type procedure \
   --title "運用手順書"
+```
 
 Then ingest:
 
+```bash
 PYTHONPATH=. .venv/bin/python scripts/ingest_canonical_jsonl.py index/your_doc.jsonl --reset
-Evaluation
+```
 
-eval.runner is a lightweight repo-native evaluator for retrieval, rerank, guard, and fallback regression checks.
+## Evaluation
 
-It supports two distinct evaluation positions:
+`eval.runner` supports two distinct positions:
 
-deterministic local-friendly evaluation
-retrieval-aware comparison evaluation
-Deterministic smoke evaluation
+1. deterministic local-friendly regression mode
+2. retrieval-aware comparison mode
 
-Deterministic mode is intended for regression safety.
+### Deterministic smoke evaluation
 
-Default behavior:
+Default deterministic behavior:
 
-generation is stubbed
-vector retrieval is stubbed empty unless --real-vector is enabled
+- generation is stubbed
+- vector retrieval is stubbed empty unless `--real-vector` is enabled
+- keyword retrieval remains active
 
-This mode is good for:
+This mode is useful for regression checks, rerank movement checks, and guard/fallback consistency.
 
-expectation-based smoke checks
-rerank movement checks
-guard/fallback regressions
-CI-friendly local validation
-
-Run deterministic smoke:
-
+```bash
 PYTHONPATH=. .venv/bin/python -m eval.runner \
   --cases eval/cases/smoke_cases.jsonl \
   --chunks-jsonl eval/cases/smoke_chunks.jsonl \
   --output runs/eval/smoke_results.json
-Retrieval-aware evaluation
+```
+
+### Retrieval-aware evaluation
 
 Retrieval-aware evaluation compares baseline modes and saves:
 
-per-query rows as JSONL
-mode-level aggregate summary as JSON
+- per-query rows as JSONL
+- mode-level aggregate summary as JSON
 
 Supported modes:
 
-bm25_only
-dense_only
-hybrid
-hybrid_rerank
+- `bm25_only`
+- `dense_only`
+- `hybrid`
+- `hybrid_rerank`
 
-Run retrieval-aware evaluation:
-
+```bash
 PYTHONPATH=. .venv/bin/python -m eval.runner \
   --retrieval-aware \
   --cases eval/cases/retrieval_cases.jsonl \
@@ -335,70 +335,44 @@ PYTHONPATH=. .venv/bin/python -m eval.runner \
   --per-query-output runs/eval/retrieval_rows.jsonl \
   --summary-output runs/eval/retrieval_summary.json \
   --eval-k 5
+```
 
 Per-query rows include signals such as:
 
-gold_doc_hit
-gold_chunk_hit
-best_rank_before_rerank
-best_rank_after_rerank
-rerank_gain
-guard_reason
-used_fallback
-expected_abstain
-abstain_correct
+- `gold_doc_hit`
+- `gold_chunk_hit`
+- `best_rank_before_rerank`
+- `best_rank_after_rerank`
+- `rerank_gain`
+- `guard_reason`
+- `used_fallback`
+- `expected_abstain`
+- `abstain_correct`
 
 Mode-level summary includes:
 
-gold_chunk_cases
-gold_chunk_hits
-gold_doc_cases
-gold_doc_hits
-abstain_labeled_cases
-abstain_expected_cases
-abstain_passes
-mean_mrr_at_k
-mean_ndcg_at_k
-### Evaluation datasets
+- `gold_chunk_cases`
+- `gold_chunk_hits`
+- `gold_doc_cases`
+- `gold_doc_hits`
+- `abstain_labeled_cases`
+- `abstain_expected_cases`
+- `abstain_passes`
+- `mean_mrr_at_k`
+- `mean_ndcg_at_k`
 
-Case sets are intentionally separated by purpose:
+Case sets:
 
-eval/cases/smoke_cases.jsonl
-lightweight regression checks
-expectation-oriented
-useful for deterministic smoke validation
-eval/cases/retrieval_cases.jsonl
-labeled retrieval comparison cases
-includes gold IDs and abstain labels
-useful for retrieval-mode comparison
+- `eval/cases/smoke_cases.jsonl`: lightweight regression checks
+- `eval/cases/retrieval_cases.jsonl`: labeled retrieval comparison cases (gold IDs + abstain labels)
 
 ### Deterministic vs real-vector evaluation
 
-This repository supports both deterministic local-friendly evaluation and more realistic retrieval-quality comparison.
+Without `--real-vector`, vector retrieval is stubbed empty and dense-only results are not suitable for dense-quality conclusions.
 
-#### Deterministic default
+Use `--real-vector` when evaluating actual vector contribution:
 
-Without --real-vector:
-
-generation is stubbed unless --real-generation is enabled
-vector retrieval is stubbed empty
-keyword retrieval remains active
-
-This mode is useful for:
-
-local reproducibility
-smoke regression checks
-CI-friendly validation
-guard/fallback consistency checks
-
-This mode is not sufficient for interpreting dense retrieval quality.
-
-#### Real-vector mode
-
-Enable --real-vector when you want to evaluate whether vector retrieval is contributing meaningfully.
-
-Example:
-
+```bash
 PYTHONPATH=. .venv/bin/python -m eval.runner \
   --retrieval-aware \
   --cases eval/cases/retrieval_cases.jsonl \
@@ -408,57 +382,19 @@ PYTHONPATH=. .venv/bin/python -m eval.runner \
   --summary-output runs/eval/retrieval_summary_real_vector.json \
   --eval-k 5 \
   --real-vector
+```
 
-Recommended interpretation:
+## Reports
 
-use deterministic mode for regression safety
-use --real-vector for retrieval-quality comparison
-do not over-interpret dense_only results from stub-vector mode as real embedding behavior
-#### Real-generation mode
+- [Retrieval Mode Evaluation Report](reports/retrieval_mode_report.md)
+- [Deterministic vs Real-Vector Evaluation Notes](reports/real_vector_evaluation.md)
 
---real-generation can also be enabled, but answer-generation quality should be interpreted separately from retrieval comparison.
+## Current limitations
 
-Retrieval comparison and answer-generation comparison should not be mixed casually in the same conclusion.
+- The retrieval comparison corpus is intentionally small and repo-native.
+- Dense retrieval conclusions require `--real-vector`; deterministic mode is primarily for regression safety.
+- Chunking and reranker settings are still an active tuning surface.
 
-## Production-ready vs experimental
-
-### Production-ready
-
-citation-first answer path
-hybrid retrieval flow
-guard/fallback behavior
-FastAPI endpoints
-deterministic smoke evaluation workflow
-### Experimental / tuning surface
-doc-type heuristics in Japanese chunk construction
-parent expansion limits
-metadata boost tuning in reranker
-larger benchmark coverage
-corpus realism beyond the current fixed smoke corpus
-Current limitations
-
-This repository is strong as a controlled Japanese RAG core and retrieval evaluation base, but several limitations remain.
-
-The retrieval comparison corpus is still relatively small.
-Repo-native evaluation is useful, but it is not yet a full real-world benchmark.
-Dense retrieval conclusions should be based on --real-vector runs, not only deterministic stub mode.
-Chunking and reranker settings are intentionally still open to tuning.
-This repo prioritizes inspectability and safety over broad chat behavior.
-Suggested use cases
-
-This repository is especially suitable for:
-
-internal knowledge QA
-support operations search
-Japanese enterprise document retrieval experiments
-citation-first answer systems
-retrieval / rerank / fallback evaluation workflows
-
-It is less suitable, in its current form, for:
-
-general-purpose conversational chat
-broad persona-driven assistants
-benchmark claims beyond the current evaluation corpus
-License
+## License
 
 See [LICENSE](LICENSE).
