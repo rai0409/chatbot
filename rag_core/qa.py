@@ -6,6 +6,7 @@ import uuid
 from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 import config
+from rag_core.keyword_scorer import classify_query_type, score_keyword_match
 from rag_core.reranker import rerank_chunks
 from rag_core.retrieval import RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, hybrid_retrieve, vector_retrieve
 from rag_core.utils import ensure_openai_client
@@ -262,6 +263,7 @@ def _cut_context(chunks: Sequence[Chunk], max_chars: int) -> List[Chunk]:
 class _RetrievalTraceState(NamedTuple):
     normalized_query: str
     intent: str
+    query_type: str
     rewritten_query: str
     augmented_query: str
     retrieved: List[RetrievedChunk]
@@ -287,6 +289,32 @@ def _to_retrieved_out(chunks: Sequence[RetrievedChunk]) -> List[RetrievedChunkOu
                 source_pages=[int(p) for p in pages] if pages else [],
             )
         )
+    return out
+
+
+def _decorate_score_details(
+    query: str,
+    chunks: Sequence[RetrievedChunk],
+    *,
+    query_type: str,
+) -> List[RetrievedChunk]:
+    out: List[RetrievedChunk] = []
+    for ch in chunks:
+        meta = dict(ch.metadata or {})
+        details = score_keyword_match(query, ch.text, meta, query_type=query_type)
+        details["query_type"] = query_type
+        details["base_score"] = float(ch.score)
+        if meta.get("retrieval_source") is not None:
+            details["retrieval_source"] = meta.get("retrieval_source")
+        if meta.get("rrf_score") is not None:
+            details["rrf_score"] = meta.get("rrf_score")
+        if meta.get("rerank_score") is not None:
+            details["rerank_score"] = meta.get("rerank_score")
+        if meta.get("bm25_score") is not None:
+            details["bm25_score"] = meta.get("bm25_score")
+        details["final_debug_score"] = float(ch.score)
+        meta["score_details"] = details
+        out.append(RetrievedChunk(text=ch.text, metadata=meta, score=float(ch.score)))
     return out
 
 
@@ -393,6 +421,7 @@ def _build_retrieval_trace(
     q = q.strip().strip("「」\"'")
     q = re.sub(r"\s+", " ", q)
     intent = intent_override or infer_intent(q)
+    query_type = classify_query_type(q, intent=intent)
     rewritten = rewrite_query(q)
     augmented = _compose_query(rewritten, intent)
 
@@ -408,6 +437,9 @@ def _build_retrieval_trace(
         top_k=top_k,
         intent=intent,
     )
+    before_rerank = _decorate_score_details(q, before_rerank, query_type=query_type)
+    retrieved = _decorate_score_details(q, retrieved, query_type=query_type)
+    context_candidates = _decorate_score_details(q, context_candidates, query_type=query_type)
 
     trace: Dict[str, object] = {
         "request_id": request_id,
@@ -415,6 +447,7 @@ def _build_retrieval_trace(
         "normalized_query": q,
         "question": q,
         "intent": intent,
+        "query_type": query_type,
         "rewritten_query": rewritten,
         "augmented_query": augmented,
         "before_rerank": before_rerank,
@@ -465,6 +498,7 @@ def _build_retrieval_trace(
     state = _RetrievalTraceState(
         normalized_query=q,
         intent=intent,
+        query_type=query_type,
         rewritten_query=rewritten,
         augmented_query=augmented,
         retrieved=retrieved,
