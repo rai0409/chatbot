@@ -279,7 +279,8 @@ PYTHONPATH=. .venv/bin/python scripts/pdf_to_canonical_jsonl.py \
   --pdf pdfs/your_doc.pdf \
   --out index/your_doc.jsonl \
   --doc-type procedure \
-  --title "運用手順書"
+  --title "運用手順書" \
+  --chunking ja_doc_type
 ```
 
 Then ingest:
