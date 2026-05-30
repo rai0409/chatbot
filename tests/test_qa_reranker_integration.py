@@ -162,6 +162,35 @@ def test_answer_query_with_trace_matches_answer_query_and_exposes_core_trace(mon
     assert isinstance(trace["latency_ms"], int)
 
 
+def test_debug_retrieve_with_trace_does_not_call_chat_completion(monkeypatch):
+    base_hits = [
+        _mk_chunk("A", "パスワード再設定の手順です。", 0.25, page=1),
+    ]
+    calls = {"count": 0}
+
+    def _fake_hybrid(*args, **kwargs):
+        calls["count"] += 1
+        return base_hits if calls["count"] == 1 else []
+
+    class _ChatCompletions:
+        def create(self, *args, **kwargs):
+            raise AssertionError("chat completion must not be called")
+
+    class _Client:
+        chat = type("Chat", (), {"completions": _ChatCompletions()})()
+
+    monkeypatch.setattr(qa, "hybrid_retrieve", _fake_hybrid)
+
+    trace = qa.debug_retrieve_with_trace("パスワード再設定の方法は？", client=_Client(), top_k=5)
+
+    assert calls["count"] == 2
+    assert trace["answer_mode"] == "debug_retrieval_only"
+    assert trace["citations_count"] == 0
+    assert trace["final_guard_reason"] is None
+    assert trace["final_used_fallback"] is False
+    assert trace["selected_context_chunk_ids"] == ["A"]
+
+
 def test_guard_too_general_keeps_vague_short_query():
     retrieved = [
         _mk_chunk("A", "一般説明です。", 0.25),
