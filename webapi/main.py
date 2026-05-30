@@ -106,6 +106,9 @@ def _top_score_detail_summary(chunks: Any) -> Dict[str, Any]:
             "top_keyword_score": None,
             "top_matched_terms": [],
             "top_matched_fields": [],
+            "top_keyword_boost_applied": False,
+            "top_keyword_boost_value": 0.0,
+            "top_boost_reason": [],
         }
     for chunk in chunks:
         if not isinstance(chunk, RetrievedChunk):
@@ -118,11 +121,17 @@ def _top_score_detail_summary(chunks: Any) -> Dict[str, Any]:
             "top_keyword_score": details.get("keyword_score"),
             "top_matched_terms": list(details.get("matched_terms") or [])[:10],
             "top_matched_fields": list(details.get("matched_fields") or [])[:10],
+            "top_keyword_boost_applied": bool(details.get("keyword_boost_applied")),
+            "top_keyword_boost_value": details.get("keyword_boost_value"),
+            "top_boost_reason": list(details.get("boost_reason") or [])[:8],
         }
     return {
         "top_keyword_score": None,
         "top_matched_terms": [],
         "top_matched_fields": [],
+        "top_keyword_boost_applied": False,
+        "top_keyword_boost_value": 0.0,
+        "top_boost_reason": [],
     }
 
 

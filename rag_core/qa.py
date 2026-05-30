@@ -6,7 +6,7 @@ import uuid
 from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 import config
-from rag_core.keyword_scorer import classify_query_type, score_keyword_match
+from rag_core.keyword_scorer import apply_keyword_boost, classify_query_type, score_keyword_match
 from rag_core.reranker import rerank_chunks
 from rag_core.retrieval import RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, hybrid_retrieve, vector_retrieve
 from rag_core.utils import ensure_openai_client
@@ -312,6 +312,13 @@ def _decorate_score_details(
             details["rerank_score"] = meta.get("rerank_score")
         if meta.get("bm25_score") is not None:
             details["bm25_score"] = meta.get("bm25_score")
+        details.setdefault("keyword_boost_applied", False)
+        details.setdefault("keyword_boost_value", 0.0)
+        if details.get("score_before_keyword_boost") is None:
+            details["score_before_keyword_boost"] = float(ch.score)
+        if details.get("score_after_keyword_boost") is None:
+            details["score_after_keyword_boost"] = float(ch.score)
+        details.setdefault("boost_reason", [])
         details["final_debug_score"] = float(ch.score)
         meta["score_details"] = details
         out.append(RetrievedChunk(text=ch.text, metadata=meta, score=float(ch.score)))
@@ -347,9 +354,11 @@ def _retrieve_and_rerank(
     question: str,
     augmented_query: str,
     *,
+    scoring_query: str,
     client,
     top_k: int,
     intent: str,
+    query_type: str,
 ) -> Tuple[List[RetrievedChunk], List[RetrievedChunk], List[RetrievedChunk]]:
     base = hybrid_retrieve(
         question,
@@ -370,12 +379,20 @@ def _retrieve_and_rerank(
     before_rerank = _unique_chunks(base + aug)
     if intent == "procedure":
         before_rerank = _unique_chunks(add_neighbor_chunks(before_rerank))
+    before_rerank = _decorate_score_details(scoring_query, before_rerank, query_type=query_type)
     child_ranked = rerank_chunks(question, before_rerank, intent=intent)
+    if config.KEYWORD_BOOST_ENABLED and query_type in set(config.KEYWORD_BOOST_QUERY_TYPES):
+        child_ranked = apply_keyword_boost(
+            child_ranked,
+            query_type=query_type,
+            max_boost=config.KEYWORD_BOOST_MAX_DELTA,
+        )
     context_ranked = expand_parent_chunks(
         child_ranked,
         max_parent_chunks=getattr(config, "MAX_PARENT_EXPANDED_CHUNKS", top_k),
         max_parent_context_chars=getattr(config, "MAX_PARENT_CONTEXT_CHARS", max(1200, top_k * 400)),
     )
+    context_ranked = _decorate_score_details(scoring_query, context_ranked, query_type=query_type)
     return before_rerank, child_ranked, context_ranked
 
 
@@ -418,10 +435,11 @@ def _build_retrieval_trace(
 
     q = question.strip()
     q = re.sub(r"^質問\s*:\s*", "", q)
-    q = q.strip().strip("「」\"'")
+    classification_query = q.strip()
+    q = classification_query.strip("「」\"'")
     q = re.sub(r"\s+", " ", q)
     intent = intent_override or infer_intent(q)
-    query_type = classify_query_type(q, intent=intent)
+    query_type = classify_query_type(classification_query, intent=intent)
     rewritten = rewrite_query(q)
     augmented = _compose_query(rewritten, intent)
 
@@ -433,13 +451,12 @@ def _build_retrieval_trace(
     before_rerank, retrieved, context_candidates = _retrieve_and_rerank(
         q,
         augmented,
+        scoring_query=classification_query,
         client=client,
         top_k=top_k,
         intent=intent,
+        query_type=query_type,
     )
-    before_rerank = _decorate_score_details(q, before_rerank, query_type=query_type)
-    retrieved = _decorate_score_details(q, retrieved, query_type=query_type)
-    context_candidates = _decorate_score_details(q, context_candidates, query_type=query_type)
 
     trace: Dict[str, object] = {
         "request_id": request_id,

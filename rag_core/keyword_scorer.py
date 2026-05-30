@@ -5,12 +5,14 @@ import re
 from typing import Any, Dict, List, Sequence
 
 from rag_core.ja_text import extract_salient_terms_ja, normalize_japanese_text
+from rag_core.retrieval import RetrievedChunk
 
 
 _CODE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{1,}")
 _CODE_TRAILING_SEPARATORS = "._:/-"
 _MAX_MATCHED_TERMS = 20
 _MAX_MATCHED_FIELDS = 12
+_BOOST_QUERY_TYPES = {"exact_lookup", "identifier"}
 
 _GENERIC_TERMS = {
     "これ",
@@ -365,4 +367,71 @@ def score_keyword_match(
         "matched_terms": matched_terms[:_MAX_MATCHED_TERMS],
         "matched_fields": matched_fields[:_MAX_MATCHED_FIELDS],
         "signals": signals,
+        "keyword_boost_applied": False,
+        "keyword_boost_value": 0.0,
+        "score_before_keyword_boost": None,
+        "score_after_keyword_boost": None,
+        "boost_reason": [],
     }
+
+
+def _boost_reasons(query_type: str, details: dict) -> List[str]:
+    signals = details.get("signals") if isinstance(details.get("signals"), dict) else {}
+    reasons: List[str] = []
+    if query_type == "exact_lookup":
+        for key in ("quoted_term_hit", "exact_phrase_hit", "title_hit", "section_path_hit"):
+            if signals.get(key):
+                reasons.append(key)
+    elif query_type == "identifier":
+        # For identifiers, avoid substring-only boosts such as PR2 matching PR20.
+        for key in ("identifier_hit", "title_hit", "section_path_hit"):
+            if signals.get(key):
+                reasons.append(key)
+        if signals.get("exact_phrase_hit") and signals.get("identifier_hit"):
+            reasons.append("exact_phrase_hit")
+    return reasons
+
+
+def apply_keyword_boost(
+    chunks: Sequence[RetrievedChunk],
+    *,
+    query_type: str,
+    max_boost: float = 0.05,
+) -> List[RetrievedChunk]:
+    items = list(chunks)
+    boosted: List[tuple[int, float, int, RetrievedChunk]] = []
+    eligible = query_type in _BOOST_QUERY_TYPES
+    max_delta = max(0.0, float(max_boost))
+
+    for idx, ch in enumerate(items):
+        meta = dict(ch.metadata or {})
+        details = dict(meta.get("score_details") or {})
+        signals = details.get("signals") if isinstance(details.get("signals"), dict) else {}
+        details["query_type"] = query_type
+        details.setdefault("keyword_score", 0.0)
+        details.setdefault("matched_terms", [])
+        details.setdefault("matched_fields", [])
+        details["signals"] = signals if isinstance(signals, dict) else {}
+
+        before = float(ch.score)
+        reasons = _boost_reasons(query_type, details) if eligible else []
+        keyword_score = float(details.get("keyword_score") or 0.0)
+        boost_value = min(keyword_score * 0.05, max_delta) if reasons else 0.0
+        after = before - boost_value
+
+        details["keyword_boost_applied"] = bool(boost_value > 0)
+        details["keyword_boost_value"] = round(boost_value, 6)
+        details["score_before_keyword_boost"] = before
+        details["score_after_keyword_boost"] = after
+        details["boost_reason"] = reasons[:8]
+        details["final_debug_score"] = after
+
+        meta["score_details"] = details
+        out_chunk = RetrievedChunk(text=ch.text, metadata=meta, score=after)
+        target_rank = max(0, idx - 1) if boost_value > 0 else idx
+        boosted.append((target_rank, -boost_value, idx, out_chunk))
+
+    if not eligible:
+        return [item[3] for item in boosted]
+    boosted.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[3] for item in boosted]
