@@ -39,6 +39,32 @@ def _chunked(items: List[str], size: int) -> Iterable[List[str]]:
         yield items[i : i + size]
 
 
+def _sanitize_metadata_value(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _sanitize_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: _sanitize_metadata_value(value) for key, value in meta.items()}
+
+
+def _numeric_source_pages(value: Any) -> List[int]:
+    if not isinstance(value, list):
+        return []
+    pages: List[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            continue
+        try:
+            pages.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return pages
+
+
 def _get_collection_client(collection) -> Optional[Any]:
     return getattr(collection, "_client", None) or getattr(collection, "client", None)
 
@@ -142,6 +168,11 @@ def main() -> int:
             meta.setdefault("searchable", 1)
         if meta.get("searchable") is None:
             meta["searchable"] = 1
+        source_pages = _numeric_source_pages(meta.get("source_pages"))
+        if source_pages:
+            meta["source_page_start"] = source_pages[0]
+            meta["source_page_end"] = source_pages[-1]
+        meta = _sanitize_metadata(meta)
 
         batch_ids.append(str(raw_id))
         batch_texts.append(str(text))
