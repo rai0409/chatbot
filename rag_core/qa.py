@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import time
 import uuid
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 import config
 from rag_core.reranker import rerank_chunks
@@ -259,6 +259,18 @@ def _cut_context(chunks: Sequence[Chunk], max_chars: int) -> List[Chunk]:
     return out
 
 
+class _RetrievalTraceState(NamedTuple):
+    normalized_query: str
+    intent: str
+    rewritten_query: str
+    augmented_query: str
+    retrieved: List[RetrievedChunk]
+    grounded_candidates: List[Chunk]
+    selected_context: List[Chunk]
+    guard_reason: Optional[str]
+    used_fallback: bool
+
+
 def _to_retrieved_out(chunks: Sequence[RetrievedChunk]) -> List[RetrievedChunkOut]:
     out: List[RetrievedChunkOut] = []
     for ch in chunks:
@@ -339,15 +351,41 @@ def _retrieve_and_rerank(
     return before_rerank, child_ranked, context_ranked
 
 
-def _answer_query_impl(
+def _set_final_trace(
+    trace: Dict[str, object],
+    started_at: float,
+    answer_chunks: Sequence[Chunk],
+    *,
+    guard_reason: Optional[str],
+    used_fallback: bool,
+    answer_mode: str,
+    citations_count: int,
+) -> None:
+    # Option B semantics:
+    # - selected_context_*: final chunks passed to answer generation/fallback
+    # - grounded_candidate_chunk_ids: broader grounded candidates before final selection
+    trace["final_guard_reason"] = guard_reason
+    trace["final_used_fallback"] = used_fallback
+    trace["answer_mode"] = answer_mode
+    trace["selected_context_chunk_ids"] = [ch.id for ch in answer_chunks]
+    trace["selected_context_chars"] = sum(len(ch.text) for ch in answer_chunks)
+    trace["selected_context_preview"] = [ch.text[:160] for ch in answer_chunks[:3]]
+    trace["citations_count"] = citations_count
+    trace["latency_ms"] = int((time.perf_counter() - started_at) * 1000)
+
+
+def _build_retrieval_trace(
     question: str,
-    client=None,
-    top_k: int = 20,
-    max_context_chars: int = 8000,
+    *,
+    client,
+    top_k: int,
+    max_context_chars: int,
     intent_override: Optional[str] = None,
-) -> Tuple[AnswerResult, Dict[str, object]]:
-    started_at = time.perf_counter()
-    request_id = uuid.uuid4().hex[:12]
+    started_at: Optional[float] = None,
+    request_id: Optional[str] = None,
+) -> Tuple[Dict[str, object], _RetrievalTraceState, float]:
+    started_at = started_at if started_at is not None else time.perf_counter()
+    request_id = request_id or uuid.uuid4().hex[:12]
     original_question = question
 
     q = question.strip()
@@ -358,7 +396,10 @@ def _answer_query_impl(
     rewritten = rewrite_query(q)
     augmented = _compose_query(rewritten, intent)
 
-    if client is None:
+    embed_provider = (
+        config.getenv_first("EMBED_PROVIDER", default="openai") or "openai"
+    ).lower()
+    if client is None and embed_provider != "local":
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
     before_rerank, retrieved, context_candidates = _retrieve_and_rerank(
         q,
@@ -368,7 +409,7 @@ def _answer_query_impl(
         intent=intent,
     )
 
-    trace = {
+    trace: Dict[str, object] = {
         "request_id": request_id,
         "original_query": original_question,
         "normalized_query": q,
@@ -383,19 +424,6 @@ def _answer_query_impl(
         "retrieval_after_rerank_count": len(retrieved),
         "retrieval_after_parent_expansion_count": len(context_candidates),
     }
-
-    def _finalize_trace(result: AnswerResult, answer_chunks: Sequence[Chunk], *, answer_mode: str) -> None:
-        # Option B semantics:
-        # - selected_context_*: final chunks passed to AnswerResult
-        # - grounded_candidate_chunk_ids: broader grounded candidates before final selection
-        trace["final_guard_reason"] = result.guard_reason
-        trace["final_used_fallback"] = result.used_fallback
-        trace["answer_mode"] = answer_mode
-        trace["selected_context_chunk_ids"] = [ch.id for ch in answer_chunks]
-        trace["selected_context_chars"] = sum(len(ch.text) for ch in answer_chunks)
-        trace["selected_context_preview"] = [ch.text[:160] for ch in answer_chunks[:3]]
-        trace["citations_count"] = len(result.citations)
-        trace["latency_ms"] = int((time.perf_counter() - started_at) * 1000)
 
     guard_grounded = _to_grounded(retrieved)
     guard_grounded = merge_by_page(guard_grounded)
@@ -413,47 +441,147 @@ def _answer_query_impl(
     grounded = _page_diversity(grounded, max_per_page=max_per_page)
     trace["grounded_candidate_chunk_ids"] = [ch.id for ch in grounded]
 
+    guard_reason = None
+    used_fallback = False
+    selected_context: List[Chunk]
+
     if intent in {"change", "reset"}:
         if not any(term in " ".join(ch.text for ch in grounded) for term in config.PROCEDURE_STRONG_TERMS):
-            fallback = "- 手順の記載が見つかりません。OCR版を確認してください。 [S1]"
-            raw = fallback + "\n不明: 手順不明 [S1]\n不足: OCR版確認 [S1]"
-            answer_chunks = grounded[:1] or [Chunk("1", "OCR", "unknown", tuple(), None)]
-            result = _build_answer_result(
-                raw,
-                answer_chunks,
-                intent=intent,
-                guard_reason="missing_procedure_evidence",
-                used_fallback=True,
-                retrieved=retrieved,
-                rewritten_query=rewritten,
-                augmented_query=augmented,
-            )
-            _finalize_trace(result, answer_chunks, answer_mode="fallback")
-            return result, trace
+            guard_reason = "missing_procedure_evidence"
+            used_fallback = True
 
-    guard_reason = guard_merged_top(q, intent, guard_grounded, retrieved)
-    if guard_reason:
-        body = f"- 関連情報が見つかりませんでした。理由: {guard_reason} [S1]"
-        raw = body + "\n不明: 根拠不足 [S1]\n不足: 関連記載なし [S1]"
-        answer_chunks = grounded[:1] or [Chunk("1", "該当なし", "unknown", tuple(), None)]
+    if guard_reason is None:
+        guard_reason = guard_merged_top(q, intent, guard_grounded, retrieved)
+        used_fallback = guard_reason is not None
+
+    if guard_reason == "missing_procedure_evidence":
+        selected_context = grounded[:1] or [Chunk("1", "OCR", "unknown", tuple(), None)]
+    elif guard_reason:
+        selected_context = grounded[:1] or [Chunk("1", "該当なし", "unknown", tuple(), None)]
+    else:
+        selected_context = _prefer_sort(grounded, intent)
+        selected_context = _cut_context(selected_context, max_context_chars)
+
+    state = _RetrievalTraceState(
+        normalized_query=q,
+        intent=intent,
+        rewritten_query=rewritten,
+        augmented_query=augmented,
+        retrieved=retrieved,
+        grounded_candidates=grounded,
+        selected_context=selected_context,
+        guard_reason=guard_reason,
+        used_fallback=used_fallback,
+    )
+    return trace, state, started_at
+
+
+def debug_retrieve_with_trace(
+    question: str,
+    client=None,
+    top_k: int = 20,
+    max_context_chars: int = 8000,
+    intent_override: Optional[str] = None,
+) -> Dict[str, object]:
+    trace, state, started_at = _build_retrieval_trace(
+        question,
+        client=client,
+        top_k=top_k,
+        max_context_chars=max_context_chars,
+        intent_override=intent_override,
+    )
+    _set_final_trace(
+        trace,
+        started_at,
+        state.selected_context,
+        guard_reason=state.guard_reason,
+        used_fallback=state.used_fallback,
+        answer_mode="debug_retrieval_only",
+        citations_count=0,
+    )
+    return trace
+
+
+def _answer_query_impl(
+    question: str,
+    client=None,
+    top_k: int = 20,
+    max_context_chars: int = 8000,
+    intent_override: Optional[str] = None,
+) -> Tuple[AnswerResult, Dict[str, object]]:
+    started_at = time.perf_counter()
+    request_id = uuid.uuid4().hex[:12]
+    trace, state, started_at = _build_retrieval_trace(
+        question,
+        client=client,
+        top_k=top_k,
+        max_context_chars=max_context_chars,
+        intent_override=intent_override,
+        started_at=started_at,
+        request_id=request_id,
+    )
+    q = state.normalized_query
+    intent = state.intent
+    rewritten = state.rewritten_query
+    augmented = state.augmented_query
+    retrieved = state.retrieved
+
+    if state.guard_reason == "missing_procedure_evidence":
+        fallback = "- 手順の記載が見つかりません。OCR版を確認してください。 [S1]"
+        raw = fallback + "\n不明: 手順不明 [S1]\n不足: OCR版確認 [S1]"
+        answer_chunks = state.selected_context
         result = _build_answer_result(
             raw,
             answer_chunks,
             intent=intent,
-            guard_reason=guard_reason,
+            guard_reason=state.guard_reason,
             used_fallback=True,
             retrieved=retrieved,
             rewritten_query=rewritten,
             augmented_query=augmented,
         )
-        _finalize_trace(result, answer_chunks, answer_mode="fallback")
+        _set_final_trace(
+            trace,
+            started_at,
+            answer_chunks,
+            guard_reason=result.guard_reason,
+            used_fallback=result.used_fallback,
+            answer_mode="fallback",
+            citations_count=len(result.citations),
+        )
         return result, trace
 
-    grounded = _prefer_sort(grounded, intent)
-    grounded = _cut_context(grounded, max_context_chars)
+    if state.guard_reason:
+        body = f"- 関連情報が見つかりませんでした。理由: {state.guard_reason} [S1]"
+        raw = body + "\n不明: 根拠不足 [S1]\n不足: 関連記載なし [S1]"
+        answer_chunks = state.selected_context
+        result = _build_answer_result(
+            raw,
+            answer_chunks,
+            intent=intent,
+            guard_reason=state.guard_reason,
+            used_fallback=True,
+            retrieved=retrieved,
+            rewritten_query=rewritten,
+            augmented_query=augmented,
+        )
+        _set_final_trace(
+            trace,
+            started_at,
+            answer_chunks,
+            guard_reason=result.guard_reason,
+            used_fallback=result.used_fallback,
+            answer_mode="fallback",
+            citations_count=len(result.citations),
+        )
+        return result, trace
+
+    grounded = state.selected_context
 
     evidence_blocks = build_evidence_blocks(grounded)
     prompt = build_prompt(q, evidence_blocks)
+    if client is None:
+        client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
     resp = client.chat.completions.create(
         model=config.CHAT_MODEL,
         messages=[
@@ -482,7 +610,15 @@ def _answer_query_impl(
         rewritten_query=rewritten,
         augmented_query=augmented,
     )
-    _finalize_trace(result, answer_chunks, answer_mode="fallback" if used_fallback else "grounded")
+    _set_final_trace(
+        trace,
+        started_at,
+        answer_chunks,
+        guard_reason=result.guard_reason,
+        used_fallback=result.used_fallback,
+        answer_mode="fallback" if used_fallback else "grounded",
+        citations_count=len(result.citations),
+    )
     return result, trace
 
 

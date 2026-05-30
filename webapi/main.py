@@ -5,11 +5,12 @@ import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import config
 from rag_core.audit_log import append_audit_event
-from rag_core.qa import answer_query_with_trace, retrieve_chunks
+from rag_core.qa import answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
 from rag_core.retrieval import RetrievedChunk
 from rag_core.utils import ensure_openai_client
 
@@ -104,6 +105,37 @@ def _trace_value(trace: Dict[str, Any], key: str, default: Any = None) -> Any:
     return default if value is None else value
 
 
+def _embedding_client():
+    provider = (
+        config.getenv_first("EMBED_PROVIDER", default="openai") or "openai"
+    ).lower()
+    if provider == "local":
+        return None
+    return ensure_openai_client(base_url=config.OPENAI_BASE_URL)
+
+
+def _generation_error_payload(exc: Exception) -> tuple[int, Dict[str, str]] | None:
+    status_code = getattr(exc, "status_code", None)
+    code = str(getattr(exc, "code", "") or "").lower()
+    message = str(exc).lower()
+    if "insufficient_quota" in code or "insufficient_quota" in message:
+        return 429, {
+            "detail": "chat generation unavailable",
+            "error_type": "insufficient_quota",
+        }
+    if status_code == 429 or "rate limit" in message or "rate_limit" in code:
+        return 429, {
+            "detail": "chat generation unavailable",
+            "error_type": "rate_limited",
+        }
+    if status_code in {500, 502, 503, 504}:
+        return 503, {
+            "detail": "chat generation unavailable",
+            "error_type": "provider_unavailable",
+        }
+    return None
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -168,12 +200,7 @@ def search(req: SearchRequest):
     global _total_requests, _error_requests
     _total_requests += 1
     try:
-        provider = (
-            config.getenv_first("EMBED_PROVIDER", default="openai") or "openai"
-        ).lower()
-        client = None
-        if provider != "local":
-            client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
+        client = _embedding_client()
         hits = retrieve_chunks(
             req.query, client=client, top_k=req.top_k or config.TOP_K
         )
@@ -194,13 +221,22 @@ def search_debug(req: SearchDebugRequest):
     global _total_requests, _error_requests
     _total_requests += 1
     try:
-        client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
-        ans, trace = answer_query_with_trace(
-            req.query,
-            client=client,
-            top_k=req.top_k or config.TOP_K,
-            max_context_chars=req.max_context_chars or config.MAX_CONTEXT_CHARS,
-        )
+        client = _embedding_client()
+        ans = None
+        if req.generate_answer:
+            ans, trace = answer_query_with_trace(
+                req.query,
+                client=client,
+                top_k=req.top_k or config.TOP_K,
+                max_context_chars=req.max_context_chars or config.MAX_CONTEXT_CHARS,
+            )
+        else:
+            trace = debug_retrieve_with_trace(
+                req.query,
+                client=client,
+                top_k=req.top_k or config.TOP_K,
+                max_context_chars=req.max_context_chars or config.MAX_CONTEXT_CHARS,
+            )
         trace_id = req.trace_id or str(trace.get("request_id") or "")
         max_preview_chars = 1200 if req.include_context else 300
         before_rerank = _compact_chunks(
@@ -220,18 +256,29 @@ def search_debug(req: SearchDebugRequest):
             "trace_id": trace_id,
             "original_query": trace.get("original_query") or req.query,
             "normalized_query": trace.get("normalized_query"),
-            "intent": trace.get("intent") or ans.intent,
-            "rewritten_query": trace.get("rewritten_query") or ans.rewritten_query,
-            "augmented_query": trace.get("augmented_query") or ans.augmented_query,
+            "intent": trace.get("intent") or (ans.intent if ans is not None else None),
+            "rewritten_query": trace.get("rewritten_query")
+            or (ans.rewritten_query if ans is not None else None),
+            "augmented_query": trace.get("augmented_query")
+            or (ans.augmented_query if ans is not None else None),
             "before_rerank": before_rerank,
             "after_rerank": after_rerank,
             "after_parent_expansion": after_parent_expansion,
             "selected_context_chunk_ids": _trace_value(trace, "selected_context_chunk_ids", []),
             "selected_context_preview": _trace_value(trace, "selected_context_preview", []),
-            "guard_reason": trace.get("final_guard_reason") or ans.guard_reason,
-            "used_fallback": _trace_value(trace, "final_used_fallback", ans.used_fallback),
+            "guard_reason": trace.get("final_guard_reason")
+            or (ans.guard_reason if ans is not None else None),
+            "used_fallback": _trace_value(
+                trace,
+                "final_used_fallback",
+                ans.used_fallback if ans is not None else False,
+            ),
             "answer_mode": trace.get("answer_mode"),
-            "citations_count": _trace_value(trace, "citations_count", len(ans.citations)),
+            "citations_count": _trace_value(
+                trace,
+                "citations_count",
+                len(ans.citations) if ans is not None else 0,
+            ),
             "latency_ms": trace.get("latency_ms"),
         }
         append_audit_event(
@@ -241,7 +288,8 @@ def search_debug(req: SearchDebugRequest):
                 "trace_id": trace_id,
                 "query": req.query,
                 "normalized_query": trace.get("normalized_query"),
-                "intent": trace.get("intent") or ans.intent,
+                "intent": trace.get("intent") or (ans.intent if ans is not None else None),
+                "answer_mode": response["answer_mode"],
                 "guard_reason": response["guard_reason"],
                 "used_fallback": response["used_fallback"],
                 "before_rerank_count": len(before_rerank),
@@ -252,16 +300,20 @@ def search_debug(req: SearchDebugRequest):
             },
         )
         return response
-    except Exception:
+    except Exception as exc:
         _error_requests += 1
+        generation_error = _generation_error_payload(exc) if req.generate_answer else None
         append_audit_event(
             "search_debug",
             {
                 "request_id": None,
                 "trace_id": req.trace_id,
                 "query": req.query,
-                "error": "internal error",
+                "error": "chat generation unavailable" if generation_error else "internal error",
+                "error_type": generation_error[1].get("error_type") if generation_error else None,
             },
         )
         logging.exception("search_debug failed trace_id=%s", req.trace_id)
+        if generation_error:
+            return JSONResponse(status_code=generation_error[0], content=generation_error[1])
         raise HTTPException(status_code=500, detail="internal error")
