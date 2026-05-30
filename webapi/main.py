@@ -100,6 +100,32 @@ def _top_source_docs(chunks: Any, limit: int = 5) -> List[str]:
     return out
 
 
+def _top_score_detail_summary(chunks: Any) -> Dict[str, Any]:
+    if not isinstance(chunks, (list, tuple)):
+        return {
+            "top_keyword_score": None,
+            "top_matched_terms": [],
+            "top_matched_fields": [],
+        }
+    for chunk in chunks:
+        if not isinstance(chunk, RetrievedChunk):
+            continue
+        meta = chunk.metadata or {}
+        details = meta.get("score_details")
+        if not isinstance(details, dict):
+            continue
+        return {
+            "top_keyword_score": details.get("keyword_score"),
+            "top_matched_terms": list(details.get("matched_terms") or [])[:10],
+            "top_matched_fields": list(details.get("matched_fields") or [])[:10],
+        }
+    return {
+        "top_keyword_score": None,
+        "top_matched_terms": [],
+        "top_matched_fields": [],
+    }
+
+
 def _trace_value(trace: Dict[str, Any], key: str, default: Any = None) -> Any:
     value = trace.get(key)
     return default if value is None else value
@@ -257,6 +283,7 @@ def search_debug(req: SearchDebugRequest):
             "original_query": trace.get("original_query") or req.query,
             "normalized_query": trace.get("normalized_query"),
             "intent": trace.get("intent") or (ans.intent if ans is not None else None),
+            "query_type": trace.get("query_type"),
             "rewritten_query": trace.get("rewritten_query")
             or (ans.rewritten_query if ans is not None else None),
             "augmented_query": trace.get("augmented_query")
@@ -289,6 +316,7 @@ def search_debug(req: SearchDebugRequest):
                 "query": req.query,
                 "normalized_query": trace.get("normalized_query"),
                 "intent": trace.get("intent") or (ans.intent if ans is not None else None),
+                "query_type": response["query_type"],
                 "answer_mode": response["answer_mode"],
                 "guard_reason": response["guard_reason"],
                 "used_fallback": response["used_fallback"],
@@ -297,6 +325,7 @@ def search_debug(req: SearchDebugRequest):
                 "after_parent_expansion_count": len(after_parent_expansion),
                 "citations_count": response["citations_count"],
                 "latency_ms": response["latency_ms"],
+                **_top_score_detail_summary(trace.get("after_rerank")),
             },
         )
         return response

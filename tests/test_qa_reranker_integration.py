@@ -186,9 +186,20 @@ def test_debug_retrieve_with_trace_does_not_call_chat_completion(monkeypatch):
     assert calls["count"] == 2
     assert trace["answer_mode"] == "debug_retrieval_only"
     assert trace["citations_count"] == 0
+    assert trace["query_type"] == "procedure"
     assert trace["final_guard_reason"] is None
     assert trace["final_used_fallback"] is False
     assert trace["selected_context_chunk_ids"] == ["A"]
+    for list_name in ["before_rerank", "after_rerank", "after_parent_expansion"]:
+        details = trace[list_name][0].metadata["score_details"]
+        assert set(details) >= {
+            "query_type",
+            "keyword_score",
+            "matched_terms",
+            "matched_fields",
+            "signals",
+        }
+        assert details["query_type"] == "procedure"
 
 
 def test_guard_too_general_keeps_vague_short_query():
