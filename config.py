@@ -185,6 +185,10 @@ KEYWORD_BOOST_ENABLED = _get_bool("KEYWORD_BOOST_ENABLED", default=True)
 KEYWORD_BOOST_QUERY_TYPES = _get_list("KEYWORD_BOOST_QUERY_TYPES", ["exact_lookup", "identifier"])
 KEYWORD_BOOST_MAX_DELTA = _get_float("KEYWORD_BOOST_MAX_DELTA", default=0.05)
 
+APPROVED_QA_ENABLED = _get_bool("APPROVED_QA_ENABLED", default=False)
+_APPROVED_QA_PATH_RAW = getenv_first("APPROVED_QA_PATH", default="eval/cases/approved_qa_sample.jsonl")
+APPROVED_QA_PATH = str((BASE_DIR / _APPROVED_QA_PATH_RAW).resolve())
+
 DISABLE_GUARD = _get_bool("DISABLE_GUARD", default=False)
 IGNORE_SEARCHABLE = _get_bool("IGNORE_SEARCHABLE", default=False)
 LOG_WHERE = _get_bool("LOG_WHERE", default=False)

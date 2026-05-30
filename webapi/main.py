@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import config
+from rag_core.approved_qa import ApprovedAnswer, ApprovedQAIndex, load_approved_qa, lookup_approved_answer
 from rag_core.audit_log import append_audit_event
 from rag_core.qa import answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
 from rag_core.retrieval import RetrievedChunk
@@ -20,6 +21,8 @@ app = FastAPI()
 _start_time = time.time()
 _total_requests = 0
 _error_requests = 0
+_approved_qa_index: ApprovedQAIndex | None = None
+_approved_qa_index_path: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -171,6 +174,44 @@ def _generation_error_payload(exc: Exception) -> tuple[int, Dict[str, str]] | No
     return None
 
 
+def _approved_qa_lookup(question: str, tenant_id: str = "default") -> ApprovedAnswer | None:
+    global _approved_qa_index, _approved_qa_index_path
+    if not getattr(config, "APPROVED_QA_ENABLED", False):
+        return None
+    path = str(config.APPROVED_QA_PATH)
+    if _approved_qa_index is None or _approved_qa_index_path != path:
+        _approved_qa_index = load_approved_qa(path, tenant_id=tenant_id)
+        _approved_qa_index_path = path
+    return lookup_approved_answer(_approved_qa_index, question, tenant_id=tenant_id)
+
+
+def _approved_chat_payload(answer: ApprovedAnswer) -> Dict[str, Any]:
+    citations = []
+    for idx, citation in enumerate(answer.approved_citations, start=1):
+        citations.append(
+            {
+                "number": idx,
+                "source_doc": citation.source_doc,
+                "source_pages": list(citation.source_pages),
+                "chunk_id": citation.chunk_id,
+            }
+        )
+    return {
+        "answer_text": answer.approved_answer,
+        "answer_with_footnotes": answer.approved_answer,
+        "intent": "approved_exact_match",
+        "guard_reason": None,
+        "used_fallback": False,
+        "citations": citations,
+        "retrieved": [],
+        "rewritten_query": "",
+        "augmented_query": "",
+        "answer_mode": "approved_exact_match",
+        "approved_qa_id": answer.qa_id,
+        "normalized_question": answer.normalized_question,
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -190,6 +231,24 @@ def chat(req: ChatRequest):
     global _total_requests, _error_requests
     _total_requests += 1
     try:
+        approved = _approved_qa_lookup(req.question)
+        if approved is not None:
+            payload = _approved_chat_payload(approved)
+            append_audit_event(
+                "chat",
+                {
+                    "request_id": req.trace_id,
+                    "trace_id": req.trace_id,
+                    "tenant_id": approved.tenant_id,
+                    "question": req.question,
+                    "normalized_question": approved.normalized_question,
+                    "answer_mode": "approved_exact_match",
+                    "approved_qa_id": approved.qa_id,
+                    "citations_count": len(approved.approved_citations),
+                },
+            )
+            return payload
+
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
         ans, trace = answer_query_with_trace(
             req.question,
