@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from rag_core.keyword_scorer import classify_query_type, score_keyword_match
+from rag_core.keyword_scorer import apply_keyword_boost, classify_query_type, score_keyword_match
+from rag_core.retrieval import RetrievedChunk
 
 
 def test_classify_query_type_quoted_term_is_exact_lookup():
@@ -78,3 +79,77 @@ def test_score_keyword_match_kanji_compound_hit():
     assert details["keyword_score"] > 0
     assert "返金条件" in details["matched_terms"]
     assert details["signals"]["kanji_compound_hit"] is True
+
+
+def _chunk(chunk_id: str, text: str, score: float, *, query: str, query_type: str, **metadata) -> RetrievedChunk:
+    meta = {"id": chunk_id, **metadata}
+    details = score_keyword_match(query, text, meta, query_type=query_type)
+    details["query_type"] = query_type
+    meta["score_details"] = details
+    return RetrievedChunk(text=text, metadata=meta, score=score)
+
+
+def test_apply_keyword_boost_exact_lookup_promotes_close_exact_hit():
+    query = "「返金条件」"
+    chunks = [
+        _chunk("semantic", "返金についての一般説明です。", 0.25, query=query, query_type="exact_lookup"),
+        _chunk("exact", "返金条件 はプランごとに異なります。", 0.27, query=query, query_type="exact_lookup"),
+    ]
+
+    boosted = apply_keyword_boost(chunks, query_type="exact_lookup", max_boost=0.05)
+
+    assert [ch.metadata["id"] for ch in boosted] == ["exact", "semantic"]
+    details = boosted[0].metadata["score_details"]
+    assert details["keyword_boost_applied"] is True
+    assert details["keyword_boost_value"] > 0
+    assert details["score_before_keyword_boost"] == 0.27
+    assert details["score_after_keyword_boost"] < 0.27
+    assert details["boost_reason"]
+
+
+def test_apply_keyword_boost_identifier_promotes_exact_over_superset():
+    query = "PR2 の仕様"
+    chunks = [
+        _chunk("superset", "PR20 の仕様です。", 0.25, query=query, query_type="identifier"),
+        _chunk("exact", "PR2 の仕様です。", 0.27, query=query, query_type="identifier"),
+    ]
+
+    boosted = apply_keyword_boost(chunks, query_type="identifier", max_boost=0.05)
+
+    assert [ch.metadata["id"] for ch in boosted] == ["exact", "superset"]
+    assert boosted[0].metadata["score_details"]["keyword_boost_applied"] is True
+    assert "identifier_hit" in boosted[0].metadata["score_details"]["boost_reason"]
+    assert boosted[1].metadata["score_details"]["keyword_boost_applied"] is False
+
+
+def test_apply_keyword_boost_keeps_non_exact_query_type_order():
+    query = "パスワード再設定の方法"
+    chunks = [
+        _chunk("first", "一般説明です。", 0.30, query=query, query_type="procedure"),
+        _chunk("second", "パスワード再設定の方法です。", 0.10, query=query, query_type="procedure"),
+    ]
+
+    boosted = apply_keyword_boost(chunks, query_type="procedure", max_boost=0.05)
+
+    assert [ch.metadata["id"] for ch in boosted] == ["first", "second"]
+    for ch in boosted:
+        details = ch.metadata["score_details"]
+        assert details["keyword_boost_applied"] is False
+        assert details["keyword_boost_value"] == 0.0
+        assert details["score_before_keyword_boost"] == ch.score
+        assert details["score_after_keyword_boost"] == ch.score
+        assert details["boost_reason"] == []
+
+
+def test_score_keyword_match_includes_keyword_boost_fields_by_default():
+    details = score_keyword_match("「請求書ID」", "請求書ID を確認します。")
+
+    for key in [
+        "keyword_boost_applied",
+        "keyword_boost_value",
+        "score_before_keyword_boost",
+        "score_after_keyword_boost",
+        "boost_reason",
+    ]:
+        assert key in details
+    assert details["keyword_boost_applied"] is False
