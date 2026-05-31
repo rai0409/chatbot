@@ -47,6 +47,31 @@ def test_keyword_score_prefers_overlap_and_synonym_terms():
     assert related["keyword_score"] > unrelated["keyword_score"]
     assert "自由回答" in related["matched_terms"] or "フリーアンサー" in related["matched_terms"]
     assert "question_text" in related["matched_fields"]
+    assert {
+        "query_term": "自由回答",
+        "matched_synonym": "フリーアンサー",
+        "field": "question_text",
+    } in related["synonym_matches"]
+    assert not unrelated["synonym_matches"]
+
+
+def test_keyword_score_handles_minimal_japanese_synonym_groups():
+    related = score_approved_candidate_keyword(
+        "15問に自由記述は入りますか？",
+        _meta(),
+        text="Q: 15問程度の項目はフリーアンサーも含まれるという認識で良いでしょうか。\nA: フリーアンサーも含みます。",
+    )
+    unrelated = score_approved_candidate_keyword(
+        "配送先住所を変更できますか？",
+        _meta(),
+        text="Q: 15問程度の項目はフリーアンサーも含まれるという認識で良いでしょうか。\nA: フリーアンサーも含みます。",
+    )
+
+    assert related["keyword_score"] > unrelated["keyword_score"]
+    assert any(
+        match["query_term"] == "自由記述" and match["matched_synonym"] == "フリーアンサー"
+        for match in related["synonym_matches"]
+    )
 
 
 def test_conflict_flags_are_exposed():
@@ -63,6 +88,8 @@ def test_conflict_flags_are_exposed():
 
     assert numeric["numeric_conflict"] is True
     assert negation["negation_conflict"] is True
+    assert numeric["synonym_matches"]
+    assert negation["synonym_matches"]
 
 
 def test_candidate_formatter_preserves_metadata():
@@ -81,6 +108,7 @@ def test_candidate_formatter_preserves_metadata():
     assert candidate["semantic_score"] is not None
     assert candidate["hybrid_score"] is not None
     assert candidate["approved_answer_preview"] == "フリーアンサーも含みます。"
+    assert candidate["synonym_matches"]
 
 
 def test_search_candidates_calculates_margin_and_filters_qa_pairs(monkeypatch):
@@ -160,6 +188,13 @@ def test_search_debug_exposes_candidates_without_chat_routing(monkeypatch):
                 "top1_top2_margin": None,
                 "matched_terms": ["自由回答"],
                 "matched_fields": ["question_text"],
+                "synonym_matches": [
+                    {
+                        "query_term": "自由回答",
+                        "matched_synonym": "フリーアンサー",
+                        "field": "question_text",
+                    }
+                ],
                 "source_doc": "58887_95105_misc.pdf",
                 "source_pages": [1],
                 "doc_version": "v1",
@@ -180,4 +215,5 @@ def test_search_debug_exposes_candidates_without_chat_routing(monkeypatch):
 
     assert response["answer_mode"] == "debug_retrieval_only"
     assert response["approved_similar_candidates"][0]["qa_id"] == "qa_free_answer"
+    assert response["approved_similar_candidates"][0]["synonym_matches"]
     assert response["citations_count"] == 0

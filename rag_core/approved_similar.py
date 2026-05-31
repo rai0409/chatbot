@@ -12,15 +12,25 @@ from rag_core.ja_text import extract_salient_terms_ja, normalize_japanese_text
 _MAX_TERMS = 16
 _MAX_FIELDS = 10
 _NEGATION_TERMS = ("ない", "不要", "不可", "できない", "しない", "含まない", "対象外")
-_SYNONYMS = {
-    "自由回答": ["フリーアンサー"],
-    "フリーアンサー": ["自由回答"],
-    "入ります": ["含まれる", "含みます"],
-    "入る": ["含まれる", "含む"],
-    "含まれます": ["入ります", "含む"],
-    "アンケートシステム": ["アンケートフォーム"],
-    "アンケートフォーム": ["アンケートシステム"],
-}
+_SYNONYM_GROUPS = (
+    ("自由回答", "フリーアンサー", "自由記述"),
+    ("設問", "項目", "質問"),
+    ("含む", "含まれる", "含みます", "含まれます", "入る", "入ります", "対象"),
+    ("アンケート", "調査", "質問票"),
+    ("アンケートシステム", "アンケートフォーム"),
+)
+
+
+def _build_synonym_map() -> Dict[str, List[str]]:
+    out: Dict[str, List[str]] = {}
+    for group in _SYNONYM_GROUPS:
+        normalized = [_norm(item) for item in group if _norm(item)]
+        for item in normalized:
+            out[item] = [other for other in normalized if other != item]
+    return out
+
+
+_SYNONYMS: Dict[str, List[str]]
 
 
 @dataclass(frozen=True)
@@ -44,6 +54,7 @@ class ApprovedSimilarCandidate:
     doc_type: str
     numeric_conflict: bool
     negation_conflict: bool
+    synonym_matches: List[Dict[str, str]]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -67,11 +78,15 @@ class ApprovedSimilarCandidate:
             "doc_type": self.doc_type,
             "numeric_conflict": self.numeric_conflict,
             "negation_conflict": self.negation_conflict,
+            "synonym_matches": self.synonym_matches,
         }
 
 
 def _norm(text: Any) -> str:
     return normalize_japanese_text(str(text or "")).lower()
+
+
+_SYNONYMS = _build_synonym_map()
 
 
 def _compact(text: Any) -> str:
@@ -136,6 +151,17 @@ def _terms(text: str) -> List[str]:
     return _unique(expanded, limit=32)
 
 
+def _base_terms(text: str) -> List[str]:
+    norm = _norm(text)
+    terms: List[str] = []
+    terms.extend(extract_salient_terms_ja(norm))
+    terms.extend(re.findall(r"\d+(?:\.\d+)?", norm))
+    terms.extend(re.findall(r"[a-z0-9][a-z0-9._:/-]{1,}", norm))
+    terms.extend(re.findall(r"[ァ-ヴー]{2,}", norm))
+    terms.extend(re.findall(r"[一-龥々〆〤]{2,}", norm))
+    return _unique(terms, limit=32)
+
+
 def _contains(field: str, term: str) -> bool:
     return bool(term) and (_norm(term) in field or _compact(term) in _compact(field))
 
@@ -159,8 +185,10 @@ def score_approved_candidate_keyword(query: str, metadata: dict, text: str = "")
         "text": _field_text(text),
     }
     query_terms = _terms(query)
+    query_base_terms = _base_terms(query)
     matched_terms: List[str] = []
     matched_fields: List[str] = []
+    synonym_matches: List[Dict[str, str]] = []
     score = 0.0
     for term in query_terms:
         for field_name, field_value in fields.items():
@@ -179,6 +207,27 @@ def score_approved_candidate_keyword(query: str, metadata: dict, text: str = "")
             else:
                 score += 0.03
             break
+
+    for query_term in query_base_terms:
+        for synonym in _SYNONYMS.get(_norm(query_term), []):
+            for field_name in ("question_text", "normalized_question", "answer_text", "text"):
+                if not _contains(fields[field_name], synonym):
+                    continue
+                evidence = {
+                    "query_term": _norm(query_term),
+                    "matched_synonym": _norm(synonym),
+                    "field": field_name,
+                }
+                if evidence not in synonym_matches:
+                    synonym_matches.append(evidence)
+                if _norm(query_term) not in matched_terms and len(matched_terms) < _MAX_TERMS:
+                    matched_terms.append(_norm(query_term))
+                if _norm(synonym) not in matched_terms and len(matched_terms) < _MAX_TERMS:
+                    matched_terms.append(_norm(synonym))
+                if field_name not in matched_fields and len(matched_fields) < _MAX_FIELDS:
+                    matched_fields.append(field_name)
+                score += 0.08 if field_name in {"question_text", "normalized_question"} else 0.05
+                break
 
     q_nums = _numbers(query)
     candidate_nums = _numbers(" ".join(fields.values()))
@@ -202,6 +251,7 @@ def score_approved_candidate_keyword(query: str, metadata: dict, text: str = "")
         "keyword_score": round(min(score, 1.0), 4),
         "matched_terms": matched_terms,
         "matched_fields": matched_fields,
+        "synonym_matches": synonym_matches[:_MAX_TERMS],
         "numeric_conflict": numeric_conflict,
         "negation_conflict": negation_conflict,
     }
@@ -300,6 +350,7 @@ def build_approved_similar_candidate(
         doc_type=str(meta.get("doc_type") or ""),
         numeric_conflict=bool(keyword["numeric_conflict"]),
         negation_conflict=bool(keyword["negation_conflict"]),
+        synonym_matches=list(keyword.get("synonym_matches") or []),
     )
 
 
