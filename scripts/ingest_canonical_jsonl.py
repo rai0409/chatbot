@@ -104,9 +104,8 @@ def main() -> int:
     parser.add_argument("--reset", action="store_true")
     args = parser.parse_args()
 
-    provider = (config.getenv_first("EMBED_PROVIDER", default="openai") or "openai").lower()
     client = None
-    if provider != "local":
+    if not embedder.is_local_provider():
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
 
     collection = store.get_vectorstore(collection_name=args.collection)
