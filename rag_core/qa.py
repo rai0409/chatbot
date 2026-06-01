@@ -6,6 +6,7 @@ import uuid
 from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 import config
+from rag_core import embedding_provider
 from rag_core.keyword_scorer import apply_keyword_boost, classify_query_type, score_keyword_match
 from rag_core.reranker import rerank_chunks
 from rag_core.retrieval import RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, hybrid_retrieve, vector_retrieve
@@ -443,10 +444,7 @@ def _build_retrieval_trace(
     rewritten = rewrite_query(q)
     augmented = _compose_query(rewritten, intent)
 
-    embed_provider = (
-        config.getenv_first("EMBED_PROVIDER", default="openai") or "openai"
-    ).lower()
-    if client is None and embed_provider != "local":
+    if client is None and not embedding_provider.is_local_provider():
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
     before_rerank, retrieved, context_candidates = _retrieve_and_rerank(
         q,
