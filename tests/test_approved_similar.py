@@ -28,6 +28,41 @@ def _meta(**overrides):
     return data
 
 
+def _personal_info_meta(**overrides):
+    data = _meta(
+        id="approved_qa_pair:qa_personal_info",
+        qa_id="qa_personal_info",
+        question_text="15問程度の項目に個人情報は含まれますか。",
+        answer_text="個人情報は含まれません。",
+        approved_answer="個人情報は含まれません。",
+        normalized_question="15問程度の項目に個人情報は含まれますか。",
+    )
+    data.update(overrides)
+    return data
+
+
+def test_topic_term_beats_generic_numeric_overlap_for_candidate_ranking():
+    query = "15問に個人情報は含まれますか？"
+    free_answer = build_approved_similar_candidate(
+        query=query,
+        text="Q: 15問程度の項目はフリーアンサーも含まれるという認識で良いでしょうか。\nA: フリーアンサーも含みます。",
+        metadata=_meta(),
+        distance=0.2,
+    )
+    personal_info = build_approved_similar_candidate(
+        query=query,
+        text="Q: 15問程度の項目に個人情報は含まれますか。\nA: 個人情報は含まれません。",
+        metadata=_personal_info_meta(),
+        distance=0.25,
+    )
+
+    assert "個人情報" in personal_info.matched_terms
+    assert "question_text" in personal_info.matched_fields
+    assert personal_info.negation_conflict is True
+    assert free_answer.keyword_score < personal_info.keyword_score
+    assert free_answer.hybrid_score < personal_info.hybrid_score
+
+
 def test_keyword_score_prefers_overlap_and_synonym_terms():
     related = score_approved_candidate_keyword(
         "15問に自由回答は入りますか？",

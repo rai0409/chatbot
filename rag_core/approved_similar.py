@@ -11,7 +11,25 @@ from rag_core.ja_text import extract_salient_terms_ja, normalize_japanese_text
 
 _MAX_TERMS = 16
 _MAX_FIELDS = 10
-_NEGATION_TERMS = ("ない", "不要", "不可", "できない", "しない", "含まない", "対象外")
+_NEGATION_TERMS = ("ない", "不要", "不可", "できない", "しない", "含まない", "含まれない", "含まれません", "対象外")
+_GENERIC_MATCH_TERMS = {
+    "含む",
+    "含まれる",
+    "含みます",
+    "含まれます",
+    "入る",
+    "入ります",
+    "対象",
+    "設問",
+    "項目",
+    "質問",
+    "程度",
+    "認識",
+    "良い",
+    "でしょう",
+    "ですか",
+    "ますか",
+}
 _SYNONYM_GROUPS = (
     ("自由回答", "フリーアンサー", "自由記述"),
     ("設問", "項目", "質問"),
@@ -166,6 +184,38 @@ def _contains(field: str, term: str) -> bool:
     return bool(term) and (_norm(term) in field or _compact(term) in _compact(field))
 
 
+def _is_number_term(term: str) -> bool:
+    return bool(re.fullmatch(r"\d+(?:\.\d+)?", _norm(term)))
+
+
+def _is_topic_term(term: str) -> bool:
+    value = _norm(term)
+    compact = _compact(value)
+    if not compact or _is_number_term(value) or value in _GENERIC_MATCH_TERMS:
+        return False
+    return len(compact) >= 2
+
+
+def _field_match_weight(term: str, field_name: str) -> float:
+    if _is_number_term(term):
+        return 0.0
+    if _is_topic_term(term):
+        if field_name in {"question_text", "normalized_question"}:
+            return 0.26
+        if field_name == "answer_text":
+            return 0.13
+        if field_name in {"title", "section_path"}:
+            return 0.08
+        return 0.04
+    if field_name in {"question_text", "normalized_question"}:
+        return 0.08
+    if field_name == "answer_text":
+        return 0.04
+    if field_name in {"title", "section_path"}:
+        return 0.03
+    return 0.02
+
+
 def _numbers(text: str) -> set[str]:
     return set(re.findall(r"\d+(?:\.\d+)?", _norm(text)))
 
@@ -191,6 +241,8 @@ def score_approved_candidate_keyword(query: str, metadata: dict, text: str = "")
     synonym_matches: List[Dict[str, str]] = []
     score = 0.0
     for term in query_terms:
+        if _is_number_term(term):
+            continue
         for field_name, field_value in fields.items():
             if not _contains(field_value, term):
                 continue
@@ -198,14 +250,7 @@ def score_approved_candidate_keyword(query: str, metadata: dict, text: str = "")
                 matched_terms.append(_norm(term))
             if field_name not in matched_fields and len(matched_fields) < _MAX_FIELDS:
                 matched_fields.append(field_name)
-            if field_name in {"question_text", "normalized_question"}:
-                score += 0.16
-            elif field_name == "answer_text":
-                score += 0.08
-            elif field_name in {"title", "section_path"}:
-                score += 0.05
-            else:
-                score += 0.03
+            score += _field_match_weight(term, field_name)
             break
 
     for query_term in query_base_terms:
@@ -226,7 +271,7 @@ def score_approved_candidate_keyword(query: str, metadata: dict, text: str = "")
                     matched_terms.append(_norm(synonym))
                 if field_name not in matched_fields and len(matched_fields) < _MAX_FIELDS:
                     matched_fields.append(field_name)
-                score += 0.08 if field_name in {"question_text", "normalized_question"} else 0.05
+                score += _field_match_weight(synonym, field_name) * 0.7
                 break
 
     q_nums = _numbers(query)
@@ -234,7 +279,7 @@ def score_approved_candidate_keyword(query: str, metadata: dict, text: str = "")
     numeric_overlap = bool(q_nums and q_nums & candidate_nums)
     numeric_conflict = bool(q_nums and candidate_nums and not (q_nums & candidate_nums))
     if numeric_overlap:
-        score += 0.18
+        score += 0.08
         for num in sorted(q_nums & candidate_nums):
             if num not in matched_terms and len(matched_terms) < _MAX_TERMS:
                 matched_terms.append(num)
@@ -245,7 +290,7 @@ def score_approved_candidate_keyword(query: str, metadata: dict, text: str = "")
     candidate_neg = _has_negation(fields["question_text"] + " " + fields["answer_text"])
     negation_conflict = query_neg != candidate_neg and (query_neg or candidate_neg)
     if negation_conflict:
-        score = max(0.0, score - 0.12)
+        score = max(0.0, score - 0.04)
 
     return {
         "keyword_score": round(min(score, 1.0), 4),
@@ -326,7 +371,7 @@ def build_approved_similar_candidate(
     semantic = _semantic_score(distance)
     conflict_penalty = 0.08 if keyword["numeric_conflict"] else 0.0
     if keyword["negation_conflict"]:
-        conflict_penalty += 0.08
+        conflict_penalty += 0.02
     hybrid = None
     if semantic is not None:
         hybrid = round(max(0.0, semantic * 0.60 + float(keyword["keyword_score"]) * 0.40 - conflict_penalty), 6)
