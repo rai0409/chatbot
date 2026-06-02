@@ -13,6 +13,7 @@ SearchFn = Callable[..., List[Dict[str, Any]]]
 _MAX_TERMS = 8
 _MAX_FIELDS = 8
 _MAX_SYNONYM_MATCHES = 5
+_MAX_FAILURE_REASONS = 6
 
 
 def load_cases(path: str | Path) -> List[Dict[str, Any]]:
@@ -25,10 +26,27 @@ def load_cases(path: str | Path) -> List[Dict[str, Any]]:
             record = json.loads(raw)
             if not record.get("query"):
                 raise ValueError(f"case line {line_no} is missing query")
-            if not record.get("expected_top_qa_id"):
-                raise ValueError(f"case line {line_no} is missing expected_top_qa_id")
+            if not record.get("expected_top_qa_id") and not record.get("expected_any_qa_ids"):
+                raise ValueError(
+                    f"case line {line_no} is missing expected_top_qa_id or expected_any_qa_ids"
+                )
             records.append(record)
     return records
+
+
+def _answer_preview(candidate: Dict[str, Any] | None) -> str | None:
+    if candidate is None:
+        return None
+    for key in (
+        "approved_answer_preview",
+        "answer_text_preview",
+        "approved_answer",
+        "answer_text",
+    ):
+        value = candidate.get(key)
+        if value is not None and str(value).strip() != "":
+            return str(value)
+    return None
 
 
 def _bounded_candidate(candidate: Dict[str, Any] | None) -> Dict[str, Any] | None:
@@ -37,6 +55,7 @@ def _bounded_candidate(candidate: Dict[str, Any] | None) -> Dict[str, Any] | Non
     return {
         "qa_id": candidate.get("qa_id"),
         "question_text": candidate.get("question_text"),
+        "answer_preview": _answer_preview(candidate),
         "semantic_score": candidate.get("semantic_score"),
         "semantic_distance": candidate.get("semantic_distance"),
         "keyword_score": candidate.get("keyword_score"),
@@ -53,10 +72,17 @@ def _bounded_candidate(candidate: Dict[str, Any] | None) -> Dict[str, Any] | Non
 
 def _failure_reasons(case: Dict[str, Any], top_candidate: Dict[str, Any] | None) -> List[str]:
     failures: List[str] = []
-    expected_top = str(case.get("expected_top_qa_id") or "")
+    expected_top = str(case.get("expected_top_qa_id") or "").strip()
+    expected_any = [str(item) for item in case.get("expected_any_qa_ids") or [] if str(item).strip()]
     actual_top = str((top_candidate or {}).get("qa_id") or "")
-    if actual_top != expected_top:
-        failures.append(f"expected top qa_id {expected_top}, got {actual_top or '<none>'}")
+    acceptable = set(expected_any)
+    if expected_top:
+        acceptable.add(expected_top)
+    if actual_top not in acceptable:
+        expected_label = expected_top
+        if expected_any:
+            expected_label = f"{expected_top or '<none>'} or one of {expected_any}"
+        failures.append(f"expected top qa_id {expected_label}, got {actual_top or '<none>'}")
 
     if "expected_numeric_conflict" in case:
         expected = bool(case["expected_numeric_conflict"])
@@ -75,7 +101,7 @@ def _failure_reasons(case: Dict[str, Any], top_candidate: Dict[str, Any] | None)
         if not synonym_matches:
             failures.append("expected top synonym evidence, got none")
 
-    return failures
+    return failures[:_MAX_FAILURE_REASONS]
 
 
 def evaluate_case(
@@ -93,9 +119,15 @@ def evaluate_case(
     top_candidate = candidates[0] if candidates else None
     failures = _failure_reasons(case, top_candidate)
     return {
+        "id": case.get("id") or case.get("case_id"),
+        "category": case.get("category"),
+        "source_question_no": case.get("source_question_no"),
+        "ambiguous": bool(case.get("ambiguous", False)),
         "query": case["query"],
-        "expected_top_qa_id": case["expected_top_qa_id"],
+        "expected_top_qa_id": case.get("expected_top_qa_id"),
+        "expected_any_qa_ids": list(case.get("expected_any_qa_ids") or []),
         "actual_top_qa_id": (top_candidate or {}).get("qa_id"),
+        "top_answer_preview": _answer_preview(top_candidate),
         "passed": not failures,
         "failure_reasons": failures,
         "expected_numeric_conflict": case.get("expected_numeric_conflict"),

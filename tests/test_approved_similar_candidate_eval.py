@@ -18,6 +18,7 @@ def _candidate(qa_id: str, **overrides):
     data = {
         "qa_id": qa_id,
         "question_text": f"question {qa_id}",
+        "approved_answer_preview": f"answer {qa_id}",
         "semantic_score": 0.9,
         "semantic_distance": 0.1,
         "keyword_score": 0.8,
@@ -80,6 +81,102 @@ def test_expected_top_qa_id_match_is_checked(tmp_path):
     assert result["actual_top_qa_id"] == "qa_top"
 
 
+def test_case_metadata_and_ambiguous_flag_are_preserved(tmp_path):
+    cases_path = tmp_path / "cases.jsonl"
+    _write_jsonl(
+        cases_path,
+        [
+            {
+                "id": "ambiguous-1",
+                "category": "multi-topic",
+                "source_question_no": 15,
+                "query": "15問に自由回答と個人情報は含まれますか？",
+                "expected_top_qa_id": "qa_free",
+                "ambiguous": True,
+            }
+        ],
+    )
+
+    payload = runner.run_eval(
+        cases=cases_path,
+        search_fn=lambda query, **kwargs: [_candidate("qa_free")],
+    )
+
+    result = payload["per_case"][0]
+    assert result["id"] == "ambiguous-1"
+    assert result["category"] == "multi-topic"
+    assert result["source_question_no"] == 15
+    assert result["ambiguous"] is True
+
+
+def test_expected_any_qa_ids_allows_alternate_top_candidate(tmp_path):
+    cases_path = tmp_path / "cases.jsonl"
+    _write_jsonl(
+        cases_path,
+        [
+            {
+                "query": "15問に自由回答と個人情報は含まれますか？",
+                "expected_top_qa_id": "qa_free",
+                "expected_any_qa_ids": ["qa_free", "qa_personal_info"],
+            }
+        ],
+    )
+
+    payload = runner.run_eval(
+        cases=cases_path,
+        search_fn=lambda query, **kwargs: [_candidate("qa_personal_info")],
+    )
+
+    result = payload["per_case"][0]
+    assert result["passed"] is True
+    assert result["expected_top_qa_id"] == "qa_free"
+    assert result["expected_any_qa_ids"] == ["qa_free", "qa_personal_info"]
+    assert result["actual_top_qa_id"] == "qa_personal_info"
+
+
+def test_expected_any_qa_ids_can_be_used_without_expected_top_qa_id(tmp_path):
+    cases_path = tmp_path / "cases.jsonl"
+    _write_jsonl(
+        cases_path,
+        [
+            {
+                "query": "ambiguous",
+                "expected_any_qa_ids": ["qa_a", "qa_b"],
+            }
+        ],
+    )
+
+    payload = runner.run_eval(
+        cases=cases_path,
+        search_fn=lambda query, **kwargs: [_candidate("qa_b")],
+    )
+
+    assert payload["per_case"][0]["passed"] is True
+    assert payload["per_case"][0]["expected_top_qa_id"] is None
+
+
+def test_top_answer_preview_uses_first_available_answer_key(tmp_path):
+    cases_path = tmp_path / "cases.jsonl"
+    _write_jsonl(cases_path, [{"query": "q", "expected_top_qa_id": "qa_top"}])
+
+    payload = runner.run_eval(
+        cases=cases_path,
+        search_fn=lambda query, **kwargs: [
+            _candidate(
+                "qa_top",
+                approved_answer_preview="",
+                answer_text_preview="answer text preview",
+                approved_answer="approved answer",
+                answer_text="answer text",
+            )
+        ],
+    )
+
+    result = payload["per_case"][0]
+    assert result["top_answer_preview"] == "answer text preview"
+    assert result["top_candidate"]["answer_preview"] == "answer text preview"
+
+
 def test_numeric_conflict_expectation_is_checked_on_top_candidate(tmp_path):
     cases_path = tmp_path / "cases.jsonl"
     _write_jsonl(
@@ -130,9 +227,15 @@ def test_json_report_shape_is_bounded_and_inspectable(tmp_path):
 
     result = payload["per_case"][0]
     assert set(result.keys()) == {
+        "id",
+        "category",
+        "source_question_no",
+        "ambiguous",
         "query",
         "expected_top_qa_id",
+        "expected_any_qa_ids",
         "actual_top_qa_id",
+        "top_answer_preview",
         "passed",
         "failure_reasons",
         "expected_numeric_conflict",
@@ -144,3 +247,4 @@ def test_json_report_shape_is_bounded_and_inspectable(tmp_path):
     assert len(result["top_candidate"]["matched_terms"]) == 8
     assert len(result["top_candidate"]["matched_fields"]) == 8
     assert len(result["top_candidate"]["synonym_matches"]) == 5
+    assert result["top_candidate"]["answer_preview"] == "answer qa_top"
