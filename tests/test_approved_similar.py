@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+import json
+
 from rag_core import approved_similar
 from rag_core.approved_similar import (
     build_approved_similar_candidate,
+    decide_approved_similar_candidate,
     score_approved_candidate_keyword,
     search_approved_similar_candidates,
 )
+
+
+def _write_keyword_profile(tmp_path, profile):
+    path = tmp_path / "weights.json"
+    path.write_text(json.dumps(profile, ensure_ascii=False), encoding="utf-8")
+    approved_similar._load_keyword_weight_profile.cache_clear()
+    return path
 
 
 def _meta(**overrides):
@@ -37,6 +47,28 @@ def _personal_info_meta(**overrides):
         approved_answer="個人情報は含まれません。",
         normalized_question="15問程度の項目に個人情報は含まれますか。",
     )
+    data.update(overrides)
+    return data
+
+
+def _decision_candidate(**overrides):
+    data = {
+        "qa_id": "qa_decision",
+        "question_text": "15問程度の項目はフリーアンサーも含まれますか。",
+        "approved_answer_preview": "フリーアンサーも含みます。",
+        "hybrid_score": 0.9,
+        "semantic_score": 0.88,
+        "keyword_score": 0.86,
+        "weighted_keyword_score": 0.87,
+        "top1_top2_margin": 0.12,
+        "numeric_conflict": False,
+        "negation_conflict": False,
+        "ambiguous": False,
+        "generic_matched_terms": ["設問"],
+        "specific_matched_terms": ["フリーアンサー"],
+        "matched_terms": ["設問", "フリーアンサー"],
+        "matched_fields": ["question_text"],
+    }
     data.update(overrides)
     return data
 
@@ -107,6 +139,196 @@ def test_keyword_score_handles_minimal_japanese_synonym_groups():
         match["query_term"] == "自由記述" and match["matched_synonym"] == "フリーアンサー"
         for match in related["synonym_matches"]
     )
+
+
+def test_keyword_score_without_profile_preserves_existing_score_shape(monkeypatch):
+    monkeypatch.delenv("APPROVED_SIMILAR_KEYWORD_WEIGHTS", raising=False)
+    approved_similar._load_keyword_weight_profile.cache_clear()
+
+    result = score_approved_candidate_keyword(
+        "15問に自由回答は入りますか？",
+        _meta(),
+        text="Q: 15問程度の項目はフリーアンサーも含まれるという認識で良いでしょうか。\nA: フリーアンサーも含みます。",
+    )
+
+    assert result["keyword_score"] == result["weighted_keyword_score"]
+    assert result["keyword_score"] > 0
+    assert result["keyword_weight_details"]
+    assert result["field_weight_details"]
+
+
+def test_keyword_profile_can_downweight_generic_terms(monkeypatch, tmp_path):
+    monkeypatch.delenv("APPROVED_SIMILAR_KEYWORD_WEIGHTS", raising=False)
+    approved_similar._load_keyword_weight_profile.cache_clear()
+    baseline = score_approved_candidate_keyword(
+        "アンケートは必要ですか？",
+        _meta(question_text="アンケートは必要ですか。", answer_text="必要です。"),
+    )
+    profile_path = _write_keyword_profile(
+        tmp_path,
+        {
+            "generic_terms": ["アンケート", "必要"],
+            "generic_multiplier": 0.2,
+            "field_weights": {"question_text": 1.0},
+        },
+    )
+    monkeypatch.setenv("APPROVED_SIMILAR_KEYWORD_WEIGHTS", str(profile_path))
+
+    weighted = score_approved_candidate_keyword(
+        "アンケートは必要ですか？",
+        _meta(question_text="アンケートは必要ですか。", answer_text="必要です。"),
+    )
+
+    assert weighted["keyword_score"] < baseline["keyword_score"]
+    assert "アンケート" in weighted["generic_matched_terms"]
+    assert any(detail["class_multiplier"] == 0.2 for detail in weighted["keyword_weight_details"])
+
+
+def test_keyword_profile_can_upweight_specific_terms(monkeypatch, tmp_path):
+    monkeypatch.delenv("APPROVED_SIMILAR_KEYWORD_WEIGHTS", raising=False)
+    approved_similar._load_keyword_weight_profile.cache_clear()
+    baseline = score_approved_candidate_keyword(
+        "個人情報は含まれますか？",
+        _personal_info_meta(),
+    )
+    profile_path = _write_keyword_profile(
+        tmp_path,
+        {
+            "specific_terms": ["個人情報"],
+            "specific_multiplier": 1.8,
+            "field_weights": {"question_text": 1.0},
+        },
+    )
+    monkeypatch.setenv("APPROVED_SIMILAR_KEYWORD_WEIGHTS", str(profile_path))
+
+    weighted = score_approved_candidate_keyword(
+        "個人情報は含まれますか？",
+        _personal_info_meta(),
+    )
+
+    assert weighted["keyword_score"] > baseline["keyword_score"]
+    assert "個人情報" in weighted["specific_matched_terms"]
+    assert any(detail["class_multiplier"] == 1.8 for detail in weighted["keyword_weight_details"])
+
+
+def test_answer_side_configured_terms_can_contribute(monkeypatch, tmp_path):
+    profile_path = _write_keyword_profile(
+        tmp_path,
+        {
+            "specific_terms": ["ウエイトバック"],
+            "specific_multiplier": 1.2,
+            "field_weights": {"approved_answer": 1.5},
+        },
+    )
+    monkeypatch.setenv("APPROVED_SIMILAR_KEYWORD_WEIGHTS", str(profile_path))
+
+    result = score_approved_candidate_keyword(
+        "ウエイトバックは必須ですか？",
+        _meta(
+            question_text="集計条件について確認します。",
+            answer_text="詳細は別途協議します。",
+            approved_answer="ウエイトバック集計は必須ではありません。",
+        ),
+    )
+
+    assert "approved_answer" in result["matched_fields"]
+    assert "ウエイトバック" in result["specific_matched_terms"]
+    assert any(
+        detail["field"] == "approved_answer" and detail["field_multiplier"] == 1.5
+        for detail in result["keyword_weight_details"]
+    )
+
+
+def test_candidate_debug_output_includes_weighting_evidence(monkeypatch):
+    monkeypatch.delenv("APPROVED_SIMILAR_KEYWORD_WEIGHTS", raising=False)
+    approved_similar._load_keyword_weight_profile.cache_clear()
+
+    candidate = build_approved_similar_candidate(
+        query="15問に自由回答は入りますか？",
+        text="Q: 15問程度の項目はフリーアンサーも含まれるという認識で良いでしょうか。\nA: フリーアンサーも含みます。",
+        metadata=_meta(),
+        distance=0.25,
+    ).to_dict()
+
+    assert candidate["weighted_keyword_score"] == candidate["keyword_score"]
+    assert candidate["keyword_weight_details"]
+    assert candidate["field_weight_details"]
+    assert "generic_matched_terms" in candidate
+    assert "specific_matched_terms" in candidate
+
+
+def test_decision_gate_no_candidates():
+    decision = decide_approved_similar_candidate([])
+
+    assert decision["route"] == "no_candidate"
+    assert decision["qa_id"] is None
+    assert decision["top_candidate_summary"] is None
+
+
+def test_decision_gate_numeric_conflict_blocks():
+    decision = decide_approved_similar_candidate(
+        [_decision_candidate(numeric_conflict=True, hybrid_score=0.99)]
+    )
+
+    assert decision["route"] == "numeric_conflict_blocked"
+    assert decision["blocking_flags"]["numeric_conflict"] is True
+    assert "numeric_conflict" in decision["reasons"][0]
+
+
+def test_decision_gate_negation_conflict_requires_review():
+    decision = decide_approved_similar_candidate(
+        [_decision_candidate(negation_conflict=True, hybrid_score=0.99)]
+    )
+
+    assert decision["route"] == "negation_conflict_review"
+    assert decision["blocking_flags"]["negation_conflict"] is True
+
+
+def test_decision_gate_ambiguous_multi_topic():
+    decision = decide_approved_similar_candidate(
+        [_decision_candidate(ambiguous=True, hybrid_score=0.99)]
+    )
+
+    assert decision["route"] == "ambiguous_multi_topic"
+    assert decision["blocking_flags"]["ambiguous"] is True
+
+
+def test_decision_gate_high_score_and_margin_allows_debug_high_confidence():
+    decision = decide_approved_similar_candidate([_decision_candidate()])
+
+    assert decision["route"] == "high_confidence_answer"
+    assert decision["qa_id"] == "qa_decision"
+    assert decision["confidence_like_score"] == 0.9
+    assert decision["score_snapshot"]["top1_top2_margin"] == 0.12
+    assert decision["top_candidate_summary"]["specific_matched_terms"] == ["フリーアンサー"]
+
+
+def test_decision_gate_low_margin_stays_candidate_only():
+    decision = decide_approved_similar_candidate(
+        [_decision_candidate(hybrid_score=0.95, top1_top2_margin=0.02)]
+    )
+
+    assert decision["route"] == "candidate_only"
+    assert "top1_top2_margin" in " ".join(decision["reasons"])
+
+
+def test_decision_gate_low_score_no_answer():
+    decision = decide_approved_similar_candidate(
+        [_decision_candidate(hybrid_score=0.2, top1_top2_margin=0.5)]
+    )
+
+    assert decision["route"] == "low_confidence_no_answer"
+    assert "low_confidence_score" in decision["reasons"][0]
+
+
+def test_decision_gate_accepts_threshold_overrides():
+    decision = decide_approved_similar_candidate(
+        [_decision_candidate(hybrid_score=0.7, top1_top2_margin=0.03)],
+        thresholds={"high_confidence_score": 0.65, "high_confidence_margin": 0.02},
+    )
+
+    assert decision["route"] == "high_confidence_answer"
+    assert decision["thresholds"]["high_confidence_score"] == 0.65
 
 
 def test_conflict_flags_are_exposed():
@@ -185,6 +407,8 @@ def test_search_candidates_calculates_margin_and_filters_qa_pairs(monkeypatch):
     assert [candidate["qa_id"] for candidate in candidates] == ["qa_free_answer", "qa_shipping"]
     assert candidates[0]["top1_top2_margin"] is not None
     assert candidates[0]["margin_score_basis"] == "hybrid_score"
+    assert "weighted_keyword_score" in candidates[0]
+    assert "specific_matched_terms" in candidates[0]
     assert all(candidate["chunk_type"] == "qa_pair" for candidate in candidates)
 
 
