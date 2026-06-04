@@ -19,6 +19,41 @@ _DEFAULT_DECISION_THRESHOLDS = {
     "high_confidence_score": 0.82,
     "high_confidence_margin": 0.08,
     "low_confidence_score": 0.45,
+    "numeric_conflict_route": "numeric_conflict_blocked",
+    "negation_conflict_route": "negation_conflict_review",
+    "ambiguous_route": "ambiguous_multi_topic",
+    "require_specific_terms_for_high_confidence": False,
+    "min_specific_terms_for_high_confidence": 0,
+    "allow_high_confidence_when_margin_missing": False,
+}
+_KNOWN_DECISION_ROUTES = {
+    "high_confidence_answer",
+    "candidate_only",
+    "ambiguous_multi_topic",
+    "numeric_conflict_blocked",
+    "negation_conflict_review",
+    "low_confidence_no_answer",
+    "no_candidate",
+}
+_DECISION_CONFIG_KEY_MAP = {
+    "high_confidence_min_hybrid": "high_confidence_score",
+    "high_confidence_min_margin": "high_confidence_margin",
+    "low_confidence_max_hybrid": "low_confidence_score",
+}
+_DECISION_FLOAT_KEYS = {
+    "high_confidence_score",
+    "high_confidence_margin",
+    "low_confidence_score",
+    "high_confidence_min_hybrid",
+    "high_confidence_min_semantic",
+    "high_confidence_min_keyword",
+    "high_confidence_min_weighted_keyword",
+    "high_confidence_min_margin",
+    "low_confidence_max_hybrid",
+}
+_DECISION_BOOL_KEYS = {
+    "require_specific_terms_for_high_confidence",
+    "allow_high_confidence_when_margin_missing",
 }
 _NEGATION_TERMS = ("ない", "不要", "不可", "できない", "しない", "含まない", "含まれない", "含まれません", "対象外")
 _GENERIC_MATCH_TERMS = {
@@ -218,6 +253,111 @@ def _load_keyword_weight_profile(path: str | None) -> Dict[str, Any] | None:
 
 def _keyword_weight_profile() -> Dict[str, Any] | None:
     return _load_keyword_weight_profile(_configured_keyword_profile_path())
+
+
+def _configured_decision_thresholds_path() -> str | None:
+    raw = config.getenv_first("APPROVED_SIMILAR_DECISION_THRESHOLDS", default=None)
+    if raw is None or str(raw).strip() == "":
+        return None
+    path = Path(str(raw).strip())
+    if not path.is_absolute():
+        path = config.BASE_DIR / path
+    return str(path)
+
+
+@lru_cache(maxsize=8)
+def _load_decision_threshold_config(path: str | None) -> Dict[str, Any] | None:
+    if not path:
+        return None
+    with Path(path).open("r", encoding="utf-8") as f:
+        raw = json.load(f)
+    if not isinstance(raw, dict):
+        raise ValueError(f"approved similar decision thresholds must be a JSON object: {path}")
+    allowed = (
+        _DECISION_FLOAT_KEYS
+        | _DECISION_BOOL_KEYS
+        | {
+            "version",
+            "profile_name",
+            "description",
+            "numeric_conflict_route",
+            "negation_conflict_route",
+            "ambiguous_route",
+            "min_specific_terms_for_high_confidence",
+        }
+    )
+    unknown = sorted(str(key) for key in raw if str(key) not in allowed)
+    if unknown:
+        raise ValueError(f"unknown approved similar decision threshold keys: {unknown[:8]}")
+    policy: Dict[str, Any] = {
+        "threshold_source": "config_file",
+        "threshold_profile_name": str(raw.get("profile_name") or Path(path).stem),
+        "threshold_profile_path": path,
+    }
+    for key in _DECISION_FLOAT_KEYS:
+        if key in raw and raw[key] is not None:
+            policy[key] = float(raw[key])
+            if key in _DECISION_CONFIG_KEY_MAP:
+                policy[_DECISION_CONFIG_KEY_MAP[key]] = float(raw[key])
+    for key in _DECISION_BOOL_KEYS:
+        if key in raw:
+            policy[key] = bool(raw[key])
+    if "min_specific_terms_for_high_confidence" in raw:
+        policy["min_specific_terms_for_high_confidence"] = int(raw["min_specific_terms_for_high_confidence"])
+    for key in ("numeric_conflict_route", "negation_conflict_route", "ambiguous_route"):
+        if key in raw:
+            route = str(raw[key])
+            if route not in _KNOWN_DECISION_ROUTES:
+                raise ValueError(f"invalid approved similar decision route for {key}: {route}")
+            policy[key] = route
+    return policy
+
+
+def _decision_threshold_policy(thresholds: Dict[str, Any] | None) -> Dict[str, Any]:
+    policy: Dict[str, Any] = dict(_DEFAULT_DECISION_THRESHOLDS)
+    policy.update(
+        {
+            "threshold_source": "default",
+            "threshold_profile_name": None,
+            "threshold_profile_path": None,
+        }
+    )
+    if thresholds is None:
+        loaded = _load_decision_threshold_config(_configured_decision_thresholds_path())
+        if loaded:
+            policy.update(loaded)
+    else:
+        policy.update(
+            {
+                "threshold_source": "explicit_dict",
+                "threshold_profile_name": None,
+                "threshold_profile_path": None,
+            }
+        )
+        for key, value in thresholds.items():
+            mapped_key = _DECISION_CONFIG_KEY_MAP.get(str(key), str(key))
+            if mapped_key in _DECISION_FLOAT_KEYS or mapped_key in {
+                "high_confidence_score",
+                "high_confidence_margin",
+                "low_confidence_score",
+            }:
+                policy[mapped_key] = float(value)
+            elif mapped_key in _DECISION_BOOL_KEYS:
+                policy[mapped_key] = bool(value)
+            elif mapped_key == "min_specific_terms_for_high_confidence":
+                policy[mapped_key] = int(value)
+            elif mapped_key in {"numeric_conflict_route", "negation_conflict_route", "ambiguous_route"}:
+                route = str(value)
+                if route not in _KNOWN_DECISION_ROUTES:
+                    raise ValueError(f"invalid approved similar decision route for {mapped_key}: {route}")
+                policy[mapped_key] = route
+            else:
+                raise ValueError(f"unknown approved similar decision threshold key: {mapped_key}")
+    for key in ("numeric_conflict_route", "negation_conflict_route", "ambiguous_route"):
+        route = str(policy[key])
+        if route not in _KNOWN_DECISION_ROUTES:
+            raise ValueError(f"invalid approved similar decision route for {key}: {route}")
+    return policy
 
 
 def _jsonish(value: Any) -> Any:
@@ -603,6 +743,55 @@ def _score_snapshot(candidate: Dict[str, Any]) -> Dict[str, float | None]:
     }
 
 
+def _high_confidence_failures(
+    *,
+    confidence_like_score: float | None,
+    score_snapshot: Dict[str, float | None],
+    margin: float | None,
+    specific_term_count: int,
+    policy: Dict[str, Any],
+) -> List[str]:
+    failures: List[str] = []
+    checks = (
+        ("hybrid_score", "high_confidence_min_hybrid"),
+        ("semantic_score", "high_confidence_min_semantic"),
+        ("keyword_score", "high_confidence_min_keyword"),
+        ("weighted_keyword_score", "high_confidence_min_weighted_keyword"),
+    )
+    checked_any = False
+    for score_key, threshold_key in checks:
+        if threshold_key not in policy:
+            continue
+        checked_any = True
+        value = score_snapshot.get(score_key)
+        threshold = float(policy[threshold_key])
+        if value is None:
+            failures.append(f"{score_key} unavailable for {threshold_key}")
+        elif value < threshold:
+            failures.append(f"{score_key} {value:.6f} below {threshold_key} {threshold:.6f}")
+    if not checked_any:
+        if confidence_like_score is None:
+            failures.append("confidence_like_score unavailable")
+        elif confidence_like_score < float(policy["high_confidence_score"]):
+            failures.append(
+                f"confidence_like_score {confidence_like_score:.6f} below high_confidence_score "
+                f"{float(policy['high_confidence_score']):.6f}"
+            )
+    margin_threshold = float(policy.get("high_confidence_min_margin", policy["high_confidence_margin"]))
+    if margin is None:
+        if not bool(policy.get("allow_high_confidence_when_margin_missing", False)):
+            failures.append("top1_top2_margin unavailable")
+    elif margin < margin_threshold:
+        failures.append(f"top1_top2_margin {margin:.6f} below high confidence margin {margin_threshold:.6f}")
+    if bool(policy.get("require_specific_terms_for_high_confidence", False)):
+        min_specific = int(policy.get("min_specific_terms_for_high_confidence", 1))
+        if specific_term_count < min_specific:
+            failures.append(
+                f"specific_matched_terms count {specific_term_count} below required minimum {min_specific}"
+            )
+    return failures
+
+
 def _top_candidate_summary(candidate: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "qa_id": candidate.get("qa_id"),
@@ -626,11 +815,9 @@ def _top_candidate_summary(candidate: Dict[str, Any]) -> Dict[str, Any]:
 def decide_approved_similar_candidate(
     candidates: Sequence[Dict[str, Any]],
     *,
-    thresholds: Dict[str, float] | None = None,
+    thresholds: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    effective_thresholds = dict(_DEFAULT_DECISION_THRESHOLDS)
-    if thresholds:
-        effective_thresholds.update({str(key): float(value) for key, value in thresholds.items()})
+    effective_thresholds = _decision_threshold_policy(thresholds)
 
     if not candidates:
         return {
@@ -646,6 +833,9 @@ def decide_approved_similar_candidate(
             "score_snapshot": {},
             "top_candidate_summary": None,
             "thresholds": effective_thresholds,
+            "threshold_source": effective_thresholds["threshold_source"],
+            "threshold_profile_name": effective_thresholds["threshold_profile_name"],
+            "threshold_profile_path": effective_thresholds["threshold_profile_path"],
         }
 
     top = dict(candidates[0] or {})
@@ -662,17 +852,18 @@ def decide_approved_similar_candidate(
     }
     score_snapshot = _score_snapshot(top)
     top_summary = _top_candidate_summary(top)
+    specific_term_count = len(top_summary["specific_matched_terms"])
 
     route = "candidate_only"
     reasons: List[str] = []
     if numeric_conflict:
-        route = "numeric_conflict_blocked"
+        route = str(effective_thresholds["numeric_conflict_route"])
         reasons.append("top candidate has numeric_conflict")
     elif negation_conflict:
-        route = "negation_conflict_review"
+        route = str(effective_thresholds["negation_conflict_route"])
         reasons.append("top candidate has negation_conflict")
     elif ambiguous:
-        route = "ambiguous_multi_topic"
+        route = str(effective_thresholds["ambiguous_route"])
         reasons.append("top candidate is marked ambiguous")
     elif score is None:
         route = "low_confidence_no_answer"
@@ -683,26 +874,19 @@ def decide_approved_similar_candidate(
             f"confidence_like_score {score:.6f} below low_confidence_score "
             f"{effective_thresholds['low_confidence_score']:.6f}"
         )
-    elif score >= effective_thresholds["high_confidence_score"] and (
-        margin is not None and margin >= effective_thresholds["high_confidence_margin"]
+    elif not (
+        high_confidence_failures := _high_confidence_failures(
+            confidence_like_score=score,
+            score_snapshot=score_snapshot,
+            margin=margin,
+            specific_term_count=specific_term_count,
+            policy=effective_thresholds,
+        )
     ):
         route = "high_confidence_answer"
-        reasons.append(
-            f"confidence_like_score {score:.6f} and margin {margin:.6f} meet high confidence thresholds"
-        )
+        reasons.append("top candidate meets high confidence decision thresholds")
     else:
-        if score < effective_thresholds["high_confidence_score"]:
-            reasons.append(
-                f"confidence_like_score {score:.6f} below high_confidence_score "
-                f"{effective_thresholds['high_confidence_score']:.6f}"
-            )
-        if margin is None:
-            reasons.append("top1_top2_margin unavailable")
-        elif margin < effective_thresholds["high_confidence_margin"]:
-            reasons.append(
-                f"top1_top2_margin {margin:.6f} below high_confidence_margin "
-                f"{effective_thresholds['high_confidence_margin']:.6f}"
-            )
+        reasons.extend(high_confidence_failures)
 
     return {
         "route": route,
@@ -713,6 +897,9 @@ def decide_approved_similar_candidate(
         "score_snapshot": score_snapshot,
         "top_candidate_summary": top_summary,
         "thresholds": effective_thresholds,
+        "threshold_source": effective_thresholds["threshold_source"],
+        "threshold_profile_name": effective_thresholds["threshold_profile_name"],
+        "threshold_profile_path": effective_thresholds["threshold_profile_path"],
     }
 
 

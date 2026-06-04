@@ -71,6 +71,19 @@ def test_decision_eval_route_counts_and_report_files(tmp_path, monkeypatch):
     monkeypatch.setenv("APPROVED_SIMILAR_KEYWORD_WEIGHTS", "original.json")
     profile_path = tmp_path / "weights.json"
     profile_path.write_text("{}", encoding="utf-8")
+    thresholds_path = tmp_path / "thresholds.json"
+    thresholds_path.write_text(
+        json.dumps(
+            {
+                "profile_name": "decision_test",
+                "high_confidence_min_hybrid": 0.82,
+                "high_confidence_min_margin": 0.08,
+                "low_confidence_max_hybrid": 0.45,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     output_json = tmp_path / "decision.json"
     output_md = tmp_path / "decision.md"
 
@@ -78,6 +91,7 @@ def test_decision_eval_route_counts_and_report_files(tmp_path, monkeypatch):
         cases=cases_path,
         collection="approved_qa_pdf45",
         profile=str(profile_path),
+        thresholds=str(thresholds_path),
         top_k=2,
         output_json=output_json,
         output_md=output_md,
@@ -85,8 +99,11 @@ def test_decision_eval_route_counts_and_report_files(tmp_path, monkeypatch):
     )
 
     assert os.environ["APPROVED_SIMILAR_KEYWORD_WEIGHTS"] == "original.json"
+    assert "APPROVED_SIMILAR_DECISION_THRESHOLDS" not in os.environ
     assert json.loads(output_json.read_text(encoding="utf-8")) == report
-    assert "# approved_similar_candidate Decision Eval" in output_md.read_text(encoding="utf-8")
+    md_text = output_md.read_text(encoding="utf-8")
+    assert "# approved_similar_candidate Decision Eval" in md_text
+    assert "decision_test" in md_text
 
     summary = report["summary"]
     assert summary["total"] == 6
@@ -107,6 +124,8 @@ def test_decision_eval_route_counts_and_report_files(tmp_path, monkeypatch):
     assert summary["failed_high_confidence_cases"][0]["id"] == "fail_high"
     assert summary["passed_blocked_or_reviewed_cases"][0]["id"] == "numeric"
     assert report["per_case"][0]["decision"]["route"] == "high_confidence_answer"
+    assert report["per_case"][0]["decision"]["threshold_source"] == "config_file"
+    assert report["threshold_info"]["threshold_profile_name"] == "decision_test"
     assert report["per_case"][0]["top_candidate_summary"]["specific_matched_terms"] == ["自由回答"]
 
 
