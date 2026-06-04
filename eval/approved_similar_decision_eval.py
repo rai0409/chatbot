@@ -25,9 +25,18 @@ def _inc(mapping: Dict[str, int], key: str) -> None:
 def _clear_profile_cache() -> None:
     if hasattr(approved_similar, "_load_keyword_weight_profile"):
         approved_similar._load_keyword_weight_profile.cache_clear()
+    if hasattr(approved_similar, "_load_decision_threshold_config"):
+        approved_similar._load_decision_threshold_config.cache_clear()
 
 
-def _case_decision_record(case: Dict[str, Any], *, collection: str | None, top_k: int, search_fn) -> Dict[str, Any]:
+def _case_decision_record(
+    case: Dict[str, Any],
+    *,
+    collection: str | None,
+    top_k: int,
+    search_fn,
+    thresholds: Dict[str, Any] | None,
+) -> Dict[str, Any]:
     result = approved_similar_candidate_runner.evaluate_case(
         case,
         collection=collection,
@@ -37,7 +46,7 @@ def _case_decision_record(case: Dict[str, Any], *, collection: str | None, top_k
     candidates = [dict(candidate or {}) for candidate in result.get("candidates") or []]
     if candidates:
         candidates[0]["ambiguous"] = bool(result.get("ambiguous", False))
-    decision = decide_approved_similar_candidate(candidates)
+    decision = decide_approved_similar_candidate(candidates, thresholds=thresholds)
     top = result.get("top_candidate") or {}
     return {
         "id": result.get("id"),
@@ -131,6 +140,7 @@ def run_decision_eval(
     cases: str | Path,
     collection: str | None = None,
     profile: str | None = None,
+    thresholds: str | None = None,
     top_k: int = 5,
     output_json: str | Path | None = None,
     output_md: str | Path | None = None,
@@ -138,21 +148,36 @@ def run_decision_eval(
 ) -> Dict[str, Any]:
     previous_env = os.environ.get("APPROVED_SIMILAR_KEYWORD_WEIGHTS")
     previous_present = "APPROVED_SIMILAR_KEYWORD_WEIGHTS" in os.environ
+    previous_thresholds_env = os.environ.get("APPROVED_SIMILAR_DECISION_THRESHOLDS")
+    previous_thresholds_present = "APPROVED_SIMILAR_DECISION_THRESHOLDS" in os.environ
     try:
         if profile:
             os.environ["APPROVED_SIMILAR_KEYWORD_WEIGHTS"] = str(profile)
         else:
             os.environ.pop("APPROVED_SIMILAR_KEYWORD_WEIGHTS", None)
+        if thresholds:
+            os.environ["APPROVED_SIMILAR_DECISION_THRESHOLDS"] = str(thresholds)
+        else:
+            os.environ.pop("APPROVED_SIMILAR_DECISION_THRESHOLDS", None)
         _clear_profile_cache()
 
         records = [
-            _case_decision_record(case, collection=collection, top_k=top_k, search_fn=search_fn)
+            _case_decision_record(
+                case,
+                collection=collection,
+                top_k=top_k,
+                search_fn=search_fn,
+                thresholds=None,
+            )
             for case in approved_similar_candidate_runner.load_cases(cases)
         ]
+        threshold_info = _threshold_info(records)
         report = {
             "cases": str(cases),
             "collection": collection,
             "profile": profile,
+            "thresholds": thresholds,
+            "threshold_info": threshold_info,
             "top_k": top_k,
             "summary": _summarize(records),
             "per_case": records,
@@ -162,6 +187,10 @@ def run_decision_eval(
             os.environ["APPROVED_SIMILAR_KEYWORD_WEIGHTS"] = str(previous_env)
         else:
             os.environ.pop("APPROVED_SIMILAR_KEYWORD_WEIGHTS", None)
+        if previous_thresholds_present:
+            os.environ["APPROVED_SIMILAR_DECISION_THRESHOLDS"] = str(previous_thresholds_env)
+        else:
+            os.environ.pop("APPROVED_SIMILAR_DECISION_THRESHOLDS", None)
         _clear_profile_cache()
 
     if output_json is not None:
@@ -175,6 +204,21 @@ def run_decision_eval(
     return report
 
 
+def _threshold_info(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    if not records:
+        return {
+            "threshold_source": None,
+            "threshold_profile_name": None,
+            "threshold_profile_path": None,
+        }
+    decision = records[0].get("decision") or {}
+    return {
+        "threshold_source": decision.get("threshold_source"),
+        "threshold_profile_name": decision.get("threshold_profile_name"),
+        "threshold_profile_path": decision.get("threshold_profile_path"),
+    }
+
+
 def render_markdown(report: Dict[str, Any]) -> str:
     summary = report.get("summary") or {}
     lines = [
@@ -183,6 +227,9 @@ def render_markdown(report: Dict[str, Any]) -> str:
         f"- cases: `{report.get('cases')}`",
         f"- collection: `{report.get('collection')}`",
         f"- profile: `{report.get('profile')}`",
+        f"- thresholds: `{report.get('thresholds')}`",
+        f"- threshold_source: `{(report.get('threshold_info') or {}).get('threshold_source')}`",
+        f"- threshold_profile_name: `{(report.get('threshold_info') or {}).get('threshold_profile_name')}`",
         f"- top_k: `{report.get('top_k')}`",
         "",
         "## Summary",
@@ -226,6 +273,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cases", required=True)
     parser.add_argument("--collection", default=None)
     parser.add_argument("--profile", default=None)
+    parser.add_argument("--thresholds", default=None)
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--output-md", required=True)
@@ -235,6 +283,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         cases=args.cases,
         collection=args.collection,
         profile=args.profile,
+        thresholds=args.thresholds,
         top_k=args.top_k,
         output_json=args.output_json,
         output_md=args.output_md,

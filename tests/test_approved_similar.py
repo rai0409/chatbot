@@ -18,6 +18,13 @@ def _write_keyword_profile(tmp_path, profile):
     return path
 
 
+def _write_decision_thresholds(tmp_path, profile):
+    path = tmp_path / "decision_thresholds.json"
+    path.write_text(json.dumps(profile, ensure_ascii=False), encoding="utf-8")
+    approved_similar._load_decision_threshold_config.cache_clear()
+    return path
+
+
 def _meta(**overrides):
     data = {
         "id": "approved_qa_pair:qa_free_answer",
@@ -301,6 +308,7 @@ def test_decision_gate_high_score_and_margin_allows_debug_high_confidence():
     assert decision["confidence_like_score"] == 0.9
     assert decision["score_snapshot"]["top1_top2_margin"] == 0.12
     assert decision["top_candidate_summary"]["specific_matched_terms"] == ["フリーアンサー"]
+    assert decision["threshold_source"] == "default"
 
 
 def test_decision_gate_low_margin_stays_candidate_only():
@@ -329,6 +337,75 @@ def test_decision_gate_accepts_threshold_overrides():
 
     assert decision["route"] == "high_confidence_answer"
     assert decision["thresholds"]["high_confidence_score"] == 0.65
+    assert decision["threshold_source"] == "explicit_dict"
+
+
+def test_decision_gate_loads_config_file_thresholds(monkeypatch, tmp_path):
+    threshold_path = _write_decision_thresholds(
+        tmp_path,
+        {
+            "profile_name": "strict_for_test",
+            "high_confidence_min_hybrid": 0.95,
+            "high_confidence_min_margin": 0.08,
+            "low_confidence_max_hybrid": 0.45,
+            "numeric_conflict_route": "numeric_conflict_blocked",
+            "negation_conflict_route": "negation_conflict_review",
+            "ambiguous_route": "ambiguous_multi_topic",
+            "require_specific_terms_for_high_confidence": True,
+            "min_specific_terms_for_high_confidence": 2,
+            "allow_high_confidence_when_margin_missing": False,
+        },
+    )
+    monkeypatch.setenv("APPROVED_SIMILAR_DECISION_THRESHOLDS", str(threshold_path))
+
+    decision = decide_approved_similar_candidate([_decision_candidate()])
+
+    assert decision["route"] == "candidate_only"
+    assert decision["threshold_source"] == "config_file"
+    assert decision["threshold_profile_name"] == "strict_for_test"
+    assert decision["threshold_profile_path"] == str(threshold_path)
+    assert any("high_confidence_min_hybrid" in reason for reason in decision["reasons"])
+    assert any("specific_matched_terms" in reason for reason in decision["reasons"])
+
+
+def test_decision_gate_explicit_thresholds_override_config(monkeypatch, tmp_path):
+    threshold_path = _write_decision_thresholds(
+        tmp_path,
+        {
+            "profile_name": "strict_for_test",
+            "high_confidence_min_hybrid": 0.99,
+            "high_confidence_min_margin": 0.5,
+            "low_confidence_max_hybrid": 0.45,
+        },
+    )
+    monkeypatch.setenv("APPROVED_SIMILAR_DECISION_THRESHOLDS", str(threshold_path))
+
+    decision = decide_approved_similar_candidate(
+        [_decision_candidate(hybrid_score=0.7, top1_top2_margin=0.03)],
+        thresholds={"high_confidence_score": 0.65, "high_confidence_margin": 0.02},
+    )
+
+    assert decision["route"] == "high_confidence_answer"
+    assert decision["threshold_source"] == "explicit_dict"
+    assert decision["threshold_profile_path"] is None
+
+
+def test_decision_gate_invalid_config_route_fails_clearly(monkeypatch, tmp_path):
+    threshold_path = _write_decision_thresholds(
+        tmp_path,
+        {
+            "profile_name": "bad_route",
+            "numeric_conflict_route": "auto_answer_everything",
+        },
+    )
+    monkeypatch.setenv("APPROVED_SIMILAR_DECISION_THRESHOLDS", str(threshold_path))
+
+    try:
+        decide_approved_similar_candidate([_decision_candidate(numeric_conflict=True)])
+    except ValueError as exc:
+        assert "invalid approved similar decision route" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
 
 
 def test_conflict_flags_are_exposed():
