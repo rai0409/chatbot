@@ -15,7 +15,11 @@ import config
 from rag_core import approved_similar
 from rag_core.approved_similar import search_approved_similar_candidates
 from rag_core.approved_qa import ApprovedAnswer, ApprovedQAIndex, load_approved_qa, lookup_approved_answer
-from rag_core.audit_log import append_audit_event, append_product_preview_chat_audit_event
+from rag_core.audit_log import (
+    append_audit_event,
+    append_feedback_audit_event,
+    append_product_preview_chat_audit_event,
+)
 from rag_core.product_contract import (
     ANSWER_MODE_APPROVED_EXACT_MATCH,
     ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY,
@@ -40,6 +44,12 @@ _total_requests = 0
 _error_requests = 0
 _approved_qa_index: ApprovedQAIndex | None = None
 _approved_qa_index_path: str | None = None
+_ALLOWED_FEEDBACK_TYPES = {
+    "good",
+    "bad",
+    "neutral",
+    "human_review_requested",
+}
 
 
 class ChatRequest(BaseModel):
@@ -73,6 +83,19 @@ class ProductPreviewChatRequest(BaseModel):
     top_k: Optional[int] = 3
     keyword_profile: Optional[str] = None
     threshold_profile: Optional[str] = None
+
+
+class ProductFeedbackRequest(BaseModel):
+    feedback_token: str
+    feedback_type: str
+    request_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    tenant_id: Optional[str] = "default"
+    selected_candidate_id: Optional[str] = None
+    shown_candidate_ids: Optional[List[str]] = None
+    shown_rank: Optional[int] = None
+    bad_reason: Optional[str] = None
+    comment: Optional[str] = None
 
 
 @contextmanager
@@ -328,6 +351,46 @@ def _append_product_preview_audit(decision: Dict[str, Any], audit_payload: Dict[
     return ["product_preview_audit_logging_failed"]
 
 
+def _bounded_text(value: Any, max_chars: int = 1000) -> str | None:
+    if value is None:
+        return None
+    return _preview(str(value), max_chars)
+
+
+def _bounded_id_list(values: Any, limit: int = 20) -> List[str]:
+    if not isinstance(values, list):
+        return []
+    out: List[str] = []
+    for value in values[:limit]:
+        text = _bounded_text(value, 1000)
+        if text:
+            out.append(text)
+    return out
+
+
+def _feedback_audit_event(
+    req: ProductFeedbackRequest,
+    *,
+    feedback_token: str | None = None,
+    feedback_type: str | None = None,
+) -> Dict[str, Any]:
+    normalized_feedback_token = (
+        feedback_token if feedback_token is not None else req.feedback_token
+    )
+    return {
+        "feedback_token": _bounded_text(normalized_feedback_token, 1000),
+        "feedback_type": feedback_type if feedback_type is not None else req.feedback_type,
+        "request_id": _bounded_text(req.request_id, 1000),
+        "trace_id": _bounded_text(req.trace_id, 1000),
+        "tenant_id": _bounded_text(req.tenant_id or "default", 1000) or "default",
+        "selected_candidate_id": _bounded_text(req.selected_candidate_id, 1000),
+        "shown_candidate_ids": _bounded_id_list(req.shown_candidate_ids),
+        "shown_rank": req.shown_rank,
+        "bad_reason": _bounded_text(req.bad_reason, 1000),
+        "comment": _bounded_text(req.comment, 1000),
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -579,6 +642,32 @@ def chat_product_preview(req: ProductPreviewChatRequest):
         _error_requests += 1
         logging.exception("chat_product_preview failed trace_id=%s", trace_id)
         raise HTTPException(status_code=500, detail="internal error")
+
+
+@app.post("/chat/feedback")
+def chat_feedback(req: ProductFeedbackRequest):
+    feedback_token = str(req.feedback_token or "").strip()
+    feedback_type = str(req.feedback_type or "").strip()
+    if not feedback_token:
+        raise HTTPException(status_code=400, detail="feedback_token is required")
+    if feedback_type not in _ALLOWED_FEEDBACK_TYPES:
+        raise HTTPException(status_code=400, detail="invalid feedback_type")
+
+    event = _feedback_audit_event(
+        req,
+        feedback_token=feedback_token,
+        feedback_type=feedback_type,
+    )
+    stored = append_feedback_audit_event(event)
+    response: Dict[str, Any] = {
+        "ok": True,
+        "feedback_token": event["feedback_token"],
+        "feedback_type": feedback_type,
+        "stored": stored,
+    }
+    if not stored:
+        response["warning"] = "feedback_logging_failed"
+    return response
 
 
 @app.post("/search")
