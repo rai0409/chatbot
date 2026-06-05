@@ -59,3 +59,19 @@ def append_audit_event(kind: str, event: dict) -> None:
             f.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
     except Exception:
         return
+
+
+def append_product_preview_chat_audit_event(event: dict) -> bool:
+    try:
+        if not getattr(config, "AUDIT_CHAT_ENABLED", True):
+            return True
+        path = Path(config.RUNS_DIR) / "audit" / "chat_events.jsonl"
+        payload = _bounded(dict(event or {}))
+        payload.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        payload["kind"] = "product_preview_chat"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+        return True
+    except Exception:
+        return False

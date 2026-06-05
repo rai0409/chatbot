@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi import HTTPException
 
+import config
+from rag_core import audit_log
 from rag_core.approved_qa import ApprovedAnswer, ApprovedCitation
 from webapi import main
 
@@ -21,6 +25,11 @@ REQUIRED_ENVELOPE_KEYS = {
     "warnings",
     "feedback_token",
 }
+
+
+@pytest.fixture(autouse=True)
+def _disable_product_preview_audit_write(monkeypatch):
+    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", lambda event: True)
 
 
 def _disable_exact(monkeypatch):
@@ -176,3 +185,99 @@ def test_product_preview_exact_match_returns_exact_answer(monkeypatch):
     assert response["confidence_route"] == "exact_match"
     assert response["answer_text"] == "完全一致の承認済み回答です。"
     assert response["candidates"] == []
+
+
+def test_product_preview_appends_bounded_jsonl_audit_event(monkeypatch, tmp_path):
+    _disable_exact(monkeypatch)
+    monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", audit_log.append_product_preview_chat_audit_event)
+    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(main.approved_similar, "decide_approved_similar_candidate", _fake_decision)
+    monkeypatch.setattr(
+        main.approved_similar,
+        "search_approved_similar_candidates",
+        lambda *args, **kwargs: [
+            {
+                "qa_id": "qa-audit",
+                "question_text": "監査対象",
+                "approved_answer_preview": "このプレビュー本文は監査ログに入れません。",
+            }
+        ],
+    )
+
+    response = main.chat_product_preview(
+        main.ProductPreviewChatRequest(query="監査ログを書きます", top_k=1)
+    )
+
+    audit_path = tmp_path / "runs" / "audit" / "chat_events.jsonl"
+    lines = audit_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    event = json.loads(lines[0])
+    required = {
+        "request_id",
+        "trace_id",
+        "tenant_id",
+        "user_query",
+        "answer_mode",
+        "selected_qa_id",
+        "candidate_ids",
+        "decision_route",
+        "keyword_profile",
+        "threshold_profile",
+        "latency_ms",
+        "timestamp",
+        "feedback_token",
+    }
+    assert required <= set(event)
+    assert event["kind"] == "product_preview_chat"
+    assert event["feedback_token"] == response["feedback_token"]
+    assert event["candidate_ids"] == ["qa-audit"]
+    assert event["candidate_count"] == 1
+    assert event["top_k"] == 1
+    assert event["auto_answer_suppressed_for_similar_candidates"] is True
+    assert event["exact_match_checked"] is True
+    assert "このプレビュー本文" not in lines[0]
+
+
+def test_product_preview_audit_bounds_user_query(monkeypatch, tmp_path):
+    _disable_exact(monkeypatch)
+    monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", audit_log.append_product_preview_chat_audit_event)
+    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(main.approved_similar, "search_approved_similar_candidates", lambda *args, **kwargs: [])
+    query = "長い質問" * 200
+
+    main.chat_product_preview(main.ProductPreviewChatRequest(query=query))
+
+    event = json.loads((tmp_path / "runs" / "audit" / "chat_events.jsonl").read_text(encoding="utf-8"))
+    assert len(event["user_query"]) <= 500
+    assert event["user_query"].endswith("...[truncated]")
+
+
+def test_product_preview_no_candidate_fallback_writes_audit_event(monkeypatch, tmp_path):
+    _disable_exact(monkeypatch)
+    monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", audit_log.append_product_preview_chat_audit_event)
+    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(main.approved_similar, "search_approved_similar_candidates", lambda *args, **kwargs: [])
+
+    response = main.chat_product_preview(main.ProductPreviewChatRequest(query="候補なし"))
+
+    event = json.loads((tmp_path / "runs" / "audit" / "chat_events.jsonl").read_text(encoding="utf-8"))
+    assert response["answer_mode"] == "fallback_no_answer"
+    assert event["answer_mode"] == "fallback_no_answer"
+    assert event["candidate_ids"] == []
+    assert event["candidate_count"] == 0
+
+
+def test_product_preview_audit_write_failure_does_not_fail_endpoint(monkeypatch):
+    _disable_exact(monkeypatch)
+    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", lambda event: False)
+    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(main.approved_similar, "search_approved_similar_candidates", lambda *args, **kwargs: [])
+
+    response = main.chat_product_preview(main.ProductPreviewChatRequest(query="監査失敗"))
+
+    assert response["answer_mode"] == "fallback_no_answer"
+    assert response["decision"]["audit_persisted"] is False
+    assert "product_preview_audit_logging_failed" in response["warnings"]

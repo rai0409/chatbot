@@ -15,7 +15,7 @@ import config
 from rag_core import approved_similar
 from rag_core.approved_similar import search_approved_similar_candidates
 from rag_core.approved_qa import ApprovedAnswer, ApprovedQAIndex, load_approved_qa, lookup_approved_answer
-from rag_core.audit_log import append_audit_event
+from rag_core.audit_log import append_audit_event, append_product_preview_chat_audit_event
 from rag_core.product_contract import (
     ANSWER_MODE_APPROVED_EXACT_MATCH,
     ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY,
@@ -300,6 +300,34 @@ def _product_preview_decision_metadata(
     }
 
 
+def _product_preview_audit_payload(
+    audit_event: Dict[str, Any],
+    *,
+    candidate_count: int,
+    top_k: int,
+    auto_answer_suppressed_for_similar_candidates: bool,
+    exact_match_checked: bool,
+) -> Dict[str, Any]:
+    payload = dict(audit_event or {})
+    payload.update(
+        {
+            "candidate_count": candidate_count,
+            "top_k": top_k,
+            "auto_answer_suppressed_for_similar_candidates": auto_answer_suppressed_for_similar_candidates,
+            "exact_match_checked": exact_match_checked,
+        }
+    )
+    return payload
+
+
+def _append_product_preview_audit(decision: Dict[str, Any], audit_payload: Dict[str, Any]) -> List[str]:
+    if append_product_preview_chat_audit_event(audit_payload):
+        decision["audit_persisted"] = True
+        return []
+    decision["audit_persisted"] = False
+    return ["product_preview_audit_logging_failed"]
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -423,6 +451,16 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                 auto_answer_suppressed_for_similar_candidates=False,
                 audit_event=audit_event,
             )
+            audit_warnings = _append_product_preview_audit(
+                decision,
+                _product_preview_audit_payload(
+                    audit_event,
+                    candidate_count=0,
+                    top_k=top_k,
+                    auto_answer_suppressed_for_similar_candidates=False,
+                    exact_match_checked=True,
+                ),
+            )
             return build_product_answer_envelope(
                 request_id=request_id,
                 trace_id=trace_id,
@@ -437,7 +475,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                     "keyword_profile": keyword_profile,
                     "threshold_profile": threshold_profile,
                 },
-                warnings=[],
+                warnings=audit_warnings,
                 feedback_token=feedback_token,
             )
 
@@ -505,6 +543,18 @@ def chat_product_preview(req: ProductPreviewChatRequest):
             ["approved_similar_candidates_are_preview_only"]
             if candidate_contracts
             else ["no_approved_similar_candidate_found"]
+        )
+        warnings.extend(
+            _append_product_preview_audit(
+                decision,
+                _product_preview_audit_payload(
+                    audit_event,
+                    candidate_count=len(candidate_contracts),
+                    top_k=top_k,
+                    auto_answer_suppressed_for_similar_candidates=bool(candidate_contracts),
+                    exact_match_checked=True,
+                ),
+            )
         )
         return build_product_answer_envelope(
             request_id=request_id,
