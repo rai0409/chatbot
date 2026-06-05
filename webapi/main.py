@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
+import uuid
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -9,9 +12,22 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import config
+from rag_core import approved_similar
 from rag_core.approved_similar import search_approved_similar_candidates
 from rag_core.approved_qa import ApprovedAnswer, ApprovedQAIndex, load_approved_qa, lookup_approved_answer
 from rag_core.audit_log import append_audit_event
+from rag_core.product_contract import (
+    ANSWER_MODE_APPROVED_EXACT_MATCH,
+    ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY,
+    ANSWER_MODE_FALLBACK_NO_ANSWER,
+    CONFIDENCE_ROUTE_CANDIDATE_ONLY,
+    CONFIDENCE_ROUTE_EXACT_MATCH,
+    CONFIDENCE_ROUTE_NO_ANSWER,
+    build_audit_event,
+    build_candidate_contract,
+    build_product_answer_envelope,
+    generate_feedback_token,
+)
 from rag_core.qa import answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
 from rag_core.retrieval import RetrievedChunk
 from rag_core.utils import ensure_openai_client
@@ -48,6 +64,46 @@ class SearchDebugRequest(BaseModel):
     generate_answer: bool = True
     include_approved_similar_candidates: bool = False
     approved_similar_top_k: Optional[int] = None
+
+
+class ProductPreviewChatRequest(BaseModel):
+    query: Optional[str] = None
+    message: Optional[str] = None
+    tenant_id: Optional[str] = "default"
+    top_k: Optional[int] = 3
+    keyword_profile: Optional[str] = None
+    threshold_profile: Optional[str] = None
+
+
+@contextmanager
+def _temporary_product_preview_profiles(
+    *,
+    keyword_profile: str | None,
+    threshold_profile: str | None,
+):
+    previous_keyword = os.environ.get("APPROVED_SIMILAR_KEYWORD_WEIGHTS")
+    previous_keyword_present = "APPROVED_SIMILAR_KEYWORD_WEIGHTS" in os.environ
+    previous_thresholds = os.environ.get("APPROVED_SIMILAR_DECISION_THRESHOLDS")
+    previous_thresholds_present = "APPROVED_SIMILAR_DECISION_THRESHOLDS" in os.environ
+    try:
+        if keyword_profile:
+            os.environ["APPROVED_SIMILAR_KEYWORD_WEIGHTS"] = keyword_profile
+            approved_similar._load_keyword_weight_profile.cache_clear()
+        if threshold_profile:
+            os.environ["APPROVED_SIMILAR_DECISION_THRESHOLDS"] = threshold_profile
+            approved_similar._load_decision_threshold_config.cache_clear()
+        yield
+    finally:
+        if previous_keyword_present:
+            os.environ["APPROVED_SIMILAR_KEYWORD_WEIGHTS"] = str(previous_keyword)
+        else:
+            os.environ.pop("APPROVED_SIMILAR_KEYWORD_WEIGHTS", None)
+        if previous_thresholds_present:
+            os.environ["APPROVED_SIMILAR_DECISION_THRESHOLDS"] = str(previous_thresholds)
+        else:
+            os.environ.pop("APPROVED_SIMILAR_DECISION_THRESHOLDS", None)
+        approved_similar._load_keyword_weight_profile.cache_clear()
+        approved_similar._load_decision_threshold_config.cache_clear()
 
 
 def _preview(text: Any, max_chars: int) -> str:
@@ -215,6 +271,35 @@ def _approved_chat_payload(answer: ApprovedAnswer) -> Dict[str, Any]:
     }
 
 
+def _approved_product_citations(answer: ApprovedAnswer) -> List[Dict[str, Any]]:
+    return _approved_chat_payload(answer)["citations"]
+
+
+def _product_preview_decision_metadata(
+    *,
+    route: str,
+    candidate_count: int,
+    top_k: int,
+    keyword_profile: str | None,
+    threshold_profile: str | None,
+    exact_match_checked: bool,
+    auto_answer_suppressed_for_similar_candidates: bool,
+    audit_event: Dict[str, Any],
+    decision: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    return {
+        "route": route,
+        "candidate_count": candidate_count,
+        "top_k": top_k,
+        "keyword_profile": keyword_profile,
+        "threshold_profile": threshold_profile,
+        "auto_answer_suppressed_for_similar_candidates": auto_answer_suppressed_for_similar_candidates,
+        "exact_match_checked": exact_match_checked,
+        "decision_gate": dict(decision or {}),
+        "audit_event_preview": audit_event,
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -289,6 +374,160 @@ def chat(req: ChatRequest):
             },
         )
         logging.exception("chat failed trace_id=%s", req.trace_id)
+        raise HTTPException(status_code=500, detail="internal error")
+
+
+@app.post("/chat/product-preview")
+def chat_product_preview(req: ProductPreviewChatRequest):
+    global _total_requests, _error_requests
+    _total_requests += 1
+    started = time.time()
+    user_query = (req.query if req.query is not None else req.message) or ""
+    user_query = user_query.strip()
+    if not user_query:
+        raise HTTPException(status_code=400, detail="query or message is required")
+
+    request_id = str(uuid.uuid4())
+    trace_id = request_id
+    tenant_id = (req.tenant_id or "default").strip() or "default"
+    top_k = max(1, min(int(req.top_k or 3), 10))
+    keyword_profile = req.keyword_profile
+    threshold_profile = req.threshold_profile
+    feedback_token = generate_feedback_token()
+
+    try:
+        approved = _approved_qa_lookup(user_query, tenant_id=tenant_id)
+        if approved is not None:
+            latency_ms = round((time.time() - started) * 1000, 3)
+            audit_event = build_audit_event(
+                request_id=request_id,
+                trace_id=trace_id,
+                tenant_id=tenant_id,
+                user_query=user_query,
+                answer_mode=ANSWER_MODE_APPROVED_EXACT_MATCH,
+                selected_qa_id=approved.qa_id,
+                candidate_ids=[],
+                decision_route=CONFIDENCE_ROUTE_EXACT_MATCH,
+                keyword_profile=keyword_profile,
+                threshold_profile=threshold_profile,
+                latency_ms=latency_ms,
+                feedback_token=feedback_token,
+            )
+            decision = _product_preview_decision_metadata(
+                route=CONFIDENCE_ROUTE_EXACT_MATCH,
+                candidate_count=0,
+                top_k=top_k,
+                keyword_profile=keyword_profile,
+                threshold_profile=threshold_profile,
+                exact_match_checked=True,
+                auto_answer_suppressed_for_similar_candidates=False,
+                audit_event=audit_event,
+            )
+            return build_product_answer_envelope(
+                request_id=request_id,
+                trace_id=trace_id,
+                tenant_id=tenant_id,
+                answer_mode=ANSWER_MODE_APPROVED_EXACT_MATCH,
+                answer_text=approved.approved_answer,
+                confidence_route=CONFIDENCE_ROUTE_EXACT_MATCH,
+                citations=_approved_product_citations(approved),
+                candidates=[],
+                decision=decision,
+                profile_info={
+                    "keyword_profile": keyword_profile,
+                    "threshold_profile": threshold_profile,
+                },
+                warnings=[],
+                feedback_token=feedback_token,
+            )
+
+        with _temporary_product_preview_profiles(
+            keyword_profile=keyword_profile,
+            threshold_profile=threshold_profile,
+        ):
+            client = _embedding_client()
+            raw_candidates = approved_similar.search_approved_similar_candidates(
+                user_query,
+                client=client,
+                top_k=top_k,
+            )
+            decision_gate = approved_similar.decide_approved_similar_candidate(raw_candidates)
+
+        candidate_contracts: List[Dict[str, Any]] = []
+        for index, candidate in enumerate(raw_candidates[:top_k]):
+            mapped = dict(candidate or {})
+            if index == 0:
+                mapped["decision_route"] = decision_gate.get("route")
+            candidate_contracts.append(build_candidate_contract(mapped))
+
+        candidate_ids = [
+            str(candidate.get("qa_id"))
+            for candidate in candidate_contracts
+            if candidate.get("qa_id")
+        ]
+        latency_ms = round((time.time() - started) * 1000, 3)
+        answer_mode = (
+            ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY
+            if candidate_contracts
+            else ANSWER_MODE_FALLBACK_NO_ANSWER
+        )
+        confidence_route = (
+            CONFIDENCE_ROUTE_CANDIDATE_ONLY
+            if candidate_contracts
+            else CONFIDENCE_ROUTE_NO_ANSWER
+        )
+        audit_event = build_audit_event(
+            request_id=request_id,
+            trace_id=trace_id,
+            tenant_id=tenant_id,
+            user_query=user_query,
+            answer_mode=answer_mode,
+            selected_qa_id=None,
+            candidate_ids=candidate_ids,
+            decision_route=str(decision_gate.get("route") or confidence_route),
+            keyword_profile=keyword_profile,
+            threshold_profile=threshold_profile,
+            latency_ms=latency_ms,
+            feedback_token=feedback_token,
+        )
+        decision = _product_preview_decision_metadata(
+            route=confidence_route,
+            candidate_count=len(candidate_contracts),
+            top_k=top_k,
+            keyword_profile=keyword_profile,
+            threshold_profile=threshold_profile,
+            exact_match_checked=True,
+            auto_answer_suppressed_for_similar_candidates=bool(candidate_contracts),
+            audit_event=audit_event,
+            decision=decision_gate,
+        )
+        warnings = (
+            ["approved_similar_candidates_are_preview_only"]
+            if candidate_contracts
+            else ["no_approved_similar_candidate_found"]
+        )
+        return build_product_answer_envelope(
+            request_id=request_id,
+            trace_id=trace_id,
+            tenant_id=tenant_id,
+            answer_mode=answer_mode,
+            answer_text="",
+            confidence_route=confidence_route,
+            citations=[],
+            candidates=candidate_contracts,
+            decision=decision,
+            profile_info={
+                "keyword_profile": keyword_profile,
+                "threshold_profile": threshold_profile,
+            },
+            warnings=warnings,
+            feedback_token=feedback_token,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        _error_requests += 1
+        logging.exception("chat_product_preview failed trace_id=%s", trace_id)
         raise HTTPException(status_code=500, detail="internal error")
 
 
