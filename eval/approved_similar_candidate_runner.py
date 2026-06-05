@@ -59,14 +59,19 @@ def _bounded_candidate(candidate: Dict[str, Any] | None) -> Dict[str, Any] | Non
         "semantic_score": candidate.get("semantic_score"),
         "semantic_distance": candidate.get("semantic_distance"),
         "keyword_score": candidate.get("keyword_score"),
+        "weighted_keyword_score": candidate.get("weighted_keyword_score"),
         "hybrid_score": candidate.get("hybrid_score"),
         "top1_top2_margin": candidate.get("top1_top2_margin"),
         "margin_score_basis": candidate.get("margin_score_basis"),
         "numeric_conflict": bool(candidate.get("numeric_conflict", False)),
         "negation_conflict": bool(candidate.get("negation_conflict", False)),
         "matched_terms": list(candidate.get("matched_terms") or [])[:_MAX_TERMS],
+        "generic_matched_terms": list(candidate.get("generic_matched_terms") or [])[:_MAX_TERMS],
+        "specific_matched_terms": list(candidate.get("specific_matched_terms") or [])[:_MAX_TERMS],
         "matched_fields": list(candidate.get("matched_fields") or [])[:_MAX_FIELDS],
         "synonym_matches": list(candidate.get("synonym_matches") or [])[:_MAX_SYNONYM_MATCHES],
+        "keyword_weight_details": list(candidate.get("keyword_weight_details") or [])[:_MAX_SYNONYM_MATCHES],
+        "field_weight_details": list(candidate.get("field_weight_details") or [])[:_MAX_FIELDS],
     }
 
 
