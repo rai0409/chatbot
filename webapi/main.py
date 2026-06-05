@@ -5,10 +5,11 @@ import os
 import time
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 import config
@@ -39,6 +40,7 @@ from rag_core.utils import ensure_openai_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 app = FastAPI()
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 _start_time = time.time()
 _total_requests = 0
 _error_requests = 0
@@ -403,6 +405,16 @@ def metrics():
         "total_requests": _total_requests,
         "error_requests": _error_requests,
     }
+
+
+@app.get("/product-preview", response_class=HTMLResponse)
+def product_preview_page():
+    path = _STATIC_DIR / "product_preview.html"
+    try:
+        return HTMLResponse(path.read_text(encoding="utf-8"))
+    except Exception:
+        logging.exception("product preview page unavailable")
+        raise HTTPException(status_code=500, detail="product preview page unavailable")
 
 
 @app.post("/chat")
