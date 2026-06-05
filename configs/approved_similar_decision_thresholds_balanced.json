@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "profile_name": "balanced",
+  "description": "Balanced debug-only decision threshold profile for comparison; still blocks numeric conflicts and reviews negation conflicts.",
+  "high_confidence_min_hybrid": 0.8,
+  "high_confidence_min_margin": 0.06,
+  "low_confidence_max_hybrid": 0.42,
+  "numeric_conflict_route": "numeric_conflict_blocked",
+  "negation_conflict_route": "negation_conflict_review",
+  "ambiguous_route": "ambiguous_multi_topic",
+  "require_specific_terms_for_high_confidence": false,
+  "min_specific_terms_for_high_confidence": 0,
+  "allow_high_confidence_when_margin_missing": false
+}
