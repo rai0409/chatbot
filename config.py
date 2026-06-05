@@ -188,6 +188,8 @@ KEYWORD_BOOST_MAX_DELTA = _get_float("KEYWORD_BOOST_MAX_DELTA", default=0.05)
 APPROVED_QA_ENABLED = _get_bool("APPROVED_QA_ENABLED", default=False)
 _APPROVED_QA_PATH_RAW = getenv_first("APPROVED_QA_PATH", default="eval/cases/approved_qa_sample.jsonl")
 APPROVED_QA_PATH = str((BASE_DIR / _APPROVED_QA_PATH_RAW).resolve())
+APPROVED_SIMILAR_CANDIDATES_ENABLED = _get_bool("APPROVED_SIMILAR_CANDIDATES_ENABLED", default=False)
+APPROVED_SIMILAR_CANDIDATES_TOP_K = int(getenv_first("APPROVED_SIMILAR_CANDIDATES_TOP_K", default="5"))
 
 DISABLE_GUARD = _get_bool("DISABLE_GUARD", default=False)
 IGNORE_SEARCHABLE = _get_bool("IGNORE_SEARCHABLE", default=False)

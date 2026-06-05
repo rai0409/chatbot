@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import config
+from rag_core.approved_similar import search_approved_similar_candidates
 from rag_core.approved_qa import ApprovedAnswer, ApprovedQAIndex, load_approved_qa, lookup_approved_answer
 from rag_core.audit_log import append_audit_event
 from rag_core.qa import answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
@@ -45,6 +46,8 @@ class SearchDebugRequest(BaseModel):
     trace_id: Optional[str] = None
     include_context: bool = False
     generate_answer: bool = True
+    include_approved_similar_candidates: bool = False
+    approved_similar_top_k: Optional[int] = None
 
 
 def _preview(text: Any, max_chars: int) -> str:
@@ -345,6 +348,19 @@ def search_debug(req: SearchDebugRequest):
             trace.get("after_parent_expansion"),
             max_preview_chars=max_preview_chars,
         )
+        include_approved_similar = bool(
+            req.include_approved_similar_candidates
+            or getattr(config, "APPROVED_SIMILAR_CANDIDATES_ENABLED", False)
+        )
+        approved_exact = _approved_qa_lookup(req.query) if include_approved_similar else None
+        approved_similar_candidates = []
+        if include_approved_similar and approved_exact is None:
+            approved_similar_candidates = search_approved_similar_candidates(
+                req.query,
+                client=client,
+                top_k=req.approved_similar_top_k
+                or getattr(config, "APPROVED_SIMILAR_CANDIDATES_TOP_K", 5),
+            )
         response = {
             "request_id": trace.get("request_id"),
             "trace_id": trace_id,
@@ -374,6 +390,8 @@ def search_debug(req: SearchDebugRequest):
                 "citations_count",
                 len(ans.citations) if ans is not None else 0,
             ),
+            "approved_exact_match_found": approved_exact is not None if include_approved_similar else False,
+            "approved_similar_candidates": approved_similar_candidates,
             "latency_ms": trace.get("latency_ms"),
         }
         append_audit_event(
@@ -392,6 +410,12 @@ def search_debug(req: SearchDebugRequest):
                 "after_rerank_count": len(after_rerank),
                 "after_parent_expansion_count": len(after_parent_expansion),
                 "citations_count": response["citations_count"],
+                "approved_similar_candidate_count": len(approved_similar_candidates),
+                "top_approved_similar_qa_id": (
+                    approved_similar_candidates[0].get("qa_id")
+                    if approved_similar_candidates
+                    else None
+                ),
                 "latency_ms": response["latency_ms"],
                 **_top_score_detail_summary(trace.get("after_rerank")),
             },
