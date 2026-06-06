@@ -195,9 +195,28 @@
       border-radius: 8px;
       background: #fbfcfe;
     }
+    .action-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+      gap: 8px;
+      margin-top: 12px;
+      align-items: end;
+    }
+    .action-note {
+      grid-column: 1 / -1;
+    }
+    .action-status {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 6px;
+    }
+    .action-status.error { color: var(--danger); }
+    .action-status.ok { color: var(--accent-strong); }
     @media (max-width: 820px) {
       main { width: min(100% - 20px, 720px); }
-      .toolbar, .summary, .grid { grid-template-columns: 1fr; }
+      .toolbar, .summary, .grid, .action-row { grid-template-columns: 1fr; }
+      .action-note { grid-column: auto; }
     }
   </style>
 </head>
@@ -324,14 +343,17 @@
       node.className = "card";
       const candidateIds = Array.isArray(item.candidate_ids) ? item.candidate_ids.join(", ") : "";
       const reasons = Array.isArray(item.reasons) ? item.reasons.join(", ") : "";
+      const reviewId = escapeHtml(item.review_id);
+      const tenantId = escapeHtml(item.tenant_id);
+      const selectedCandidateId = escapeHtml(item.selected_candidate_id);
       node.innerHTML = `
         <div class="card-head">
           <div class="badges">
             <span class="badge priority-${escapeHtml(item.priority)}">${escapeHtml(item.priority)}</span>
             <span class="badge">${escapeHtml(item.status)}</span>
-            <span class="badge">${escapeHtml(item.tenant_id)}</span>
+            <span class="badge">${tenantId}</span>
           </div>
-          <span class="badge">${escapeHtml(item.review_id)}</span>
+          <span class="badge">${reviewId}</span>
         </div>
         <div class="query">${escapeHtml(item.user_query)}</div>
         <div class="grid">
@@ -346,11 +368,85 @@
           <div class="kv"><b>created_at</b>${escapeHtml(item.created_at)}</div>
           <div class="kv"><b>reasons</b>${escapeHtml(reasons)}</div>
         </div>
+        <div class="action-row" data-review-id="${reviewId}" data-tenant-id="${tenantId}" data-selected-candidate-id="${selectedCandidateId}">
+          <div>
+            <label>Action</label>
+            <select class="action-type">
+              <option value="approve_candidate">approve_candidate</option>
+              <option value="reject_candidate">reject_candidate</option>
+              <option value="needs_new_faq">needs_new_faq</option>
+              <option value="needs_document_update">needs_document_update</option>
+              <option value="needs_policy_review">needs_policy_review</option>
+              <option value="mark_resolved">mark_resolved</option>
+              <option value="mark_ignored">mark_ignored</option>
+            </select>
+          </div>
+          <div>
+            <label>Status after</label>
+            <select class="status-after">
+              <option value="">None</option>
+              <option value="open">open</option>
+              <option value="in_review">in_review</option>
+              <option value="resolved">resolved</option>
+              <option value="ignored">ignored</option>
+              <option value="needs_followup">needs_followup</option>
+            </select>
+          </div>
+          <div>
+            <label>Tags</label>
+            <input class="action-tags" placeholder="comma,separated">
+          </div>
+          <div class="action-note">
+            <label>Operator note</label>
+            <input class="operator-note" placeholder="Bounded note">
+          </div>
+          <button type="button" class="submit-action">Log action</button>
+        </div>
+        <div class="action-status"></div>
       `;
       return node;
     }
 
+    async function submitAction(button) {
+      const card = button.closest(".card");
+      const row = button.closest(".action-row");
+      const status = card.querySelector(".action-status");
+      const body = {
+        review_id: row.dataset.reviewId,
+        action_type: row.querySelector(".action-type").value,
+        feedback_token: null,
+        tenant_id: row.dataset.tenantId || "default",
+        selected_candidate_id: row.dataset.selectedCandidateId || null,
+        operator_note: row.querySelector(".operator-note").value.trim() || null,
+        status_after: row.querySelector(".status-after").value || null,
+        tags: row.querySelector(".action-tags").value
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+      };
+      status.textContent = "Saving...";
+      status.className = "action-status";
+      try {
+        const response = await fetch("/admin/review/action", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(body),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || "Action failed");
+        status.textContent = payload.stored ? `Stored ${payload.action_id}` : `Accepted: ${payload.warning || "not stored"}`;
+        status.className = payload.stored ? "action-status ok" : "action-status error";
+      } catch (error) {
+        status.textContent = error.message || "Action failed";
+        status.className = "action-status error";
+      }
+    }
+
     el("refresh").addEventListener("click", loadItems);
+    el("items").addEventListener("click", (event) => {
+      const button = event.target.closest(".submit-action");
+      if (button) submitAction(button);
+    });
     loadItems();
   </script>
 </body>

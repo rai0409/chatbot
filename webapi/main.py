@@ -36,6 +36,12 @@ from rag_core.product_contract import (
 )
 from rag_core.qa import answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
 from rag_core.retrieval import RetrievedChunk
+from rag_core.review_actions import (
+    ALLOWED_ACTION_TYPES,
+    ALLOWED_STATUS_AFTER,
+    append_review_action_event,
+    build_review_action_event,
+)
 from rag_core.utils import ensure_openai_client
 
 
@@ -116,6 +122,17 @@ class ProductFeedbackRequest(BaseModel):
     shown_rank: Optional[int] = None
     bad_reason: Optional[str] = None
     comment: Optional[str] = None
+
+
+class ReviewActionRequest(BaseModel):
+    review_id: str
+    action_type: str
+    feedback_token: Optional[str] = None
+    tenant_id: Optional[str] = "default"
+    selected_candidate_id: Optional[str] = None
+    operator_note: Optional[str] = None
+    status_after: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 
 @contextmanager
@@ -541,6 +558,41 @@ def admin_review_items(
         tenant_id=tenant_id,
         limit=limit,
     )
+
+
+@app.post("/admin/review/action")
+def admin_review_action(req: ReviewActionRequest):
+    review_id = str(req.review_id or "").strip()
+    action_type = str(req.action_type or "").strip()
+    status_after = str(req.status_after or "").strip() if req.status_after is not None else None
+    if not review_id:
+        raise HTTPException(status_code=400, detail="review_id is required")
+    if action_type not in ALLOWED_ACTION_TYPES:
+        raise HTTPException(status_code=400, detail="invalid action_type")
+    if status_after is not None and status_after not in ALLOWED_STATUS_AFTER:
+        raise HTTPException(status_code=400, detail="invalid status_after")
+
+    event = build_review_action_event(
+        review_id=review_id,
+        action_type=action_type,
+        feedback_token=req.feedback_token,
+        tenant_id=req.tenant_id or "default",
+        selected_candidate_id=req.selected_candidate_id,
+        operator_note=req.operator_note,
+        status_after=status_after,
+        tags=req.tags,
+    )
+    stored = append_review_action_event(event)
+    response: Dict[str, Any] = {
+        "ok": True,
+        "stored": stored,
+        "action_id": event["action_id"],
+        "review_id": event["review_id"],
+        "action_type": event["action_type"],
+    }
+    if not stored:
+        response["warning"] = "review_action_logging_failed"
+    return response
 
 
 @app.post("/chat")
