@@ -51,7 +51,7 @@ def generate_feedback_token() -> str:
 
 
 def build_candidate_contract(candidate: Dict[str, Any], *, max_preview_chars: int = _DEFAULT_PREVIEW_CHARS) -> Dict[str, Any]:
-    return {
+    item = {
         "qa_id": candidate.get("qa_id"),
         "question_text": candidate.get("question_text"),
         "approved_answer_preview": _bounded(
@@ -80,6 +80,17 @@ def build_candidate_contract(candidate: Dict[str, Any], *, max_preview_chars: in
             "doc_type": candidate.get("doc_type"),
         },
     }
+    for key in (
+        "feedback_preview_score_adjustment",
+        "feedback_preview_reasons",
+        "feedback_preview_positive_count",
+        "feedback_preview_negative_count",
+        "feedback_preview_review_needed_count",
+        "feedback_preview_adjusted_score",
+    ):
+        if key in candidate:
+            item[key] = candidate.get(key)
+    return item
 
 
 def build_product_answer_envelope(

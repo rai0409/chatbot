@@ -97,6 +97,16 @@
       gap: 8px;
       align-items: center;
     }
+    .check-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #394150;
+      font-size: 14px;
+    }
+    .check-row input {
+      width: auto;
+    }
     button {
       border: 1px solid transparent;
       border-radius: 6px;
@@ -299,6 +309,10 @@
               <input id="top-k" name="top_k" type="number" min="1" max="10" value="3">
             </div>
           </div>
+          <label class="check-row" for="apply-feedback-preview">
+            <input id="apply-feedback-preview" name="apply_feedback_preview" type="checkbox">
+            <span>Apply feedback preview rerank</span>
+          </label>
           <div class="actions">
             <button id="submit-button" type="submit">Submit</button>
             <button id="clear-button" type="button" class="secondary">Clear</button>
@@ -415,6 +429,32 @@
         .join("");
     }
 
+    function feedbackPreviewItems(candidate) {
+      const items = [];
+      if (candidate.feedback_preview_score_adjustment !== undefined) {
+        items.push(["adjustment", candidate.feedback_preview_score_adjustment]);
+      }
+      if (candidate.feedback_preview_adjusted_score !== undefined) {
+        items.push(["adjusted", candidate.feedback_preview_adjusted_score]);
+      }
+      if (candidate.feedback_preview_positive_count !== undefined) {
+        items.push(["positive", candidate.feedback_preview_positive_count]);
+      }
+      if (candidate.feedback_preview_negative_count !== undefined) {
+        items.push(["negative", candidate.feedback_preview_negative_count]);
+      }
+      if (candidate.feedback_preview_review_needed_count !== undefined) {
+        items.push(["review", candidate.feedback_preview_review_needed_count]);
+      }
+      const chips = items
+        .map(([key, value]) => `<span class="score">feedback ${key}: ${escapeHtml(value)}</span>`)
+        .join("");
+      const reasons = Array.isArray(candidate.feedback_preview_reasons)
+        ? candidate.feedback_preview_reasons.slice(0, 6)
+        : [];
+      return chips + termItems(reasons);
+    }
+
     function escapeHtml(value) {
       return safeText(value)
         .replaceAll("&", "&amp;")
@@ -481,6 +521,7 @@
           <div class="candidate-question">${escapeHtml(candidate.question_text || "")}</div>
           <div class="candidate-preview">${escapeHtml(candidate.approved_answer_preview || "")}</div>
           <div class="scores">${scoreItems(candidate.scores)}</div>
+          <div class="scores">${feedbackPreviewItems(candidate)}</div>
           <div class="terms">${termItems(candidate.matched_terms)}</div>
           <div class="actions" style="margin-top: 10px;">
             <button type="button" class="secondary select-candidate" data-qa-id="${escapeHtml(candidate.qa_id || "")}" data-rank="${index + 1}">Select</button>
@@ -502,6 +543,10 @@
         tenant_id: el("tenant-id").value.trim() || "default",
         top_k: Number(el("top-k").value || 3),
       };
+      if (el("apply-feedback-preview").checked) {
+        body.apply_feedback_preview = true;
+        body.rerank_profile = "feedback_preview";
+      }
       setStatus("Loading...");
       el("submit-button").disabled = true;
       try {
