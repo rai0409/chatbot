@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -52,6 +53,23 @@ _ALLOWED_FEEDBACK_TYPES = {
     "neutral",
     "human_review_requested",
 }
+_REVIEW_ITEM_FIELDS = (
+    "review_id",
+    "priority",
+    "status",
+    "tenant_id",
+    "user_query",
+    "answer_mode",
+    "confidence_route",
+    "decision_route",
+    "candidate_ids",
+    "selected_candidate_id",
+    "feedback_type",
+    "bad_reason",
+    "created_at",
+    "source",
+    "reasons",
+)
 
 
 class ChatRequest(BaseModel):
@@ -393,6 +411,89 @@ def _feedback_audit_event(
     }
 
 
+def _review_queue_path() -> Path:
+    return Path(config.RUNS_DIR) / "review" / "review_queue.jsonl"
+
+
+def _bounded_review_item(record: Dict[str, Any]) -> Dict[str, Any]:
+    item: Dict[str, Any] = {}
+    for field in _REVIEW_ITEM_FIELDS:
+        value = record.get(field)
+        if field == "candidate_ids":
+            item[field] = _bounded_id_list(value, limit=20)
+        elif field == "reasons":
+            item[field] = [
+                bounded
+                for raw in (value if isinstance(value, list) else [])
+                if (bounded := _bounded_text(raw, 300))
+            ][:8]
+        elif field == "user_query":
+            item[field] = _bounded_text(value, 500)
+        elif field == "bad_reason":
+            item[field] = _bounded_text(value, 300)
+        else:
+            item[field] = _bounded_text(value, 1000)
+    if not item.get("tenant_id"):
+        item["tenant_id"] = "default"
+    if not item.get("status"):
+        item["status"] = "open"
+    return item
+
+
+def _load_review_items(
+    *,
+    status: str | None = None,
+    priority: str | None = None,
+    tenant_id: str | None = None,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    source_path = _review_queue_path()
+    safe_limit = max(0, min(int(limit or 100), 500))
+    filters = {
+        "status": status,
+        "priority": priority,
+        "tenant_id": tenant_id,
+        "limit": safe_limit,
+    }
+    total_loaded = 0
+    skipped_malformed = 0
+    items: List[Dict[str, Any]] = []
+
+    if source_path.exists():
+        with source_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    record = json.loads(raw)
+                except json.JSONDecodeError:
+                    skipped_malformed += 1
+                    continue
+                if not isinstance(record, dict):
+                    skipped_malformed += 1
+                    continue
+                total_loaded += 1
+                item = _bounded_review_item(record)
+                if status and item.get("status") != status:
+                    continue
+                if priority and item.get("priority") != priority:
+                    continue
+                if tenant_id and item.get("tenant_id") != tenant_id:
+                    continue
+                if len(items) < safe_limit:
+                    items.append(item)
+
+    return {
+        "items": items,
+        "total_loaded": total_loaded,
+        "returned_count": len(items),
+        "skipped_malformed_lines": skipped_malformed,
+        "source_path": str(source_path),
+        "filters": filters,
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -415,6 +516,31 @@ def product_preview_page():
     except Exception:
         logging.exception("product preview page unavailable")
         raise HTTPException(status_code=500, detail="product preview page unavailable")
+
+
+@app.get("/admin/review", response_class=HTMLResponse)
+def admin_review_page():
+    path = _STATIC_DIR / "review_queue.html"
+    try:
+        return HTMLResponse(path.read_text(encoding="utf-8"))
+    except Exception:
+        logging.exception("review queue page unavailable")
+        raise HTTPException(status_code=500, detail="review queue page unavailable")
+
+
+@app.get("/admin/review/items")
+def admin_review_items(
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    limit: int = 100,
+):
+    return _load_review_items(
+        status=status,
+        priority=priority,
+        tenant_id=tenant_id,
+        limit=limit,
+    )
 
 
 @app.post("/chat")
