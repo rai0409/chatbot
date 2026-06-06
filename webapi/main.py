@@ -34,6 +34,7 @@ from rag_core.product_contract import (
     build_product_answer_envelope,
     generate_feedback_token,
 )
+from rag_core.feedback_rerank_profile import PROFILE_PATH, apply_feedback_preview_rerank
 from rag_core.qa import answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
 from rag_core.retrieval import RetrievedChunk
 from rag_core.review_actions import (
@@ -109,6 +110,8 @@ class ProductPreviewChatRequest(BaseModel):
     top_k: Optional[int] = 3
     keyword_profile: Optional[str] = None
     threshold_profile: Optional[str] = None
+    rerank_profile: Optional[str] = None
+    apply_feedback_preview: Optional[bool] = False
 
 
 class ProductFeedbackRequest(BaseModel):
@@ -346,8 +349,9 @@ def _product_preview_decision_metadata(
     auto_answer_suppressed_for_similar_candidates: bool,
     audit_event: Dict[str, Any],
     decision: Dict[str, Any] | None = None,
+    feedback_preview: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    return {
+    payload = {
         "route": route,
         "candidate_count": candidate_count,
         "top_k": top_k,
@@ -358,6 +362,27 @@ def _product_preview_decision_metadata(
         "decision_gate": dict(decision or {}),
         "audit_event_preview": audit_event,
     }
+    if feedback_preview:
+        payload.update(dict(feedback_preview))
+    return payload
+
+
+def _feedback_preview_request_metadata(
+    *,
+    apply_feedback_preview: bool,
+    rerank_profile: str | None,
+) -> Dict[str, Any]:
+    return {
+        "apply_feedback_preview": bool(apply_feedback_preview),
+        "rerank_profile": rerank_profile,
+        "feedback_preview_applied": False,
+        "feedback_preview_profile_path": str(PROFILE_PATH),
+        "feedback_preview_adjusted_candidate_count": 0,
+        "feedback_preview_missing_profile": False,
+        "feedback_preview_invalid_profile": False,
+        "feedback_preview_safety_checked": False,
+        "feedback_preview_reordered": False,
+    }
 
 
 def _product_preview_audit_payload(
@@ -367,6 +392,7 @@ def _product_preview_audit_payload(
     top_k: int,
     auto_answer_suppressed_for_similar_candidates: bool,
     exact_match_checked: bool,
+    feedback_preview: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     payload = dict(audit_event or {})
     payload.update(
@@ -377,6 +403,15 @@ def _product_preview_audit_payload(
             "exact_match_checked": exact_match_checked,
         }
     )
+    if feedback_preview:
+        for key in (
+            "apply_feedback_preview",
+            "rerank_profile",
+            "feedback_preview_applied",
+            "feedback_preview_adjusted_candidate_count",
+            "feedback_preview_reordered",
+        ):
+            payload[key] = feedback_preview.get(key)
     return payload
 
 
@@ -674,6 +709,12 @@ def chat_product_preview(req: ProductPreviewChatRequest):
     top_k = max(1, min(int(req.top_k or 3), 10))
     keyword_profile = req.keyword_profile
     threshold_profile = req.threshold_profile
+    rerank_profile = req.rerank_profile
+    apply_feedback_preview = bool(req.apply_feedback_preview)
+    feedback_preview_meta = _feedback_preview_request_metadata(
+        apply_feedback_preview=apply_feedback_preview,
+        rerank_profile=rerank_profile,
+    )
     feedback_token = generate_feedback_token()
 
     try:
@@ -703,6 +744,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                 exact_match_checked=True,
                 auto_answer_suppressed_for_similar_candidates=False,
                 audit_event=audit_event,
+                feedback_preview=feedback_preview_meta,
             )
             audit_warnings = _append_product_preview_audit(
                 decision,
@@ -712,6 +754,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                     top_k=top_k,
                     auto_answer_suppressed_for_similar_candidates=False,
                     exact_match_checked=True,
+                    feedback_preview=feedback_preview_meta,
                 ),
             )
             return build_product_answer_envelope(
@@ -727,6 +770,8 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                 profile_info={
                     "keyword_profile": keyword_profile,
                     "threshold_profile": threshold_profile,
+                    "rerank_profile": rerank_profile,
+                    "apply_feedback_preview": apply_feedback_preview,
                 },
                 warnings=audit_warnings,
                 feedback_token=feedback_token,
@@ -742,10 +787,15 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                 client=client,
                 top_k=top_k,
             )
-            decision_gate = approved_similar.decide_approved_similar_candidate(raw_candidates)
+            preview_candidates, feedback_preview_meta, feedback_preview_warnings = apply_feedback_preview_rerank(
+                raw_candidates[:top_k],
+                apply_feedback_preview=apply_feedback_preview,
+                rerank_profile=rerank_profile,
+            )
+            decision_gate = approved_similar.decide_approved_similar_candidate(preview_candidates)
 
         candidate_contracts: List[Dict[str, Any]] = []
-        for index, candidate in enumerate(raw_candidates[:top_k]):
+        for index, candidate in enumerate(preview_candidates[:top_k]):
             mapped = dict(candidate or {})
             if index == 0:
                 mapped["decision_route"] = decision_gate.get("route")
@@ -791,12 +841,14 @@ def chat_product_preview(req: ProductPreviewChatRequest):
             auto_answer_suppressed_for_similar_candidates=bool(candidate_contracts),
             audit_event=audit_event,
             decision=decision_gate,
+            feedback_preview=feedback_preview_meta,
         )
         warnings = (
             ["approved_similar_candidates_are_preview_only"]
             if candidate_contracts
             else ["no_approved_similar_candidate_found"]
         )
+        warnings.extend(feedback_preview_warnings)
         warnings.extend(
             _append_product_preview_audit(
                 decision,
@@ -806,6 +858,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                     top_k=top_k,
                     auto_answer_suppressed_for_similar_candidates=bool(candidate_contracts),
                     exact_match_checked=True,
+                    feedback_preview=feedback_preview_meta,
                 ),
             )
         )
@@ -822,6 +875,9 @@ def chat_product_preview(req: ProductPreviewChatRequest):
             profile_info={
                 "keyword_profile": keyword_profile,
                 "threshold_profile": threshold_profile,
+                "rerank_profile": rerank_profile,
+                "apply_feedback_preview": apply_feedback_preview,
+                "feedback_preview_applied": feedback_preview_meta.get("feedback_preview_applied"),
             },
             warnings=warnings,
             feedback_token=feedback_token,
