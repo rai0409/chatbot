@@ -47,6 +47,7 @@ from rag_core.review_actions import (
     build_review_action_event,
 )
 from rag_core.source_metadata import normalize_citation
+from rag_core.tenant_profile import resolve_tenant_product_profile
 from rag_core.utils import ensure_openai_client
 from webapi.admin_auth import require_admin_auth
 
@@ -112,6 +113,7 @@ class ProductPreviewChatRequest(BaseModel):
     query: Optional[str] = None
     message: Optional[str] = None
     tenant_id: Optional[str] = "default"
+    customer_id: Optional[str] = None
     top_k: Optional[int] = 3
     keyword_profile: Optional[str] = None
     threshold_profile: Optional[str] = None
@@ -121,6 +123,7 @@ class ProductPreviewChatRequest(BaseModel):
     feature_rerank_profile: Optional[str] = None
     product_profile: Optional[str] = None
     product_profile_overrides: Optional[Dict[str, Any]] = None
+    use_tenant_profile: Optional[bool] = False
 
 
 class ProductFeedbackRequest(BaseModel):
@@ -420,8 +423,22 @@ def _product_policy_context(
     requested_top_k: int,
     requested_feedback_preview: bool,
     requested_feature_rerank: bool,
+    use_tenant_profile: bool = False,
+    tenant_id: str | None = None,
+    customer_id: str | None = None,
 ) -> Dict[str, Any]:
-    if not product_profile:
+    tenant_resolution: Dict[str, Any] | None = None
+    effective_product_profile = product_profile
+    if use_tenant_profile:
+        tenant_resolution = resolve_tenant_product_profile(
+            tenant_id or "default",
+            customer_id=customer_id,
+            requested_profile=product_profile,
+            strict=False,
+        )
+        effective_product_profile = tenant_resolution.get("resolved_profile") or tenant_resolution.get("default_profile")
+
+    if not effective_product_profile:
         return {
             "policy": None,
             "metadata": None,
@@ -430,14 +447,42 @@ def _product_policy_context(
             "display_top_k": requested_top_k,
             "effective_apply_feedback_preview": requested_feedback_preview,
             "effective_apply_feature_rerank": requested_feature_rerank,
+            "tenant_resolution": tenant_resolution,
+            "tenant_blocked": False,
         }
 
     warnings: List[str] = []
-    requested_name = str(product_profile or "").strip()
+    if tenant_resolution:
+        warnings.extend(str(warning) for warning in tenant_resolution.get("warnings") or [])
+        if tenant_resolution.get("decision") in {"disabled", "rejected"}:
+            metadata = {
+                "use_tenant_profile": True,
+                "tenant_profile_resolution": tenant_resolution,
+                "product_profile": None,
+                "requested_product_profile": str(product_profile or "").strip(),
+                "effective_apply_feedback_preview": False,
+                "effective_apply_feature_rerank": False,
+                "enabled_steps": [],
+                "policy_warnings": warnings,
+            }
+            return {
+                "policy": None,
+                "metadata": metadata,
+                "warnings": warnings,
+                "effective_top_k": requested_top_k,
+                "display_top_k": requested_top_k,
+                "effective_apply_feedback_preview": False,
+                "effective_apply_feature_rerank": False,
+                "tenant_resolution": tenant_resolution,
+                "tenant_blocked": True,
+            }
+
+    requested_name = str(effective_product_profile or "").strip()
     try:
         profile = load_product_profile(requested_name)
     except Exception:
-        profile = load_product_profile("default")
+        fallback_name = "production_safe" if use_tenant_profile else "default"
+        profile = load_product_profile(fallback_name)
         warnings.append("product_profile_load_failed_fallback_default")
     if requested_name and profile.get("profile_name") != requested_name:
         warnings.append("product_profile_fallback_default")
@@ -469,7 +514,7 @@ def _product_policy_context(
 
     metadata = {
         "product_profile": policy.get("profile_name"),
-        "requested_product_profile": requested_name,
+        "requested_product_profile": str(product_profile or "").strip() if use_tenant_profile else requested_name,
         "operation_mode": policy.get("operation_mode"),
         "runtime_serving": policy.get("runtime_serving"),
         "enabled_steps": list(policy.get("enabled_steps") or []),
@@ -478,6 +523,13 @@ def _product_policy_context(
         "effective_apply_feature_rerank": effective_feature,
         "max_candidates_display": display_top_k,
     }
+    if tenant_resolution:
+        metadata.update(
+            {
+                "use_tenant_profile": True,
+                "tenant_profile_resolution": tenant_resolution,
+            }
+        )
     return {
         "policy": policy,
         "metadata": metadata,
@@ -486,6 +538,8 @@ def _product_policy_context(
         "display_top_k": display_top_k,
         "effective_apply_feedback_preview": effective_feedback,
         "effective_apply_feature_rerank": effective_feature,
+        "tenant_resolution": tenant_resolution,
+        "tenant_blocked": False,
     }
 
 
@@ -608,6 +662,14 @@ def _product_preview_audit_payload(
             "effective_apply_feature_rerank",
         ):
             payload[key] = product_policy.get(key)
+        if product_policy.get("use_tenant_profile"):
+            resolution = product_policy.get("tenant_profile_resolution")
+            if isinstance(resolution, dict):
+                payload["use_tenant_profile"] = True
+                payload["resolved_profile"] = resolution.get("resolved_profile")
+                payload["requested_profile"] = resolution.get("requested_profile")
+                payload["tenant_status"] = resolution.get("tenant_status")
+                payload["tenant_profile_decision"] = resolution.get("decision")
         payload["policy_warnings"] = list(product_policy.get("policy_warnings") or [])[:12]
         payload["policy_warnings_count"] = len(product_policy.get("policy_warnings") or [])
     return payload
@@ -619,6 +681,28 @@ def _append_product_preview_audit(decision: Dict[str, Any], audit_payload: Dict[
         return []
     decision["audit_persisted"] = False
     return ["product_preview_audit_logging_failed"]
+
+
+def _product_profile_info_metadata(product_policy_meta: Dict[str, Any] | None) -> Dict[str, Any]:
+    if not product_policy_meta:
+        return {}
+    out = {
+        "product_profile": product_policy_meta.get("product_profile"),
+        "operation_mode": product_policy_meta.get("operation_mode"),
+        "runtime_serving": product_policy_meta.get("runtime_serving"),
+        "enabled_steps": product_policy_meta.get("enabled_steps"),
+        "effective_apply_feedback_preview": product_policy_meta.get("effective_apply_feedback_preview"),
+        "effective_apply_feature_rerank": product_policy_meta.get("effective_apply_feature_rerank"),
+    }
+    if product_policy_meta.get("use_tenant_profile"):
+        out.update(
+            {
+                "use_tenant_profile": True,
+                "tenant_profile_resolution": product_policy_meta.get("tenant_profile_resolution"),
+                "policy_warnings": product_policy_meta.get("policy_warnings"),
+            }
+        )
+    return out
 
 
 def _bounded_text(value: Any, max_chars: int = 1000) -> str | None:
@@ -917,6 +1001,9 @@ def chat_product_preview(req: ProductPreviewChatRequest):
         requested_top_k=top_k,
         requested_feedback_preview=requested_apply_feedback_preview,
         requested_feature_rerank=requested_apply_feature_rerank,
+        use_tenant_profile=bool(req.use_tenant_profile),
+        tenant_id=tenant_id,
+        customer_id=req.customer_id,
     )
     effective_top_k = int(policy_context["effective_top_k"])
     display_top_k = int(policy_context["display_top_k"])
@@ -935,6 +1022,81 @@ def chat_product_preview(req: ProductPreviewChatRequest):
     feedback_token = generate_feedback_token()
 
     try:
+        if bool(policy_context.get("tenant_blocked")):
+            latency_ms = round((time.time() - started) * 1000, 3)
+            tenant_resolution = policy_context.get("tenant_resolution") if isinstance(policy_context.get("tenant_resolution"), dict) else {}
+            audit_event = build_audit_event(
+                request_id=request_id,
+                trace_id=trace_id,
+                tenant_id=tenant_id,
+                user_query=user_query,
+                answer_mode=ANSWER_MODE_FALLBACK_NO_ANSWER,
+                selected_qa_id=None,
+                candidate_ids=[],
+                decision_route=CONFIDENCE_ROUTE_NO_ANSWER,
+                keyword_profile=keyword_profile,
+                threshold_profile=threshold_profile,
+                latency_ms=latency_ms,
+                feedback_token=feedback_token,
+            )
+            decision = _product_preview_decision_metadata(
+                route=CONFIDENCE_ROUTE_NO_ANSWER,
+                candidate_count=0,
+                top_k=top_k,
+                keyword_profile=keyword_profile,
+                threshold_profile=threshold_profile,
+                exact_match_checked=False,
+                auto_answer_suppressed_for_similar_candidates=True,
+                audit_event=audit_event,
+                feedback_preview=feedback_preview_meta,
+                feature_rerank=feature_rerank_meta,
+                product_policy=product_policy_meta,
+            )
+            warnings = ["tenant_profile_resolution_blocked"]
+            warnings.extend(policy_context["warnings"])
+            warnings.extend(
+                _append_product_preview_audit(
+                    decision,
+                    _product_preview_audit_payload(
+                        audit_event,
+                        candidate_count=0,
+                        top_k=top_k,
+                        auto_answer_suppressed_for_similar_candidates=True,
+                        exact_match_checked=False,
+                        feedback_preview=feedback_preview_meta,
+                        feature_rerank=feature_rerank_meta,
+                        product_policy=product_policy_meta,
+                    ),
+                )
+            )
+            profile_info = {
+                "keyword_profile": keyword_profile,
+                "threshold_profile": threshold_profile,
+                "rerank_profile": rerank_profile,
+                "apply_feedback_preview": requested_apply_feedback_preview,
+                "feedback_preview_applied": False,
+                "apply_feature_rerank": requested_apply_feature_rerank,
+                "feature_rerank_profile": feature_rerank_profile,
+                "feature_rerank_applied": False,
+            }
+            profile_info.update(_product_profile_info_metadata(product_policy_meta))
+            if tenant_resolution.get("decision") == "disabled":
+                warnings.append("tenant_disabled")
+            return build_product_answer_envelope(
+                request_id=request_id,
+                trace_id=trace_id,
+                tenant_id=tenant_id,
+                answer_mode=ANSWER_MODE_FALLBACK_NO_ANSWER,
+                answer_text="",
+                confidence_route=CONFIDENCE_ROUTE_NO_ANSWER,
+                citations=[],
+                candidates=[],
+                decision=decision,
+                profile_info=profile_info,
+                warnings=warnings,
+                feedback_token=feedback_token,
+            )
+
         approved = _approved_qa_lookup(user_query, tenant_id=tenant_id)
         if approved is not None:
             latency_ms = round((time.time() - started) * 1000, 3)
@@ -989,16 +1151,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                 "feature_rerank_profile": feature_rerank_profile,
             }
             if product_policy_meta:
-                profile_info.update(
-                    {
-                        "product_profile": product_policy_meta.get("product_profile"),
-                        "operation_mode": product_policy_meta.get("operation_mode"),
-                        "runtime_serving": product_policy_meta.get("runtime_serving"),
-                        "enabled_steps": product_policy_meta.get("enabled_steps"),
-                        "effective_apply_feedback_preview": product_policy_meta.get("effective_apply_feedback_preview"),
-                        "effective_apply_feature_rerank": product_policy_meta.get("effective_apply_feature_rerank"),
-                    }
-                )
+                profile_info.update(_product_profile_info_metadata(product_policy_meta))
             return build_product_answer_envelope(
                 request_id=request_id,
                 trace_id=trace_id,
@@ -1122,16 +1275,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
             "feature_rerank_applied": feature_rerank_meta.get("feature_rerank_applied"),
         }
         if product_policy_meta:
-            profile_info.update(
-                {
-                    "product_profile": product_policy_meta.get("product_profile"),
-                    "operation_mode": product_policy_meta.get("operation_mode"),
-                    "runtime_serving": product_policy_meta.get("runtime_serving"),
-                    "enabled_steps": product_policy_meta.get("enabled_steps"),
-                    "effective_apply_feedback_preview": product_policy_meta.get("effective_apply_feedback_preview"),
-                    "effective_apply_feature_rerank": product_policy_meta.get("effective_apply_feature_rerank"),
-                }
-            )
+            profile_info.update(_product_profile_info_metadata(product_policy_meta))
         return build_product_answer_envelope(
             request_id=request_id,
             trace_id=trace_id,
