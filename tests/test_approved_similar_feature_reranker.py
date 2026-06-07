@@ -254,4 +254,6 @@ def test_module_does_not_change_runtime_routes_by_default():
     from webapi.main import ChatRequest, ProductPreviewChatRequest
 
     assert not hasattr(ChatRequest, "feature_rerank_profile")
-    assert not hasattr(ProductPreviewChatRequest, "feature_rerank_profile")
+    req = ProductPreviewChatRequest(query="test")
+    assert req.apply_feature_rerank is False
+    assert req.feature_rerank_profile is None
