@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -47,6 +47,7 @@ from rag_core.review_actions import (
     build_review_action_event,
 )
 from rag_core.utils import ensure_openai_client
+from webapi.admin_auth import require_admin_auth
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -754,7 +755,7 @@ def product_preview_page():
 
 
 @app.get("/admin/review", response_class=HTMLResponse)
-def admin_review_page():
+def admin_review_page(_admin_auth: None = Depends(require_admin_auth)):
     path = _STATIC_DIR / "review_queue.html"
     try:
         return HTMLResponse(path.read_text(encoding="utf-8"))
@@ -769,6 +770,7 @@ def admin_review_items(
     priority: Optional[str] = None,
     tenant_id: Optional[str] = None,
     limit: int = 100,
+    _admin_auth: None = Depends(require_admin_auth),
 ):
     return _load_review_items(
         status=status,
@@ -779,7 +781,7 @@ def admin_review_items(
 
 
 @app.post("/admin/review/action")
-def admin_review_action(req: ReviewActionRequest):
+def admin_review_action(req: ReviewActionRequest, _admin_auth: None = Depends(require_admin_auth)):
     review_id = str(req.review_id or "").strip()
     action_type = str(req.action_type or "").strip()
     status_after = str(req.status_after or "").strip() if req.status_after is not None else None
