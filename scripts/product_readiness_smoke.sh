@@ -17,6 +17,7 @@ echo "== Product readiness smoke: pytest =="
   tests/test_review_actions.py \
   tests/test_product_profile.py \
   tests/test_product_route_policy.py \
+  tests/test_production_readiness_report.py \
   tests/test_product_preview_profiles.py \
   tests/test_product_preview_chat.py \
   tests/test_product_preview_feedback_rerank.py \
@@ -27,6 +28,7 @@ echo "== Product readiness smoke: py_compile =="
 "$PYTHON" -m py_compile \
   webapi/main.py \
   webapi/admin_auth.py \
+  eval/production_readiness_report.py \
   rag_core/product_profile.py \
   rag_core/product_route_policy.py
 

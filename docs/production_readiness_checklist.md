@@ -69,6 +69,7 @@ Or run the same checks directly:
   tests/test_review_actions.py \
   tests/test_product_profile.py \
   tests/test_product_route_policy.py \
+  tests/test_production_readiness_report.py \
   tests/test_product_preview_profiles.py \
   tests/test_product_preview_chat.py \
   tests/test_product_preview_feedback_rerank.py \
@@ -77,9 +78,31 @@ Or run the same checks directly:
 .venv/bin/python -m py_compile \
   webapi/main.py \
   webapi/admin_auth.py \
+  eval/production_readiness_report.py \
   rag_core/product_profile.py \
   rag_core/product_route_policy.py
 ```
+
+## Production Readiness Report
+
+Generate the offline production readiness report with:
+
+```bash
+.venv/bin/python eval/production_readiness_report.py
+```
+
+Default outputs:
+
+- `artifacts/readiness/production_readiness_report.json`
+- `artifacts/readiness/production_readiness_report.md`
+
+Interpretation:
+
+- `blocked_for_production`: a critical static safety check failed. Do not expose the deployment.
+- `needs_review`: critical static checks passed, but optional artifacts, dirty worktree state, or deployment-specific settings need review.
+- `ready_for_limited_preview`: static checks support a limited preview only. This is not full production approval.
+
+Full production readiness still requires human review, deployment-specific auth and tenant checks, generated manifest review, rollback planning, and deployed server smoke tests.
 
 ## Manual Curl Smoke Examples
 
