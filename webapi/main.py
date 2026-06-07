@@ -36,6 +36,8 @@ from rag_core.product_contract import (
     generate_feedback_token,
 )
 from rag_core.feedback_rerank_profile import PROFILE_PATH, apply_feedback_preview_rerank
+from rag_core.product_profile import load_product_profile
+from rag_core.product_route_policy import build_route_policy
 from rag_core.qa import answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
 from rag_core.retrieval import RetrievedChunk
 from rag_core.review_actions import (
@@ -115,6 +117,8 @@ class ProductPreviewChatRequest(BaseModel):
     apply_feedback_preview: Optional[bool] = False
     apply_feature_rerank: Optional[bool] = False
     feature_rerank_profile: Optional[str] = None
+    product_profile: Optional[str] = None
+    product_profile_overrides: Optional[Dict[str, Any]] = None
 
 
 class ProductFeedbackRequest(BaseModel):
@@ -354,6 +358,7 @@ def _product_preview_decision_metadata(
     decision: Dict[str, Any] | None = None,
     feedback_preview: Dict[str, Any] | None = None,
     feature_rerank: Dict[str, Any] | None = None,
+    product_policy: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     payload = {
         "route": route,
@@ -370,6 +375,8 @@ def _product_preview_decision_metadata(
         payload.update(dict(feedback_preview))
     if feature_rerank:
         payload.update(dict(feature_rerank))
+    if product_policy:
+        payload.update(dict(product_policy))
     return payload
 
 
@@ -388,6 +395,82 @@ def _feedback_preview_request_metadata(
         "feedback_preview_invalid_profile": False,
         "feedback_preview_safety_checked": False,
         "feedback_preview_reordered": False,
+    }
+
+
+def _product_policy_context(
+    *,
+    product_profile: str | None,
+    product_profile_overrides: Dict[str, Any] | None,
+    requested_top_k: int,
+    requested_feedback_preview: bool,
+    requested_feature_rerank: bool,
+) -> Dict[str, Any]:
+    if not product_profile:
+        return {
+            "policy": None,
+            "metadata": None,
+            "warnings": [],
+            "effective_top_k": requested_top_k,
+            "display_top_k": requested_top_k,
+            "effective_apply_feedback_preview": requested_feedback_preview,
+            "effective_apply_feature_rerank": requested_feature_rerank,
+        }
+
+    warnings: List[str] = []
+    requested_name = str(product_profile or "").strip()
+    try:
+        profile = load_product_profile(requested_name)
+    except Exception:
+        profile = load_product_profile("default")
+        warnings.append("product_profile_load_failed_fallback_default")
+    if requested_name and profile.get("profile_name") != requested_name:
+        warnings.append("product_profile_fallback_default")
+
+    overrides = product_profile_overrides if isinstance(product_profile_overrides, dict) else None
+    if product_profile_overrides is not None and overrides is None:
+        warnings.append("invalid_product_profile_overrides_ignored")
+    policy = build_route_policy(profile, overrides)
+    warnings.extend(str(warning) for warning in policy.get("warnings") or [])
+    enabled = set(policy.get("enabled_steps") or [])
+    limits = policy.get("limits") if isinstance(policy.get("limits"), dict) else {}
+    max_internal = limits.get("max_candidates_internal")
+    max_display = limits.get("max_candidates_display")
+    effective_top_k = requested_top_k
+    display_top_k = requested_top_k
+    if isinstance(max_internal, int) and max_internal > 0:
+        effective_top_k = max(1, min(effective_top_k, max_internal))
+    if isinstance(max_display, int) and max_display > 0:
+        display_top_k = max(1, min(display_top_k, max_display, effective_top_k))
+
+    effective_feedback = bool(requested_feedback_preview and "feedback_preview_rerank" in enabled)
+    effective_feature = bool(requested_feature_rerank and "feature_rerank" in enabled)
+    if requested_feedback_preview and not effective_feedback:
+        warnings.append("feedback_preview_rerank_blocked_by_product_policy")
+    if requested_feature_rerank and not effective_feature:
+        warnings.append("feature_rerank_blocked_by_product_policy")
+    if requested_feedback_preview and requested_feature_rerank and "combined_rerank" not in enabled:
+        warnings.append("combined_rerank_not_enabled_by_product_policy")
+
+    metadata = {
+        "product_profile": policy.get("profile_name"),
+        "requested_product_profile": requested_name,
+        "operation_mode": policy.get("operation_mode"),
+        "runtime_serving": policy.get("runtime_serving"),
+        "enabled_steps": list(policy.get("enabled_steps") or []),
+        "policy_warnings": warnings,
+        "effective_apply_feedback_preview": effective_feedback,
+        "effective_apply_feature_rerank": effective_feature,
+        "max_candidates_display": display_top_k,
+    }
+    return {
+        "policy": policy,
+        "metadata": metadata,
+        "warnings": warnings,
+        "effective_top_k": effective_top_k,
+        "display_top_k": display_top_k,
+        "effective_apply_feedback_preview": effective_feedback,
+        "effective_apply_feature_rerank": effective_feature,
     }
 
 
@@ -471,6 +554,7 @@ def _product_preview_audit_payload(
     exact_match_checked: bool,
     feedback_preview: Dict[str, Any] | None = None,
     feature_rerank: Dict[str, Any] | None = None,
+    product_policy: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     payload = dict(audit_event or {})
     payload.update(
@@ -500,6 +584,17 @@ def _product_preview_audit_payload(
             "feature_rerank_reordered",
         ):
             payload[key] = feature_rerank.get(key)
+    if product_policy:
+        for key in (
+            "product_profile",
+            "operation_mode",
+            "enabled_steps",
+            "effective_apply_feedback_preview",
+            "effective_apply_feature_rerank",
+        ):
+            payload[key] = product_policy.get(key)
+        payload["policy_warnings"] = list(product_policy.get("policy_warnings") or [])[:12]
+        payload["policy_warnings_count"] = len(product_policy.get("policy_warnings") or [])
     return payload
 
 
@@ -798,8 +893,20 @@ def chat_product_preview(req: ProductPreviewChatRequest):
     keyword_profile = req.keyword_profile
     threshold_profile = req.threshold_profile
     rerank_profile = req.rerank_profile
-    apply_feedback_preview = bool(req.apply_feedback_preview)
-    apply_feature_rerank = bool(req.apply_feature_rerank)
+    requested_apply_feedback_preview = bool(req.apply_feedback_preview)
+    requested_apply_feature_rerank = bool(req.apply_feature_rerank)
+    policy_context = _product_policy_context(
+        product_profile=req.product_profile,
+        product_profile_overrides=req.product_profile_overrides,
+        requested_top_k=top_k,
+        requested_feedback_preview=requested_apply_feedback_preview,
+        requested_feature_rerank=requested_apply_feature_rerank,
+    )
+    effective_top_k = int(policy_context["effective_top_k"])
+    display_top_k = int(policy_context["display_top_k"])
+    product_policy_meta = policy_context["metadata"]
+    apply_feedback_preview = bool(policy_context["effective_apply_feedback_preview"])
+    apply_feature_rerank = bool(policy_context["effective_apply_feature_rerank"])
     feature_rerank_profile = req.feature_rerank_profile
     feedback_preview_meta = _feedback_preview_request_metadata(
         apply_feedback_preview=apply_feedback_preview,
@@ -840,6 +947,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                 audit_event=audit_event,
                 feedback_preview=feedback_preview_meta,
                 feature_rerank=feature_rerank_meta,
+                product_policy=product_policy_meta,
             )
             audit_warnings = _append_product_preview_audit(
                 decision,
@@ -851,8 +959,30 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                     exact_match_checked=True,
                     feedback_preview=feedback_preview_meta,
                     feature_rerank=feature_rerank_meta,
+                    product_policy=product_policy_meta,
                 ),
             )
+            response_warnings = list(policy_context["warnings"])
+            response_warnings.extend(audit_warnings)
+            profile_info = {
+                "keyword_profile": keyword_profile,
+                "threshold_profile": threshold_profile,
+                "rerank_profile": rerank_profile,
+                "apply_feedback_preview": requested_apply_feedback_preview,
+                "apply_feature_rerank": requested_apply_feature_rerank,
+                "feature_rerank_profile": feature_rerank_profile,
+            }
+            if product_policy_meta:
+                profile_info.update(
+                    {
+                        "product_profile": product_policy_meta.get("product_profile"),
+                        "operation_mode": product_policy_meta.get("operation_mode"),
+                        "runtime_serving": product_policy_meta.get("runtime_serving"),
+                        "enabled_steps": product_policy_meta.get("enabled_steps"),
+                        "effective_apply_feedback_preview": product_policy_meta.get("effective_apply_feedback_preview"),
+                        "effective_apply_feature_rerank": product_policy_meta.get("effective_apply_feature_rerank"),
+                    }
+                )
             return build_product_answer_envelope(
                 request_id=request_id,
                 trace_id=trace_id,
@@ -863,15 +993,8 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                 citations=_approved_product_citations(approved),
                 candidates=[],
                 decision=decision,
-                profile_info={
-                    "keyword_profile": keyword_profile,
-                    "threshold_profile": threshold_profile,
-                    "rerank_profile": rerank_profile,
-                    "apply_feedback_preview": apply_feedback_preview,
-                    "apply_feature_rerank": apply_feature_rerank,
-                    "feature_rerank_profile": feature_rerank_profile,
-                },
-                warnings=audit_warnings,
+                profile_info=profile_info,
+                warnings=response_warnings,
                 feedback_token=feedback_token,
             )
 
@@ -883,10 +1006,10 @@ def chat_product_preview(req: ProductPreviewChatRequest):
             raw_candidates = approved_similar.search_approved_similar_candidates(
                 user_query,
                 client=client,
-                top_k=top_k,
+                top_k=effective_top_k,
             )
             preview_candidates, feedback_preview_meta, feedback_preview_warnings = apply_feedback_preview_rerank(
-                raw_candidates[:top_k],
+                raw_candidates[:effective_top_k],
                 apply_feedback_preview=apply_feedback_preview,
                 rerank_profile=rerank_profile,
             )
@@ -899,7 +1022,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
             decision_gate = approved_similar.decide_approved_similar_candidate(preview_candidates)
 
         candidate_contracts: List[Dict[str, Any]] = []
-        for index, candidate in enumerate(preview_candidates[:top_k]):
+        for index, candidate in enumerate(preview_candidates[:display_top_k]):
             mapped = dict(candidate or {})
             if index == 0:
                 mapped["decision_route"] = decision_gate.get("route")
@@ -938,7 +1061,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
         decision = _product_preview_decision_metadata(
             route=confidence_route,
             candidate_count=len(candidate_contracts),
-            top_k=top_k,
+            top_k=display_top_k,
             keyword_profile=keyword_profile,
             threshold_profile=threshold_profile,
             exact_match_checked=True,
@@ -947,12 +1070,14 @@ def chat_product_preview(req: ProductPreviewChatRequest):
             decision=decision_gate,
             feedback_preview=feedback_preview_meta,
             feature_rerank=feature_rerank_meta,
+            product_policy=product_policy_meta,
         )
         warnings = (
             ["approved_similar_candidates_are_preview_only"]
             if candidate_contracts
             else ["no_approved_similar_candidate_found"]
         )
+        warnings.extend(policy_context["warnings"])
         warnings.extend(feedback_preview_warnings)
         warnings.extend(feature_rerank_warnings)
         warnings.extend(
@@ -961,14 +1086,36 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                 _product_preview_audit_payload(
                     audit_event,
                     candidate_count=len(candidate_contracts),
-                    top_k=top_k,
+                    top_k=display_top_k,
                     auto_answer_suppressed_for_similar_candidates=bool(candidate_contracts),
                     exact_match_checked=True,
                     feedback_preview=feedback_preview_meta,
                     feature_rerank=feature_rerank_meta,
+                    product_policy=product_policy_meta,
                 ),
             )
         )
+        profile_info = {
+            "keyword_profile": keyword_profile,
+            "threshold_profile": threshold_profile,
+            "rerank_profile": rerank_profile,
+            "apply_feedback_preview": requested_apply_feedback_preview,
+            "feedback_preview_applied": feedback_preview_meta.get("feedback_preview_applied"),
+            "apply_feature_rerank": requested_apply_feature_rerank,
+            "feature_rerank_profile": feature_rerank_profile,
+            "feature_rerank_applied": feature_rerank_meta.get("feature_rerank_applied"),
+        }
+        if product_policy_meta:
+            profile_info.update(
+                {
+                    "product_profile": product_policy_meta.get("product_profile"),
+                    "operation_mode": product_policy_meta.get("operation_mode"),
+                    "runtime_serving": product_policy_meta.get("runtime_serving"),
+                    "enabled_steps": product_policy_meta.get("enabled_steps"),
+                    "effective_apply_feedback_preview": product_policy_meta.get("effective_apply_feedback_preview"),
+                    "effective_apply_feature_rerank": product_policy_meta.get("effective_apply_feature_rerank"),
+                }
+            )
         return build_product_answer_envelope(
             request_id=request_id,
             trace_id=trace_id,
@@ -979,16 +1126,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
             citations=[],
             candidates=candidate_contracts,
             decision=decision,
-            profile_info={
-                "keyword_profile": keyword_profile,
-                "threshold_profile": threshold_profile,
-                "rerank_profile": rerank_profile,
-                "apply_feedback_preview": apply_feedback_preview,
-                "feedback_preview_applied": feedback_preview_meta.get("feedback_preview_applied"),
-                "apply_feature_rerank": apply_feature_rerank,
-                "feature_rerank_profile": feature_rerank_profile,
-                "feature_rerank_applied": feature_rerank_meta.get("feature_rerank_applied"),
-            },
+            profile_info=profile_info,
             warnings=warnings,
             feedback_token=feedback_token,
         )
