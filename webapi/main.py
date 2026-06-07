@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 import config
 from rag_core import approved_similar
+from rag_core import approved_similar_feature_reranker
 from rag_core.approved_similar import search_approved_similar_candidates
 from rag_core.approved_qa import ApprovedAnswer, ApprovedQAIndex, load_approved_qa, lookup_approved_answer
 from rag_core.audit_log import (
@@ -112,6 +113,8 @@ class ProductPreviewChatRequest(BaseModel):
     threshold_profile: Optional[str] = None
     rerank_profile: Optional[str] = None
     apply_feedback_preview: Optional[bool] = False
+    apply_feature_rerank: Optional[bool] = False
+    feature_rerank_profile: Optional[str] = None
 
 
 class ProductFeedbackRequest(BaseModel):
@@ -350,6 +353,7 @@ def _product_preview_decision_metadata(
     audit_event: Dict[str, Any],
     decision: Dict[str, Any] | None = None,
     feedback_preview: Dict[str, Any] | None = None,
+    feature_rerank: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     payload = {
         "route": route,
@@ -364,6 +368,8 @@ def _product_preview_decision_metadata(
     }
     if feedback_preview:
         payload.update(dict(feedback_preview))
+    if feature_rerank:
+        payload.update(dict(feature_rerank))
     return payload
 
 
@@ -385,6 +391,77 @@ def _feedback_preview_request_metadata(
     }
 
 
+def _feature_rerank_request_metadata(
+    *,
+    apply_feature_rerank: bool,
+    feature_rerank_profile: str | None,
+) -> Dict[str, Any]:
+    return {
+        "apply_feature_rerank": bool(apply_feature_rerank),
+        "feature_rerank_profile": feature_rerank_profile,
+        "feature_rerank_applied": False,
+        "feature_rerank_candidate_count": 0,
+        "feature_rerank_adjusted_candidate_count": 0,
+        "feature_rerank_negative_mismatch_count": 0,
+        "feature_rerank_reordered": False,
+        "feature_rerank_profile_valid": False,
+        "feature_rerank_missing_profile": False,
+        "feature_rerank_safety_checked": False,
+    }
+
+
+def _apply_feature_rerank_preview(
+    query: str,
+    candidates: List[Dict[str, Any]],
+    *,
+    apply_feature_rerank: bool,
+    feature_rerank_profile: str | None,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any], List[str]]:
+    meta = _feature_rerank_request_metadata(
+        apply_feature_rerank=apply_feature_rerank,
+        feature_rerank_profile=feature_rerank_profile,
+    )
+    if not apply_feature_rerank:
+        return [dict(candidate or {}) for candidate in candidates], meta, []
+    if feature_rerank_profile not in {None, "approved_similar_feature_preview"}:
+        meta["feature_rerank_profile_valid"] = False
+        meta["feature_rerank_safety_checked"] = True
+        return [dict(candidate or {}) for candidate in candidates], meta, ["feature_rerank_profile_ignored"]
+
+    profile_path = approved_similar_feature_reranker.DEFAULT_PROFILE_PATH
+    if not profile_path.exists():
+        meta["feature_rerank_missing_profile"] = True
+        return [dict(candidate or {}) for candidate in candidates], meta, ["feature_rerank_profile_missing"]
+
+    try:
+        profile = approved_similar_feature_reranker.load_feature_rerank_profile(profile_path)
+        reranked, summary = approved_similar_feature_reranker.apply_feature_rerank(
+            query,
+            candidates,
+            profile=profile,
+        )
+    except Exception:
+        meta["feature_rerank_safety_checked"] = True
+        return [dict(candidate or {}) for candidate in candidates], meta, ["feature_rerank_profile_invalid"]
+
+    meta.update(
+        {
+            "feature_rerank_profile": feature_rerank_profile or "approved_similar_feature_preview",
+            "feature_rerank_applied": bool(summary.get("feature_rerank_applied")),
+            "feature_rerank_candidate_count": int(summary.get("candidate_count") or 0),
+            "feature_rerank_adjusted_candidate_count": int(summary.get("adjusted_candidate_count") or 0),
+            "feature_rerank_negative_mismatch_count": int(summary.get("negative_mismatch_count") or 0),
+            "feature_rerank_reordered": bool(summary.get("reordered")),
+            "feature_rerank_profile_valid": bool(summary.get("valid_profile")),
+            "feature_rerank_missing_profile": False,
+            "feature_rerank_safety_checked": True,
+        }
+    )
+    if not summary.get("valid_profile"):
+        return [dict(candidate or {}) for candidate in candidates], meta, ["feature_rerank_profile_invalid"]
+    return reranked, meta, ["feature_rerank_applied_preview_only"]
+
+
 def _product_preview_audit_payload(
     audit_event: Dict[str, Any],
     *,
@@ -393,6 +470,7 @@ def _product_preview_audit_payload(
     auto_answer_suppressed_for_similar_candidates: bool,
     exact_match_checked: bool,
     feedback_preview: Dict[str, Any] | None = None,
+    feature_rerank: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     payload = dict(audit_event or {})
     payload.update(
@@ -412,6 +490,16 @@ def _product_preview_audit_payload(
             "feedback_preview_reordered",
         ):
             payload[key] = feedback_preview.get(key)
+    if feature_rerank:
+        for key in (
+            "apply_feature_rerank",
+            "feature_rerank_profile",
+            "feature_rerank_applied",
+            "feature_rerank_adjusted_candidate_count",
+            "feature_rerank_negative_mismatch_count",
+            "feature_rerank_reordered",
+        ):
+            payload[key] = feature_rerank.get(key)
     return payload
 
 
@@ -711,9 +799,15 @@ def chat_product_preview(req: ProductPreviewChatRequest):
     threshold_profile = req.threshold_profile
     rerank_profile = req.rerank_profile
     apply_feedback_preview = bool(req.apply_feedback_preview)
+    apply_feature_rerank = bool(req.apply_feature_rerank)
+    feature_rerank_profile = req.feature_rerank_profile
     feedback_preview_meta = _feedback_preview_request_metadata(
         apply_feedback_preview=apply_feedback_preview,
         rerank_profile=rerank_profile,
+    )
+    feature_rerank_meta = _feature_rerank_request_metadata(
+        apply_feature_rerank=apply_feature_rerank,
+        feature_rerank_profile=feature_rerank_profile,
     )
     feedback_token = generate_feedback_token()
 
@@ -745,6 +839,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                 auto_answer_suppressed_for_similar_candidates=False,
                 audit_event=audit_event,
                 feedback_preview=feedback_preview_meta,
+                feature_rerank=feature_rerank_meta,
             )
             audit_warnings = _append_product_preview_audit(
                 decision,
@@ -755,6 +850,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                     auto_answer_suppressed_for_similar_candidates=False,
                     exact_match_checked=True,
                     feedback_preview=feedback_preview_meta,
+                    feature_rerank=feature_rerank_meta,
                 ),
             )
             return build_product_answer_envelope(
@@ -772,6 +868,8 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                     "threshold_profile": threshold_profile,
                     "rerank_profile": rerank_profile,
                     "apply_feedback_preview": apply_feedback_preview,
+                    "apply_feature_rerank": apply_feature_rerank,
+                    "feature_rerank_profile": feature_rerank_profile,
                 },
                 warnings=audit_warnings,
                 feedback_token=feedback_token,
@@ -791,6 +889,12 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                 raw_candidates[:top_k],
                 apply_feedback_preview=apply_feedback_preview,
                 rerank_profile=rerank_profile,
+            )
+            preview_candidates, feature_rerank_meta, feature_rerank_warnings = _apply_feature_rerank_preview(
+                user_query,
+                preview_candidates,
+                apply_feature_rerank=apply_feature_rerank,
+                feature_rerank_profile=feature_rerank_profile,
             )
             decision_gate = approved_similar.decide_approved_similar_candidate(preview_candidates)
 
@@ -842,6 +946,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
             audit_event=audit_event,
             decision=decision_gate,
             feedback_preview=feedback_preview_meta,
+            feature_rerank=feature_rerank_meta,
         )
         warnings = (
             ["approved_similar_candidates_are_preview_only"]
@@ -849,6 +954,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
             else ["no_approved_similar_candidate_found"]
         )
         warnings.extend(feedback_preview_warnings)
+        warnings.extend(feature_rerank_warnings)
         warnings.extend(
             _append_product_preview_audit(
                 decision,
@@ -859,6 +965,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                     auto_answer_suppressed_for_similar_candidates=bool(candidate_contracts),
                     exact_match_checked=True,
                     feedback_preview=feedback_preview_meta,
+                    feature_rerank=feature_rerank_meta,
                 ),
             )
         )
@@ -878,6 +985,9 @@ def chat_product_preview(req: ProductPreviewChatRequest):
                 "rerank_profile": rerank_profile,
                 "apply_feedback_preview": apply_feedback_preview,
                 "feedback_preview_applied": feedback_preview_meta.get("feedback_preview_applied"),
+                "apply_feature_rerank": apply_feature_rerank,
+                "feature_rerank_profile": feature_rerank_profile,
+                "feature_rerank_applied": feature_rerank_meta.get("feature_rerank_applied"),
             },
             warnings=warnings,
             feedback_token=feedback_token,

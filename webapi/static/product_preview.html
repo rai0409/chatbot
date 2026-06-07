@@ -313,6 +313,10 @@
             <input id="apply-feedback-preview" name="apply_feedback_preview" type="checkbox">
             <span>Apply feedback preview rerank</span>
           </label>
+          <label class="check-row" for="apply-feature-rerank">
+            <input id="apply-feature-rerank" name="apply_feature_rerank" type="checkbox">
+            <span>Apply Japanese feature rerank</span>
+          </label>
           <div class="actions">
             <button id="submit-button" type="submit">Submit</button>
             <button id="clear-button" type="button" class="secondary">Clear</button>
@@ -455,6 +459,35 @@
       return chips + termItems(reasons);
     }
 
+    function featureRerankItems(candidate) {
+      const items = [];
+      if (candidate.feature_score_adjustment !== undefined) {
+        items.push(["adjustment", candidate.feature_score_adjustment]);
+      }
+      if (candidate.feature_adjusted_score !== undefined) {
+        items.push(["adjusted", candidate.feature_adjusted_score]);
+      }
+      if (candidate.feature_synonym_overlap_score !== undefined) {
+        items.push(["synonym", candidate.feature_synonym_overlap_score]);
+      }
+      if (candidate.feature_business_term_overlap_score !== undefined) {
+        items.push(["business", candidate.feature_business_term_overlap_score]);
+      }
+      if (candidate.feature_negative_mismatch !== undefined) {
+        items.push(["negative_mismatch", candidate.feature_negative_mismatch]);
+      }
+      const chips = items
+        .map(([key, value]) => `<span class="score">feature ${key}: ${escapeHtml(value)}</span>`)
+        .join("");
+      const reasons = Array.isArray(candidate.feature_rerank_reasons)
+        ? candidate.feature_rerank_reasons.slice(0, 6)
+        : [];
+      const canonicals = Array.isArray(candidate.feature_matched_canonicals)
+        ? candidate.feature_matched_canonicals.slice(0, 6)
+        : [];
+      return chips + termItems(reasons.concat(canonicals));
+    }
+
     function escapeHtml(value) {
       return safeText(value)
         .replaceAll("&", "&amp;")
@@ -522,6 +555,7 @@
           <div class="candidate-preview">${escapeHtml(candidate.approved_answer_preview || "")}</div>
           <div class="scores">${scoreItems(candidate.scores)}</div>
           <div class="scores">${feedbackPreviewItems(candidate)}</div>
+          <div class="scores">${featureRerankItems(candidate)}</div>
           <div class="terms">${termItems(candidate.matched_terms)}</div>
           <div class="actions" style="margin-top: 10px;">
             <button type="button" class="secondary select-candidate" data-qa-id="${escapeHtml(candidate.qa_id || "")}" data-rank="${index + 1}">Select</button>
@@ -546,6 +580,10 @@
       if (el("apply-feedback-preview").checked) {
         body.apply_feedback_preview = true;
         body.rerank_profile = "feedback_preview";
+      }
+      if (el("apply-feature-rerank").checked) {
+        body.apply_feature_rerank = true;
+        body.feature_rerank_profile = "approved_similar_feature_preview";
       }
       setStatus("Loading...");
       el("submit-button").disabled = true;

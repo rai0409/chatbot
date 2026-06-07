@@ -87,6 +87,16 @@ def build_candidate_contract(candidate: Dict[str, Any], *, max_preview_chars: in
         "feedback_preview_negative_count",
         "feedback_preview_review_needed_count",
         "feedback_preview_adjusted_score",
+        "feature_rerank_applied",
+        "feature_base_score",
+        "feature_adjusted_score",
+        "feature_score_adjustment",
+        "feature_synonym_overlap_score",
+        "feature_business_term_overlap_score",
+        "feature_negative_mismatch",
+        "feature_rerank_reasons",
+        "feature_matched_canonicals",
+        "feature_negative_mismatch_reason",
     ):
         if key in candidate:
             item[key] = candidate.get(key)
