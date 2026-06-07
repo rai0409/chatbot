@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
 from rag_core.question_normalization import normalize_question_for_exact_match
+from rag_core.source_metadata import normalize_citation, normalize_source_pages
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,13 @@ class ApprovedCitation:
     source_pages: Tuple[int, ...] = field(default_factory=tuple)
     chunk_id: str | None = None
     title: str | None = None
+    source_id: str | None = None
+    source_title: str | None = None
+    source_type: str | None = None
+    version: str | None = None
+    status: str | None = None
+    updated_at: str | None = None
+    tenant_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -40,29 +48,28 @@ def _as_str(value: Any) -> str:
 
 
 def _normalize_pages(value: Any) -> Tuple[int, ...]:
-    if value is None:
-        return tuple()
-    raw = value if isinstance(value, list) else [value]
-    pages: List[int] = []
-    for item in raw:
-        try:
-            pages.append(int(item))
-        except Exception:
-            continue
-    return tuple(pages)
+    return tuple(normalize_source_pages(value))
 
 
 def _normalize_citation(raw: Any) -> ApprovedCitation | None:
     if not isinstance(raw, dict):
         return None
-    source_doc = _as_str(raw.get("source_doc"))
+    normalized = normalize_citation(raw)
+    source_doc = _as_str(normalized.get("source_doc"))
     if not source_doc:
         return None
     return ApprovedCitation(
         source_doc=source_doc,
-        source_pages=_normalize_pages(raw.get("source_pages")),
-        chunk_id=_as_str(raw.get("chunk_id")) or None,
-        title=_as_str(raw.get("title")) or None,
+        source_pages=_normalize_pages(normalized.get("source_pages")),
+        chunk_id=_as_str(normalized.get("chunk_id")) or None,
+        title=_as_str(normalized.get("title")) or None,
+        source_id=_as_str(normalized.get("source_id")) or None,
+        source_title=_as_str(normalized.get("source_title")) or None,
+        source_type=_as_str(normalized.get("source_type")) or None,
+        version=_as_str(normalized.get("version")) or None,
+        status=_as_str(normalized.get("status")) or None,
+        updated_at=_as_str(normalized.get("updated_at")) or None,
+        tenant_id=_as_str(normalized.get("tenant_id")) or None,
     )
 
 

@@ -54,6 +54,49 @@ def test_loader_computes_normalized_question_and_lookup_returns_answer(tmp_path)
     assert answer.approved_citations[0].source_doc == "faq.pdf"
 
 
+def test_loader_accepts_citations_with_optional_safe_source_metadata(tmp_path):
+    path = tmp_path / "approved.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _record(
+                approved_citations=[
+                    {
+                        "source_doc": "faq.pdf",
+                        "source_pages": "[1,2]",
+                        "chunk_id": "c1",
+                        "title": "FAQ",
+                        "source_id": "src-1",
+                        "source_title": "FAQ Source",
+                        "source_type": "approved_qa",
+                        "version": "v1",
+                        "status": "active",
+                        "updated_at": "2026-06-07T00:00:00Z",
+                        "tenant_id": "default",
+                    }
+                ]
+            )
+        ],
+    )
+
+    index = load_approved_qa(path)
+    citation = lookup_approved_answer(index, "パスワード再設定の方法は？").approved_citations[0]
+
+    assert citation.source_doc == "faq.pdf"
+    assert citation.source_pages == (1, 2)
+    assert citation.source_id == "src-1"
+    assert citation.source_title == "FAQ Source"
+    assert citation.source_type == "approved_qa"
+    assert citation.version == "v1"
+    assert citation.status == "active"
+    assert citation.updated_at == "2026-06-07T00:00:00Z"
+    assert citation.tenant_id == "default"
+
+
+def test_validation_does_not_require_source_id():
+    assert validate_approved_qa_records([_record()]) == []
+
+
 def test_non_approved_status_is_ignored(tmp_path):
     path = tmp_path / "approved.jsonl"
     _write_jsonl(path, [_record(status="draft")])
