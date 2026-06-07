@@ -1,0 +1,22 @@
+{
+  "profile_name": "approved_similar_feature_preview",
+  "profile_type": "approved_similar_feature_rerank",
+  "version": 1,
+  "runtime_enabled": false,
+  "production_enabled": false,
+  "weights": {
+    "base_score": 1.0,
+    "synonym_overlap": 0.08,
+    "business_term_overlap": 0.1,
+    "negative_mismatch_penalty": 0.18
+  },
+  "limits": {
+    "max_positive_adjustment": 0.12,
+    "max_negative_penalty": 0.2
+  },
+  "safety": {
+    "no_runtime_ranking_change": true,
+    "no_auto_answer_enablement": true,
+    "requires_offline_evaluation_before_production": true
+  }
+}
