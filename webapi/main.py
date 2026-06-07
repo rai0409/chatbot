@@ -46,6 +46,7 @@ from rag_core.review_actions import (
     append_review_action_event,
     build_review_action_event,
 )
+from rag_core.source_metadata import normalize_citation
 from rag_core.utils import ensure_openai_client
 from webapi.admin_auth import require_admin_auth
 
@@ -318,14 +319,27 @@ def _approved_qa_lookup(question: str, tenant_id: str = "default") -> ApprovedAn
 def _approved_chat_payload(answer: ApprovedAnswer) -> Dict[str, Any]:
     citations = []
     for idx, citation in enumerate(answer.approved_citations, start=1):
-        citations.append(
+        payload = normalize_citation(
             {
-                "number": idx,
                 "source_doc": citation.source_doc,
                 "source_pages": list(citation.source_pages),
                 "chunk_id": citation.chunk_id,
+                "title": citation.title,
+                "source_id": citation.source_id,
+                "source_title": citation.source_title,
+                "source_type": citation.source_type,
+                "version": citation.version,
+                "status": citation.status,
+                "updated_at": citation.updated_at,
+                "tenant_id": citation.tenant_id,
             }
         )
+        payload["number"] = idx
+        payload.setdefault("source_doc", citation.source_doc)
+        payload.setdefault("source_pages", list(citation.source_pages))
+        payload.setdefault("chunk_id", citation.chunk_id)
+        payload.setdefault("title", citation.title)
+        citations.append(payload)
     return {
         "answer_text": answer.approved_answer,
         "answer_with_footnotes": answer.approved_answer,

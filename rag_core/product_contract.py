@@ -4,6 +4,8 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Sequence
 
+from rag_core.source_metadata import bounded_safe_string, normalize_citation, normalize_source_metadata, normalize_source_pages
+
 
 ANSWER_MODE_APPROVED_EXACT_MATCH = "approved_exact_match"
 ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY = "approved_similar_candidate_only"
@@ -34,6 +36,14 @@ CONFIDENCE_ROUTES = {
 
 _DEFAULT_PREVIEW_CHARS = 220
 _DEFAULT_QUERY_CHARS = 500
+_PRESERVED_CITATION_KEYS = (
+    "source_doc",
+    "source_pages",
+    "chunk_id",
+    "title",
+    "doc_version",
+    "tenant_id",
+)
 
 
 def _bounded(value: Any, max_chars: int) -> str:
@@ -51,6 +61,34 @@ def generate_feedback_token() -> str:
 
 
 def build_candidate_contract(candidate: Dict[str, Any], *, max_preview_chars: int = _DEFAULT_PREVIEW_CHARS) -> Dict[str, Any]:
+    source_metadata = normalize_source_metadata(
+        {
+            "source_id": candidate.get("source_id"),
+            "source_title": candidate.get("source_title") or candidate.get("title"),
+            "source_type": candidate.get("source_type"),
+            "source_doc": candidate.get("source_doc"),
+            "source_path": candidate.get("source_path"),
+            "source_pages": candidate.get("source_pages") or [],
+            "chunk_id": candidate.get("chunk_id") or candidate.get("id"),
+            "parent_chunk_id": candidate.get("parent_chunk_id"),
+            "version": candidate.get("version"),
+            "checksum": candidate.get("checksum"),
+            "checksum_algorithm": candidate.get("checksum_algorithm"),
+            "status": candidate.get("status"),
+            "updated_at": candidate.get("updated_at"),
+            "tenant_id": candidate.get("tenant_id"),
+            "category": candidate.get("category"),
+            "doc_version": candidate.get("doc_version"),
+            "doc_type": candidate.get("doc_type"),
+            "chunk_type": candidate.get("chunk_type") or candidate.get("chunk_role"),
+        }
+    )
+    source_metadata.setdefault("source_doc", candidate.get("source_doc"))
+    source_metadata.setdefault("source_pages", [])
+    source_metadata.setdefault("doc_version", candidate.get("doc_version"))
+    source_metadata.setdefault("tenant_id", candidate.get("tenant_id"))
+    source_metadata.setdefault("chunk_type", candidate.get("chunk_type"))
+    source_metadata.setdefault("doc_type", candidate.get("doc_type"))
     item = {
         "qa_id": candidate.get("qa_id"),
         "question_text": candidate.get("question_text"),
@@ -70,15 +108,8 @@ def build_candidate_contract(candidate: Dict[str, Any], *, max_preview_chars: in
         },
         "decision_route": candidate.get("decision_route") or candidate.get("route"),
         "matched_terms": list(candidate.get("matched_terms") or [])[:16],
-        "citations": list(candidate.get("citations") or []),
-        "source_metadata": {
-            "source_doc": candidate.get("source_doc"),
-            "source_pages": candidate.get("source_pages") or [],
-            "doc_version": candidate.get("doc_version"),
-            "tenant_id": candidate.get("tenant_id"),
-            "chunk_type": candidate.get("chunk_type"),
-            "doc_type": candidate.get("doc_type"),
-        },
+        "citations": _normalize_citations(candidate.get("citations") or []),
+        "source_metadata": source_metadata,
     }
     for key in (
         "feedback_preview_score_adjustment",
@@ -130,7 +161,7 @@ def build_product_answer_envelope(
         "answer_mode": answer_mode,
         "answer_text": safe_answer_text,
         "confidence_route": confidence_route,
-        "citations": list(citations or []),
+        "citations": _normalize_citations(citations or []),
         "candidates": list(candidates or []),
         "decision": dict(decision or {}),
         "profile_info": dict(profile_info or {}),
@@ -171,6 +202,28 @@ def build_audit_event(
         "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
         "feedback_token": feedback_token or generate_feedback_token(),
     }
+
+
+def _normalize_citations(citations: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for citation in citations:
+        if not isinstance(citation, dict):
+            continue
+        payload = normalize_citation(citation)
+        for key in _PRESERVED_CITATION_KEYS:
+            if key not in citation or key in payload:
+                continue
+            value = citation.get(key)
+            if value is None:
+                payload[key] = None
+            elif key == "source_pages":
+                payload[key] = normalize_source_pages(value)
+            elif not isinstance(value, (dict, list, tuple, set)):
+                text = bounded_safe_string(value)
+                if text:
+                    payload[key] = text
+        normalized.append(payload)
+    return normalized
 
 
 def planned_safe_stages() -> List[str]:

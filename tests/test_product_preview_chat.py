@@ -184,6 +184,10 @@ def test_product_preview_exact_match_returns_exact_answer(monkeypatch):
     assert response["answer_mode"] == "approved_exact_match"
     assert response["confidence_route"] == "exact_match"
     assert response["answer_text"] == "完全一致の承認済み回答です。"
+    assert response["citations"][0]["source_doc"] == "faq.pdf"
+    assert response["citations"][0]["source_pages"] == [1]
+    assert response["citations"][0]["chunk_id"] == "c1"
+    assert response["citations"][0]["title"] is None
     assert response["candidates"] == []
 
 

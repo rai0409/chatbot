@@ -56,6 +56,32 @@ def test_candidate_only_envelope_does_not_expose_approved_answer_as_final_answer
     assert envelope["answer_text"] == ""
 
 
+def test_product_envelope_normalizes_citations_and_suppresses_candidate_only_answer():
+    envelope = build_product_answer_envelope(
+        request_id="req-1",
+        trace_id="trace-1",
+        answer_mode=ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY,
+        answer_text="承認済み回答の全文",
+        confidence_route=CONFIDENCE_ROUTE_CANDIDATE_ONLY,
+        citations=[
+            {
+                "source_doc": "faq.pdf",
+                "source_pages": "[1,2]",
+                "chunk_id": "c1",
+                "source_id": "src-1",
+                "body": "private content",
+            }
+        ],
+    )
+
+    assert envelope["answer_text"] == ""
+    assert envelope["citations"][0]["source_doc"] == "faq.pdf"
+    assert envelope["citations"][0]["source_pages"] == [1, 2]
+    assert envelope["citations"][0]["chunk_id"] == "c1"
+    assert envelope["citations"][0]["source_id"] == "src-1"
+    assert "private content" not in repr(envelope)
+
+
 def test_candidate_preview_is_bounded():
     candidate = build_candidate_contract(
         {
@@ -74,6 +100,49 @@ def test_candidate_preview_is_bounded():
     assert len(candidate["approved_answer_preview"]) <= 30
     assert candidate["approved_answer_preview"].endswith("...[truncated]")
     assert candidate["scores"]["hybrid_score"] == 0.9
+
+
+def test_candidate_contract_normalizes_source_metadata_and_citations():
+    candidate = build_candidate_contract(
+        {
+            "qa_id": "qa-1",
+            "question_text": "question",
+            "approved_answer": "answer",
+            "source_doc": "doc.pdf",
+            "source_pages": "[3,4]",
+            "source_id": "src-1",
+            "source_title": "Doc Source",
+            "source_type": "pdf",
+            "chunk_id": "chunk-1",
+            "version": "v1",
+            "status": "active",
+            "updated_at": "2026-06-07T00:00:00Z",
+            "doc_version": "doc-v1",
+            "tenant_id": "tenant-a",
+            "doc_type": "procedure",
+            "chunk_type": "child",
+            "citations": [
+                {
+                    "source_doc": "doc.pdf",
+                    "source_pages": ["3", "bad"],
+                    "chunk_id": "chunk-1",
+                    "answer_text": "private content",
+                }
+            ],
+        }
+    )
+
+    assert candidate["source_metadata"]["source_doc"] == "doc.pdf"
+    assert candidate["source_metadata"]["source_pages"] == [3, 4]
+    assert candidate["source_metadata"]["source_id"] == "src-1"
+    assert candidate["source_metadata"]["source_title"] == "Doc Source"
+    assert candidate["source_metadata"]["source_type"] == "pdf"
+    assert candidate["source_metadata"]["chunk_id"] == "chunk-1"
+    assert candidate["source_metadata"]["version"] == "v1"
+    assert candidate["source_metadata"]["status"] == "active"
+    assert candidate["source_metadata"]["updated_at"] == "2026-06-07T00:00:00Z"
+    assert candidate["citations"][0]["source_pages"] == [3]
+    assert "private content" not in repr(candidate)
 
 
 def test_audit_event_includes_required_keys_and_bounds_query():
