@@ -1,0 +1,125 @@
+# Production Readiness Checklist
+
+This checklist is for commercial RAG / chatbot exposure readiness. It is a smoke and operations checklist, not a production approval by itself.
+
+## Admin Auth
+
+- [ ] `GET /admin/review` is protected when `ADMIN_AUTH_ENABLED=true`.
+- [ ] `GET /admin/review/items` is protected when `ADMIN_AUTH_ENABLED=true`.
+- [ ] `POST /admin/review/action` is protected when `ADMIN_AUTH_ENABLED=true`.
+- [ ] `ADMIN_AUTH_TOKEN` is configured and non-empty when admin auth is enabled.
+- [ ] Admin routes are not publicly exposed unless auth is enabled and verified.
+
+## Runtime Safety
+
+- [ ] `/chat` default behavior is unchanged.
+- [ ] `/chat/product-preview` default behavior is unchanged when `product_profile` is absent.
+- [ ] Approved similar non-exact matches remain candidate-only.
+- [ ] Similar candidates are not inserted into final `answer_text`.
+- [ ] Production rerank is not enabled by default.
+- [ ] LLM answer and LLM rerank are off unless explicitly enabled by a safe profile and policy.
+
+## Product Profiles
+
+- [ ] `production_safe` disables similar auto-answer.
+- [ ] `production_safe` disables LLM answer and LLM rerank.
+- [ ] `production_safe` disables debug comparison.
+- [ ] `production_safe` disables `feedback_preview_rerank`.
+- [ ] `production_low_cost` disables expensive comparison and LLM behavior.
+- [ ] `pilot_high_accuracy`, `evaluation`, and `dev_debug` do not enable similar auto-answer.
+- [ ] Request overrides cannot enable unsafe features disabled by the selected profile.
+
+## Audit And Feedback Safety
+
+- [ ] Audit logging does not store full private payloads.
+- [ ] Audit logging stores candidate IDs, not full candidate payloads or approved answers.
+- [ ] Feedback logging does not immediately change production ranking.
+- [ ] Feedback rerank remains preview, eval, and policy gated.
+- [ ] Feedback-derived profiles require offline evaluation before promotion.
+
+## Admin And Review Operations
+
+- [ ] Review queue endpoint uses a safe field whitelist.
+- [ ] Review actions are logged to bounded JSONL.
+- [ ] Review action logs do not store full candidate payloads or approved answers.
+- [ ] Admin routes must not be publicly exposed without auth.
+
+## Known Production Blockers
+
+- [ ] Tenant/customer runtime selection is not fully complete.
+- [ ] Knowledge manifest and source versioning are not complete.
+- [ ] Citation/source metadata hardening is not complete.
+- [ ] DB persistence and tenant isolation are not complete.
+- [ ] Rollback/profile promotion workflow is not complete.
+
+## Required Smoke Commands
+
+Run the local smoke script:
+
+```bash
+scripts/product_readiness_smoke.sh
+```
+
+Or run the same checks directly:
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_admin_auth.py \
+  tests/test_review_queue_page.py \
+  tests/test_review_actions.py \
+  tests/test_product_profile.py \
+  tests/test_product_route_policy.py \
+  tests/test_product_preview_profiles.py \
+  tests/test_product_preview_chat.py \
+  tests/test_product_preview_feedback_rerank.py \
+  tests/test_product_preview_feature_rerank.py -q
+
+.venv/bin/python -m py_compile \
+  webapi/main.py \
+  webapi/admin_auth.py \
+  rag_core/product_profile.py \
+  rag_core/product_route_policy.py
+```
+
+## Manual Curl Smoke Examples
+
+These examples require a local server to already be running. The smoke script prints them but does not start a server.
+
+Admin auth disabled:
+
+```bash
+curl -i -s http://127.0.0.1:8000/admin/review/items
+```
+
+Admin auth enabled without token should reject:
+
+```bash
+ADMIN_AUTH_ENABLED=true ADMIN_AUTH_TOKEN=local-admin-token .venv/bin/python -m uvicorn webapi.main:app --host 127.0.0.1 --port 8000
+curl -i -s http://127.0.0.1:8000/admin/review/items
+```
+
+Admin auth enabled with token should allow:
+
+```bash
+curl -i -s http://127.0.0.1:8000/admin/review/items \
+  -H 'Authorization: Bearer local-admin-token'
+
+curl -i -s http://127.0.0.1:8000/admin/review/items \
+  -H 'X-Admin-Token: local-admin-token'
+```
+
+Product preview with `production_safe`:
+
+```bash
+curl -i -s -X POST http://127.0.0.1:8000/chat/product-preview \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"15問に自由回答は含まれますか？","product_profile":"production_safe","apply_feedback_preview":true,"apply_feature_rerank":true}'
+```
+
+Product preview with `pilot_high_accuracy`:
+
+```bash
+curl -i -s -X POST http://127.0.0.1:8000/chat/product-preview \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"15問に自由回答は含まれますか？","product_profile":"pilot_high_accuracy","apply_feedback_preview":true,"apply_feature_rerank":true}'
+```
