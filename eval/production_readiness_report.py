@@ -31,6 +31,7 @@ KEY_FILES = {
     "checklist": ROOT / "docs" / "production_readiness_checklist.md",
     "product_profile_helper": ROOT / "rag_core" / "product_profile.py",
     "product_route_policy": ROOT / "rag_core" / "product_route_policy.py",
+    "product_contract": ROOT / "rag_core" / "product_contract.py",
     "product_profiles_dir": ROOT / "configs" / "product_profiles",
     "tenant_mapping": ROOT / "configs" / "product_tenants" / "default.json",
     "tenant_profile_helper": ROOT / "rag_core" / "tenant_profile.py",
@@ -393,6 +394,7 @@ def _safety_checks(
     rerank_promotion: dict[str, Any],
 ) -> dict[str, bool]:
     main_text = _read_text(paths["webapi_main"])
+    product_contract_text = _read_text(paths["product_contract"])
     production_safe = product_profiles.get("production_safe") if isinstance(product_profiles.get("production_safe"), dict) else {}
     all_profile_summaries = [
         value for key, value in product_profiles.items() if key not in {"available_profiles", "warnings"} and isinstance(value, dict)
@@ -405,12 +407,26 @@ def _safety_checks(
         "tenant_preview_wiring_present": "use_tenant_profile" in main_text and "resolve_tenant_product_profile" in main_text,
         "production_rerank_not_enabled_by_default": bool(not production_safe.get("feedback_preview_rerank")),
         "similar_auto_answer_disabled": all(not summary.get("allow_similar_auto_answer") for summary in all_profile_summaries),
-        "approved_similar_candidate_only_present": "approved_similar_candidate_only" in main_text and "ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY" in main_text,
+        "approved_similar_candidate_only_present": _candidate_only_contract_present(product_contract_text, main_text),
         "readiness_smoke_script_present": paths["smoke_script"].exists(),
         "knowledge_manifest_helper_present": bool(knowledge_manifest.get("helper_present")),
         "citation_source_metadata_helper_present": bool(citation_metadata.get("source_metadata_helper_present")),
         "feature_rerank_promotion_gate_present": bool(rerank_promotion.get("gate_present")),
     }
+
+
+def _candidate_only_contract_present(product_contract_text: str, runtime_text: str) -> bool:
+    contract_has_mode = "ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY" in product_contract_text
+    contract_has_value = '"approved_similar_candidate_only"' in product_contract_text
+    contract_suppresses_answer = (
+        'safe_answer_text = "" if answer_mode == ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY'
+        in product_contract_text
+    )
+    runtime_references_mode = (
+        "ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY" in runtime_text
+        or "approved_similar_candidate_only" in runtime_text
+    )
+    return bool(contract_has_mode and contract_has_value and contract_suppresses_answer and runtime_references_mode)
 
 
 def _readiness_decision(

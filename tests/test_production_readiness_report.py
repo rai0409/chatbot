@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import json
 
-from eval.production_readiness_report import build_report, render_markdown, write_report
+from eval.production_readiness_report import (
+    _candidate_only_contract_present,
+    build_report,
+    render_markdown,
+    write_report,
+)
 
 
 def test_report_generator_creates_json_and_markdown_in_tmp_output_dir(tmp_path):
@@ -39,6 +44,25 @@ def test_production_safe_keeps_similar_auto_answer_and_llm_disabled():
     assert production_safe["llm_answer"] is False
     assert production_safe["llm_rerank"] is False
     assert report["safety_checks"]["similar_auto_answer_disabled"] is True
+
+
+def test_candidate_only_static_check_detects_product_contract_and_runtime_reference():
+    report = build_report()
+
+    assert report["safety_checks"]["approved_similar_candidate_only_present"] is True
+    assert "approved_similar_candidate_only_present" not in report["readiness_decision"]["blockers"]
+
+
+def test_candidate_only_static_check_requires_contract_suppression_behavior():
+    runtime_text = "from rag_core.product_contract import ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY"
+    valid_contract = (
+        'ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY = "approved_similar_candidate_only"\n'
+        'safe_answer_text = "" if answer_mode == ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY else str(answer_text or "")\n'
+    )
+    missing_suppression = 'ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY = "approved_similar_candidate_only"\n'
+
+    assert _candidate_only_contract_present(valid_contract, runtime_text) is True
+    assert _candidate_only_contract_present(missing_suppression, runtime_text) is False
 
 
 def test_report_never_returns_ready_for_full_production():
