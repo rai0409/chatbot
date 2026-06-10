@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import List, Protocol, Sequence
+from typing import Dict, List, Protocol, Sequence
 
 import config
 
@@ -127,6 +127,14 @@ def get_embedding_provider(provider_name: str | None = None) -> EmbeddingProvide
 
 def is_local_provider(provider_name: str | None = None) -> bool:
     return (provider_name or default_provider_name()).strip().lower() == LOCAL_PROVIDER
+
+
+def active_fingerprint(provider_name: str | None = None) -> Dict[str, str]:
+    provider = get_embedding_provider(provider_name)
+    return {
+        "embed_provider": str(provider.name),
+        "embed_model": str(getattr(provider, "model_name", "") or ""),
+    }
 
 
 def embed_queries(
