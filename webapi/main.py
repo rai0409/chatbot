@@ -39,7 +39,7 @@ from rag_core.feedback_rerank_profile import PROFILE_PATH, apply_feedback_previe
 from rag_core.product_profile import load_product_profile
 from rag_core.product_route_policy import build_route_policy
 from rag_core.qa import answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
-from rag_core.retrieval import RetrievedChunk
+from rag_core.retrieval import RetrievedChunk, keyword_index_status
 from rag_core.review_actions import (
     ALLOWED_ACTION_TYPES,
     ALLOWED_STATUS_AFTER,
@@ -830,7 +830,19 @@ def _load_review_items(
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    payload: Dict[str, Any] = {"status": "ok"}
+    try:
+        payload.update(keyword_index_status())
+    except Exception:
+        logging.exception("keyword index status unavailable")
+        payload.update(
+            {
+                "keyword_index_loaded": False,
+                "keyword_index_records": 0,
+                "keyword_index_path": str(config.CHUNKS_JSONL_PATH),
+            }
+        )
+    return payload
 
 
 @app.get("/metrics")
