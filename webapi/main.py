@@ -16,6 +16,7 @@ from pydantic import BaseModel
 import config
 from rag_core import approved_similar
 from rag_core import approved_similar_feature_reranker
+from rag_core import embedding_provider
 from rag_core.approved_similar import search_approved_similar_candidates
 from rag_core.approved_qa import ApprovedAnswer, ApprovedQAIndex, load_approved_qa, lookup_approved_answer
 from rag_core.audit_log import (
@@ -278,10 +279,7 @@ def _trace_value(trace: Dict[str, Any], key: str, default: Any = None) -> Any:
 
 
 def _embedding_client():
-    provider = (
-        config.getenv_first("EMBED_PROVIDER", default="openai") or "openai"
-    ).lower()
-    if provider == "local":
+    if embedding_provider.is_local_provider():
         return None
     return ensure_openai_client(base_url=config.OPENAI_BASE_URL)
 
@@ -842,6 +840,11 @@ def health():
                 "keyword_index_path": str(config.CHUNKS_JSONL_PATH),
             }
         )
+    try:
+        payload.update(embedding_provider.active_fingerprint())
+    except Exception:
+        logging.exception("embedding fingerprint unavailable")
+        payload.update({"embed_provider": None, "embed_model": None})
     return payload
 
 

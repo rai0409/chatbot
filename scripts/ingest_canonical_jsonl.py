@@ -75,7 +75,9 @@ def _reset_collection(collection) -> Any:
     if client is not None and name:
         try:
             client.delete_collection(name=name)
-            return store.get_vectorstore(collection_name=name)
+            return store.get_vectorstore(
+                collection_name=name, verify_embedding_fingerprint=False
+            )
         except Exception:
             pass
     try:
@@ -108,9 +110,13 @@ def main() -> int:
     if not embedder.is_local_provider():
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
 
-    collection = store.get_vectorstore(collection_name=args.collection)
+    collection = store.get_vectorstore(
+        collection_name=args.collection, verify_embedding_fingerprint=False
+    )
     if args.reset:
         collection = _reset_collection(collection)
+    fingerprint = store.stamp_collection_fingerprint(collection)
+    print(f"embedding_fingerprint={json.dumps(fingerprint, ensure_ascii=False)}")
 
     batch_ids: List[str] = []
     batch_texts: List[str] = []
