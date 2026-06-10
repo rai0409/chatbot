@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -39,6 +40,41 @@ class _KeywordIndex:
 
 _INDEX_CACHE: Dict[str, object] = {"path": None, "mtime": None, "index": None}
 _INDEX_LOCK = Lock()
+
+logger = logging.getLogger(__name__)
+
+# Degraded keyword corpus states already warned about, keyed by (path, reason),
+# so the warning is emitted once per process per state instead of per request.
+_KEYWORD_INDEX_WARNED_KEYS: set[Tuple[str, str]] = set()
+
+
+def _warn_degraded_keyword_index(path: str, records: int, reason: str) -> None:
+    key = (str(path), reason)
+    if key in _KEYWORD_INDEX_WARNED_KEYS:
+        return
+    _KEYWORD_INDEX_WARNED_KEYS.add(key)
+    logger.warning(
+        "keyword_index_degraded %s",
+        json.dumps(
+            {
+                "keyword_index_loaded": records > 0,
+                "keyword_index_records": records,
+                "keyword_index_path": str(path),
+                "reason": reason,
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+
+def keyword_index_status() -> Dict[str, Any]:
+    index = _load_keyword_index()
+    records = len(index.searchable_docs)
+    return {
+        "keyword_index_loaded": records > 0,
+        "keyword_index_records": records,
+        "keyword_index_path": str(config.CHUNKS_JSONL_PATH),
+    }
 
 
 def _build_base_where(allowed_types=None, allowed_qualities=None) -> Dict:
@@ -199,6 +235,10 @@ def _load_keyword_index() -> _KeywordIndex:
                     chunk_id = str(meta.get("id") or "").strip()
                     if chunk_id:
                         rows_by_id[chunk_id] = dict(obj)
+        if not os.path.exists(path):
+            _warn_degraded_keyword_index(path, len(searchable_docs), "missing_file")
+        elif not searchable_docs:
+            _warn_degraded_keyword_index(path, len(searchable_docs), "empty_corpus")
         bm25 = BM25Okapi(tokenized_corpus or [[""]])
         index = _KeywordIndex(
             tokenized_corpus=tokenized_corpus,
