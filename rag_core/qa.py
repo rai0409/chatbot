@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 import config
 from rag_core import embedding_provider
+from rag_core.cross_encoder_reranker import rerank as cross_encoder_rerank
 from rag_core.keyword_scorer import apply_keyword_boost, classify_query_type, score_keyword_match
 from rag_core.reranker import rerank_chunks
 from rag_core.retrieval import QueryEmbeddingBatch, RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, hybrid_retrieve, normalize_tenant_id, vector_retrieve
@@ -540,6 +541,10 @@ def _retrieve_and_rerank(
             query_type=query_type,
             max_boost=config.KEYWORD_BOOST_MAX_DELTA,
         )
+    if config.CROSS_ENCODER_RERANK_ENABLED:
+        # Optional semantic stage over the already tenant-filtered, heuristic-
+        # ranked candidates; reorders the fused top-N before parent expansion.
+        child_ranked = cross_encoder_rerank(question, child_ranked)
     context_ranked = expand_parent_chunks(
         child_ranked,
         max_parent_chunks=getattr(config, "MAX_PARENT_EXPANDED_CHUNKS", top_k),
