@@ -41,7 +41,7 @@ from rag_core.feedback_rerank_profile import PROFILE_PATH, apply_feedback_previe
 from rag_core.product_profile import load_product_profile
 from rag_core.product_route_policy import build_route_policy
 from rag_core.qa import answer_query_stream, answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
-from rag_core.retrieval import RetrievedChunk, keyword_index_status
+from rag_core.retrieval import RetrievedChunk, keyword_index_status, normalize_tenant_id
 from rag_core.review_actions import (
     ALLOWED_ACTION_TYPES,
     ALLOWED_STATUS_AFTER,
@@ -112,6 +112,7 @@ class ChatRequest(BaseModel):
     top_k: Optional[int] = None
     max_context_chars: Optional[int] = None
     trace_id: Optional[str] = None
+    tenant_id: Optional[str] = None
 
 
 class SearchRequest(BaseModel):
@@ -331,11 +332,16 @@ def _approved_qa_lookup(question: str, tenant_id: str = "default") -> ApprovedAn
     global _approved_qa_index, _approved_qa_index_path
     if not getattr(config, "APPROVED_QA_ENABLED", False):
         return None
+    tenant = normalize_tenant_id(tenant_id)
     path = str(config.APPROVED_QA_PATH)
-    if _approved_qa_index is None or _approved_qa_index_path != path:
-        _approved_qa_index = load_approved_qa(path, tenant_id=tenant_id)
-        _approved_qa_index_path = path
-    return lookup_approved_answer(_approved_qa_index, question, tenant_id=tenant_id)
+    # Single-slot cache keyed by path AND tenant: load_approved_qa filters
+    # records per tenant, so an index loaded for one tenant must never serve
+    # another.
+    cache_key = f"{path}::{tenant}"
+    if _approved_qa_index is None or _approved_qa_index_path != cache_key:
+        _approved_qa_index = load_approved_qa(path, tenant_id=tenant)
+        _approved_qa_index_path = cache_key
+    return lookup_approved_answer(_approved_qa_index, question, tenant_id=tenant)
 
 
 def _approved_chat_payload(answer: ApprovedAnswer) -> Dict[str, Any]:
@@ -978,8 +984,9 @@ def admin_review_action(req: ReviewActionRequest, _admin_auth: None = Depends(re
 def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
     global _total_requests, _error_requests
     _total_requests += 1
+    tenant_id = normalize_tenant_id(req.tenant_id)
     try:
-        approved = _approved_qa_lookup(req.question)
+        approved = _approved_qa_lookup(req.question, tenant_id=tenant_id)
         if approved is not None:
             payload = _approved_chat_payload(approved)
             append_audit_event(
@@ -1006,6 +1013,7 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
                 req.question,
                 top_k=effective_top_k,
                 max_context_chars=effective_max_context_chars,
+                tenant_id=tenant_id,
             )
             cached = answer_cache.get(cache_key)
             if cached is not None:
@@ -1014,7 +1022,7 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
                     {
                         "request_id": req.trace_id,
                         "trace_id": req.trace_id,
-                        "tenant_id": "default",
+                        "tenant_id": tenant_id,
                         "question": req.question,
                         "guard_reason": cached.get("guard_reason"),
                         "used_fallback": cached.get("used_fallback"),
@@ -1032,13 +1040,14 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
             client=client,
             top_k=effective_top_k,
             max_context_chars=effective_max_context_chars,
+            tenant_id=tenant_id,
         )
         append_audit_event(
             "chat",
             {
                 "request_id": trace.get("request_id"),
                 "trace_id": req.trace_id or trace.get("request_id"),
-                "tenant_id": "default",
+                "tenant_id": tenant_id,
                 "question": req.question,
                 "normalized_query": trace.get("normalized_query"),
                 "intent": trace.get("intent") or ans.intent,
@@ -1070,7 +1079,7 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
             {
                 "request_id": None,
                 "trace_id": req.trace_id,
-                "tenant_id": "default",
+                "tenant_id": tenant_id,
                 "question": req.question,
                 "error": "chat generation unavailable" if generation_error else "internal error",
                 "error_type": generation_error[1].get("error_type") if generation_error else None,
@@ -1091,11 +1100,12 @@ def _sse_event(name: str, payload: Dict[str, Any]) -> str:
 def chat_stream(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
     global _total_requests
     _total_requests += 1
+    tenant_id = normalize_tenant_id(req.tenant_id)
 
     def _events():
         global _error_requests
         try:
-            approved = _approved_qa_lookup(req.question)
+            approved = _approved_qa_lookup(req.question, tenant_id=tenant_id)
             if approved is not None:
                 payload = _approved_chat_payload(approved)
                 append_audit_event(
@@ -1123,6 +1133,7 @@ def chat_stream(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
                 client=client,
                 top_k=req.top_k or config.TOP_K,
                 max_context_chars=req.max_context_chars or config.MAX_CONTEXT_CHARS,
+                tenant_id=tenant_id,
             ):
                 if name == "final":
                     result, trace = payload
@@ -1135,7 +1146,7 @@ def chat_stream(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
                     {
                         "request_id": trace.get("request_id"),
                         "trace_id": req.trace_id or trace.get("request_id"),
-                        "tenant_id": "default",
+                        "tenant_id": tenant_id,
                         "question": req.question,
                         "normalized_query": trace.get("normalized_query"),
                         "intent": trace.get("intent") or result.intent,
@@ -1167,7 +1178,7 @@ def chat_stream(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
                 {
                     "request_id": None,
                     "trace_id": req.trace_id,
-                    "tenant_id": "default",
+                    "tenant_id": tenant_id,
                     "question": req.question,
                     "error": "chat generation unavailable" if generation_error else "internal error",
                     "error_type": content.get("error_type"),

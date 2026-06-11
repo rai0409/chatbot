@@ -10,7 +10,7 @@ from webapi import main
 
 
 def _fake_pipeline(calls, *, guard_reason=None, used_fallback=False):
-    def fake(question, client=None, top_k=20, max_context_chars=8000, intent_override=None):
+    def fake(question, client=None, top_k=20, max_context_chars=8000, intent_override=None, **kwargs):
         calls.append(question)
         ans = AnswerResult(
             answer_text=f"回答本文 {len(calls)}",

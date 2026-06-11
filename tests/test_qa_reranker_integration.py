@@ -83,7 +83,7 @@ def test_answer_query_procedure_neighbor_context_keeps_stable_order_under_weak_e
         return base_hits if calls["count"] == 1 else aug_hits
 
     monkeypatch.setattr(qa, "hybrid_retrieve", _fake_hybrid)
-    monkeypatch.setattr(qa, "add_neighbor_chunks", lambda seeds: neighbor_hits)
+    monkeypatch.setattr(qa, "add_neighbor_chunks", lambda seeds, **kwargs: neighbor_hits)
     monkeypatch.setattr(qa, "guard_merged_top", lambda *args, **kwargs: "soft_distance")
 
     res = qa.answer_query(

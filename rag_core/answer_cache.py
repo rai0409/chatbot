@@ -46,8 +46,9 @@ def _corpus_state() -> Tuple:
     return (chunks_state, approved_state)
 
 
-def build_key(question: str, *, top_k: int, max_context_chars: int) -> Tuple:
+def build_key(question: str, *, top_k: int, max_context_chars: int, tenant_id: str = "default") -> Tuple:
     return (
+        str(tenant_id or "").strip() or "default",
         normalize_question_for_exact_match(question or ""),
         _corpus_state(),
         int(top_k),

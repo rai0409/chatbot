@@ -77,7 +77,22 @@ def keyword_index_status() -> Dict[str, Any]:
     }
 
 
-def _build_base_where(allowed_types=None, allowed_qualities=None) -> Dict:
+DEFAULT_TENANT_ID = "default"
+
+
+def normalize_tenant_id(value) -> str:
+    text = str(value or "").strip()
+    return text or DEFAULT_TENANT_ID
+
+
+def _tenant_matches(meta: Dict, tenant_id: str) -> bool:
+    # Legacy chunks without tenant_id normalize to "default", so they are
+    # visible only to the default tenant; non-default tenants require an
+    # explicit tag.
+    return normalize_tenant_id((meta or {}).get("tenant_id")) == normalize_tenant_id(tenant_id)
+
+
+def _build_base_where(allowed_types=None, allowed_qualities=None, tenant_id: str = DEFAULT_TENANT_ID) -> Dict:
     where = {}
     if allowed_types:
         where["type"] = {"$in": list(allowed_types)}
@@ -85,6 +100,12 @@ def _build_base_where(allowed_types=None, allowed_qualities=None) -> Dict:
         where["quality"] = {"$in": list(allowed_qualities)}
     if not config.IGNORE_SEARCHABLE:
         where["searchable"] = 1
+    # Chroma's where syntax cannot express "missing or equal", so the default
+    # tenant relies on the authoritative post-query _tenant_matches filter;
+    # non-default tenants additionally get a strict equality clause.
+    tenant = normalize_tenant_id(tenant_id)
+    if tenant != DEFAULT_TENANT_ID:
+        where["tenant_id"] = tenant
     if config.LOG_WHERE:
         print("where:", json.dumps(where, ensure_ascii=False))
     return where
@@ -293,9 +314,10 @@ def vector_retrieve(
     allowed_types=None,
     allowed_qualities=None,
     query_embedding=None,
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> List[RetrievedChunk]:
     collection = store.get_vectorstore()
-    where = _build_base_where(allowed_types, allowed_qualities)
+    where = _build_base_where(allowed_types, allowed_qualities, tenant_id=tenant_id)
     embedding = _resolve_query_embedding(question, client, query_embedding)
     oversample = max(1, int(getattr(config, "CHILD_RETRIEVAL_OVERSAMPLE", 2)))
     n_results = max(top_k, top_k * oversample)
@@ -306,6 +328,8 @@ def vector_retrieve(
     out: List[RetrievedChunk] = []
     for text, meta, dist in zip(docs, metas, dists):
         m = dict(meta or {})
+        if not _tenant_matches(m, tenant_id):
+            continue
         m["retrieval_source"] = "vector"
         # Raw cosine distance survives fusion so the guard can use real
         # semantic evidence instead of rank-derived pseudo-distances.
@@ -326,11 +350,13 @@ def keyword_retrieve(
     top_k: int,
     allowed_types=None,
     allowed_qualities=None,
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> List[RetrievedChunk]:
     index = _load_keyword_index()
     if not index.searchable_docs:
         return []
-    where = _build_base_where(allowed_types, allowed_qualities)
+    where = _build_base_where(allowed_types, allowed_qualities, tenant_id=tenant_id)
+    where.pop("tenant_id", None)  # tenant is checked via _tenant_matches below
     query_tokens = _heuristic_tokenize(question)
     if not query_tokens:
         query_tokens = _heuristic_tokenize(_normalize(question))
@@ -341,6 +367,8 @@ def keyword_retrieve(
     ranked = []
     for idx, bm25_score in enumerate(bm25_scores):
         meta = index.metas[idx]
+        if not _tenant_matches(meta, tenant_id):
+            continue
         if not _meta_matches_where(meta, where):
             continue
         norm_text = index.norm_docs[idx]
@@ -405,6 +433,7 @@ def hybrid_retrieve(
     bm25_top_k: Optional[int] = None,
     rrf_k: Optional[int] = None,
     query_embedding=None,
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> List[RetrievedChunk]:
     if not config.ENABLE_HYBRID_RETRIEVAL:
         return vector_retrieve(
@@ -414,6 +443,7 @@ def hybrid_retrieve(
             allowed_types=allowed_types,
             allowed_qualities=allowed_qualities,
             query_embedding=query_embedding,
+            tenant_id=tenant_id,
         )
 
     v_top_k = vector_top_k or config.VECTOR_TOP_K or top_k
@@ -426,12 +456,14 @@ def hybrid_retrieve(
         allowed_types=allowed_types,
         allowed_qualities=allowed_qualities,
         query_embedding=query_embedding,
+        tenant_id=tenant_id,
     )
     keyword_hits = keyword_retrieve(
         question,
         top_k=k_top_k,
         allowed_types=allowed_types,
         allowed_qualities=allowed_qualities,
+        tenant_id=tenant_id,
     )
 
     merged: Dict[str, Dict] = {}
@@ -490,6 +522,7 @@ def expand_parent_chunks(
     *,
     max_parent_chunks: Optional[int] = None,
     max_parent_context_chars: Optional[int] = None,
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> List[RetrievedChunk]:
     if not getattr(config, "ENABLE_PARENT_EXPANSION", True):
         return list(chunks)
@@ -515,7 +548,7 @@ def expand_parent_chunks(
             continue
 
         parent_row = index.rows_by_id.get(parent_id)
-        if not parent_row:
+        if not parent_row or not _tenant_matches(parent_row, tenant_id):
             out.append(ch)
             continue
 
@@ -578,7 +611,11 @@ def expand_parent_chunks(
     return out
 
 
-def add_neighbor_chunks(seeds: Sequence[RetrievedChunk], window: int = 1) -> List[RetrievedChunk]:
+def add_neighbor_chunks(
+    seeds: Sequence[RetrievedChunk],
+    window: int = 1,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> List[RetrievedChunk]:
     collection = store.get_vectorstore()
     out = list(seeds)
     for seed in seeds:
@@ -593,6 +630,8 @@ def add_neighbor_chunks(seeds: Sequence[RetrievedChunk], window: int = 1) -> Lis
                 res = collection.get(where={"doc_id": doc_id, "chunk_index": idx + delta})
                 for text, meta in zip(res.get("documents", []), res.get("metadatas", [])):
                     m = dict(meta or {})
+                    if not _tenant_matches(m, tenant_id):
+                        continue
                     m["retrieval_source"] = "vector"
                     out.append(
                         RetrievedChunk(
