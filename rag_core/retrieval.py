@@ -307,6 +307,9 @@ def vector_retrieve(
     for text, meta, dist in zip(docs, metas, dists):
         m = dict(meta or {})
         m["retrieval_source"] = "vector"
+        # Raw cosine distance survives fusion so the guard can use real
+        # semantic evidence instead of rank-derived pseudo-distances.
+        m["vector_distance"] = float(dist)
         out.append(
             RetrievedChunk(
                 text=_extract_display_text(text=text or "", meta=m),

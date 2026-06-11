@@ -112,3 +112,66 @@ Report in this exact order:
 4. Git diff summary (git diff --stat, no large diffs)
 5. Final judgment: PASS / PARTIAL / FAIL, and whether it is safe to continue to Prompt005.
 6. Next prompt file: if PASS, write exactly one next recommended prompt to prompts/claude/prompt005_phase1b_no_answer_citations.md covering honest no-answer citation behavior (no fabricated [S1] placeholder citations on guard fallback; empty citations with an explicit no-answer mode while keeping the existing response field set) only. Do not execute Prompt005 in this run.
+
+Additional safety and verification requirements:
+
+Before modifying guard logic, if the current repo state is runnable, capture baseline outputs:
+
+- runs/eval/prompt004_smoke_before.json
+- runs/eval/prompt004_retrieval_rows_before.jsonl
+- runs/eval/prompt004_retrieval_summary_before.json
+
+After implementation, run the same commands to:
+
+- runs/eval/prompt004_smoke_after.json
+- runs/eval/prompt004_retrieval_rows_after.jsonl
+- runs/eval/prompt004_retrieval_summary_after.json
+
+Compare before/after summaries explicitly.
+
+If baseline cannot be captured safely, explain why and rely on targeted tests plus post-change eval.
+
+Approved exact-match Q&A must bypass the new confidence guard exactly as before.
+
+Add or update a targeted test proving approved exact-match answers are unchanged and are not blocked by the new guard.
+
+Do not optimize thresholds only to pass the tiny fixture set. Prefer conservative, explainable thresholds and report confidence limitations.
+
+If raw vector distance is unavailable for a retrieval mode, do not fabricate a distance. Mark vector evidence as unavailable and rely only on explicit keyword/BM25 evidence.
+
+Keep rank-derived pseudo-distance only for backward-compatible ordering if needed. It must not be used as semantic confidence evidence.
+
+For the next Prompt005:
+If an existing answer_mode or equivalent field already exists, use it for no-answer mode.
+If no such field exists, do not add a new response field in Prompt005; instead, preserve the existing field set and make no-answer citation behavior honest through empty citations and existing guard/fallback indicators.
+
+Final clarification before execution:
+
+Precondition check:
+Before implementing, verify that Prompt001, Prompt002, and Prompt003 are complete.
+
+Required signs:
+- /health exposes keyword_index_loaded, keyword_index_records, and keyword_index_path.
+- /health exposes embed_provider and embed_model.
+- retrieval batching exists or duplicate augmented-query retrieval has been reduced.
+- Chroma PersistentClient singleton exists or repeated client construction has been reduced.
+- Prompt003 deterministic eval smoke passed before/after with unchanged retrieval-visible outputs.
+
+If these signs are absent, do not implement this prompt. Instead, write a fix prompt to prompts/claude/ and stop.
+
+Verification output clarification:
+Use the prompt004 before/after filenames as the authoritative eval outputs.
+
+For deterministic smoke, use:
+- runs/eval/prompt004_smoke_before.json
+- runs/eval/prompt004_smoke_after.json
+
+For retrieval-aware eval, use:
+- runs/eval/prompt004_retrieval_rows_before.jsonl
+- runs/eval/prompt004_retrieval_summary_before.json
+- runs/eval/prompt004_retrieval_rows_after.jsonl
+- runs/eval/prompt004_retrieval_summary_after.json
+
+Do not use runs/eval/smoke_results.json, runs/eval/retrieval_rows_guard.jsonl, or runs/eval/retrieval_summary_guard.json as the final comparison artifacts unless you also copy or regenerate them into the prompt004 before/after filenames.
+
+If two instructions conflict, follow this Final clarification section.

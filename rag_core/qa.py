@@ -142,25 +142,69 @@ def _should_bypass_too_general(question: str, retrieved: Sequence[RetrievedChunk
     return False
 
 
+def _guard_evidence(retrieved: Sequence[RetrievedChunk]) -> Dict[str, object]:
+    # Real evidence signals for the guard. Rank-derived pseudo-distances on
+    # RetrievedChunk.score are ordering artifacts, never confidence evidence.
+    best_vector_distance: Optional[float] = None
+    best_bm25_score: Optional[float] = None
+    has_lexical_match = False
+    for ch in retrieved:
+        meta = ch.metadata or {}
+        vector_distance = meta.get("vector_distance")
+        if vector_distance is not None:
+            value = float(vector_distance)
+            if best_vector_distance is None or value < best_vector_distance:
+                best_vector_distance = value
+        bm25_score = meta.get("bm25_score")
+        if bm25_score is not None:
+            value = float(bm25_score)
+            if best_bm25_score is None or value > best_bm25_score:
+                best_bm25_score = value
+        details = meta.get("score_details")
+        if not has_lexical_match and isinstance(details, dict):
+            if float(details.get("keyword_score") or 0.0) > 0.0 or list(
+                details.get("matched_terms") or []
+            ):
+                has_lexical_match = True
+    return {
+        "best_vector_distance": best_vector_distance,
+        "best_bm25_score": best_bm25_score,
+        "has_lexical_match": has_lexical_match,
+    }
+
+
 def guard_merged_top(question: str, intent: str, chunks: Sequence[Chunk], retrieved: Sequence[RetrievedChunk]) -> Optional[str]:
     if config.DISABLE_GUARD:
         return None
     if not retrieved:
         return "no_results"
-    best = min(r.score for r in retrieved)
-    hard = config.RAG_HARD_MAX_DIST
-    if intent == "procedure":
-        has_pages = any(ch.source_pages for ch in chunks)
-        if has_pages:
-            hard = hard + config.RAG_HARD_MAX_DIST_PROCEDURE_DELTA
-    if best > hard:
-        return "hard_distance"
-    soft = _soft_threshold(intent)
-    if best > soft:
-        if intent == "change":
-            if any(t in question for t in config.PREFER_SORT_TERMS_CHANGE):
-                return None
-        return "soft_distance"
+    evidence = _guard_evidence(retrieved)
+    best_vector_distance = evidence["best_vector_distance"]
+    if best_vector_distance is not None:
+        best = float(best_vector_distance)
+        hard = config.RAG_HARD_MAX_DIST
+        if intent == "procedure":
+            has_pages = any(ch.source_pages for ch in chunks)
+            if has_pages:
+                hard = hard + config.RAG_HARD_MAX_DIST_PROCEDURE_DELTA
+        if best > hard:
+            return "hard_distance"
+        soft = _soft_threshold(intent)
+        if best > soft:
+            if intent == "change":
+                if any(t in question for t in config.PREFER_SORT_TERMS_CHANGE):
+                    return None
+            return "soft_distance"
+    else:
+        # No vector evidence (stubbed or empty): never fabricate a distance.
+        # Require explicit keyword evidence instead.
+        best_bm25_score = evidence["best_bm25_score"]
+        if (
+            best_bm25_score is not None
+            and float(best_bm25_score) <= config.RAG_MIN_KEYWORD_EVIDENCE_BM25
+            and not evidence["has_lexical_match"]
+        ):
+            return "weak_keyword_evidence"
     salient = _salient_terms(question)
     if salient:
         evidence = " ".join(ch.text for ch in chunks)

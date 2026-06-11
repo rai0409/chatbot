@@ -107,6 +107,11 @@ RAG_HARD_MAX_DIST_PROCEDURE_DELTA = _get_float(
     "RAG_HARD_MAX_DIST_PROCEDURE_DELTA", default=0.03
 )
 
+# Keyword-only minimum evidence: when no vector evidence exists, the guard
+# requires best BM25 above this (or any lexical match). 0.0 = abstain only
+# when there is literally zero term overlap.
+RAG_MIN_KEYWORD_EVIDENCE_BM25 = _get_float("RAG_MIN_KEYWORD_EVIDENCE_BM25", default=0.0)
+
 RAG_SOFT_DIST_OTHER = _get_float("RAG_SOFT_DIST_OTHER", default=0.65)
 RAG_SOFT_DIST_RESET = _get_float("RAG_SOFT_DIST_RESET", default=0.80)
 RAG_SOFT_DIST_CHANGE = _get_float("RAG_SOFT_DIST_CHANGE", default=0.90)
