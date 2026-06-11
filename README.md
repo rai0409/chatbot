@@ -375,6 +375,18 @@ PYTHONPATH=. .venv/bin/uvicorn webapi.main:app \
   --port 8001
 ```
 
+### Run with Docker
+
+```bash
+cp .env.example .env   # fill in real values; .env is never committed or baked into the image
+docker compose up --build
+```
+
+The API listens on port 8000 with a `/health` healthcheck. Runtime data stays
+on the host via bind mounts: `vectorstore/` (Chroma), `index/` (canonical
+JSONL corpus), `data/` (approved Q&A), and `runs/` (audit/eval output). The
+image itself contains only code; see `.dockerignore`.
+
 ---
 
 ## Ingestion
