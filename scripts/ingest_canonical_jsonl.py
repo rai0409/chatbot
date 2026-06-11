@@ -168,6 +168,7 @@ def main() -> int:
         meta = dict(row)
         meta["id"] = str(raw_id)
         meta.pop("text", None)
+        meta["tenant_id"] = str(meta.get("tenant_id") or "").strip() or "default"
         if not meta.get("source_pages"):
             meta["source_pages"] = [-1]
             meta.setdefault("searchable", 1)

@@ -9,7 +9,7 @@ import config
 from rag_core import embedding_provider
 from rag_core.keyword_scorer import apply_keyword_boost, classify_query_type, score_keyword_match
 from rag_core.reranker import rerank_chunks
-from rag_core.retrieval import QueryEmbeddingBatch, RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, hybrid_retrieve, vector_retrieve
+from rag_core.retrieval import QueryEmbeddingBatch, RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, hybrid_retrieve, normalize_tenant_id, vector_retrieve
 from rag_core.utils import ensure_openai_client
 from rag_grounded import Chunk, build_citation_payloads, build_evidence_blocks, build_prompt, extractive_fallback, merge_by_page, rewrite_query, strip_reference_block, strip_source_tags, to_footnotes, validate_output
 from schemas import AnswerResult, CitationOut, RetrievedChunkOut
@@ -490,6 +490,7 @@ def _retrieve_and_rerank(
     top_k: int,
     intent: str,
     query_type: str,
+    tenant_id: str = "default",
 ) -> Tuple[List[RetrievedChunk], List[RetrievedChunk], List[RetrievedChunk]]:
     if augmented_query == question:
         # Identical queries would produce identical passes; retrieve once.
@@ -500,6 +501,7 @@ def _retrieve_and_rerank(
             vector_top_k=config.VECTOR_TOP_K,
             bm25_top_k=config.BM25_TOP_K,
             rrf_k=config.HYBRID_RRF_K,
+            tenant_id=tenant_id,
         )
         aug = base
     else:
@@ -515,6 +517,7 @@ def _retrieve_and_rerank(
             bm25_top_k=config.BM25_TOP_K,
             rrf_k=config.HYBRID_RRF_K,
             query_embedding=lambda: embedding_batch.get(question),
+            tenant_id=tenant_id,
         )
         aug = hybrid_retrieve(
             augmented_query,
@@ -524,10 +527,11 @@ def _retrieve_and_rerank(
             bm25_top_k=config.BM25_TOP_K,
             rrf_k=config.HYBRID_RRF_K,
             query_embedding=lambda: embedding_batch.get(augmented_query),
+            tenant_id=tenant_id,
         )
     before_rerank = _unique_chunks(base + aug)
     if intent == "procedure":
-        before_rerank = _unique_chunks(add_neighbor_chunks(before_rerank))
+        before_rerank = _unique_chunks(add_neighbor_chunks(before_rerank, tenant_id=tenant_id))
     before_rerank = _decorate_score_details(scoring_query, before_rerank, query_type=query_type)
     child_ranked = rerank_chunks(question, before_rerank, intent=intent)
     if config.KEYWORD_BOOST_ENABLED and query_type in set(config.KEYWORD_BOOST_QUERY_TYPES):
@@ -540,6 +544,7 @@ def _retrieve_and_rerank(
         child_ranked,
         max_parent_chunks=getattr(config, "MAX_PARENT_EXPANDED_CHUNKS", top_k),
         max_parent_context_chars=getattr(config, "MAX_PARENT_CONTEXT_CHARS", max(1200, top_k * 400)),
+        tenant_id=tenant_id,
     )
     context_ranked = _decorate_score_details(scoring_query, context_ranked, query_type=query_type)
     return before_rerank, child_ranked, context_ranked
@@ -577,6 +582,7 @@ def _build_retrieval_trace(
     intent_override: Optional[str] = None,
     started_at: Optional[float] = None,
     request_id: Optional[str] = None,
+    tenant_id: str = "default",
 ) -> Tuple[Dict[str, object], _RetrievalTraceState, float]:
     started_at = started_at if started_at is not None else time.perf_counter()
     request_id = request_id or uuid.uuid4().hex[:12]
@@ -603,6 +609,7 @@ def _build_retrieval_trace(
         top_k=top_k,
         intent=intent,
         query_type=query_type,
+        tenant_id=normalize_tenant_id(tenant_id),
     )
     retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
 
@@ -682,6 +689,7 @@ def debug_retrieve_with_trace(
     top_k: int = 20,
     max_context_chars: int = 8000,
     intent_override: Optional[str] = None,
+    tenant_id: str = "default",
 ) -> Dict[str, object]:
     trace, state, started_at = _build_retrieval_trace(
         question,
@@ -689,6 +697,7 @@ def debug_retrieve_with_trace(
         top_k=top_k,
         max_context_chars=max_context_chars,
         intent_override=intent_override,
+        tenant_id=tenant_id,
     )
     _set_final_trace(
         trace,
@@ -708,6 +717,7 @@ def _answer_query_impl(
     top_k: int = 20,
     max_context_chars: int = 8000,
     intent_override: Optional[str] = None,
+    tenant_id: str = "default",
 ) -> Tuple[AnswerResult, Dict[str, object]]:
     started_at = time.perf_counter()
     request_id = uuid.uuid4().hex[:12]
@@ -719,6 +729,7 @@ def _answer_query_impl(
         intent_override=intent_override,
         started_at=started_at,
         request_id=request_id,
+        tenant_id=tenant_id,
     )
     q = state.normalized_query
     intent = state.intent
@@ -793,13 +804,14 @@ def _answer_query_impl(
     return result, trace
 
 
-def answer_query(question: str, client=None, top_k: int = 20, max_context_chars: int = 8000, intent_override: Optional[str] = None) -> AnswerResult:
+def answer_query(question: str, client=None, top_k: int = 20, max_context_chars: int = 8000, intent_override: Optional[str] = None, tenant_id: str = "default") -> AnswerResult:
     result, _ = _answer_query_impl(
         question,
         client=client,
         top_k=top_k,
         max_context_chars=max_context_chars,
         intent_override=intent_override,
+        tenant_id=tenant_id,
     )
     return result
 
@@ -810,6 +822,7 @@ def answer_query_with_trace(
     top_k: int = 20,
     max_context_chars: int = 8000,
     intent_override: Optional[str] = None,
+    tenant_id: str = "default",
 ) -> Tuple[AnswerResult, Dict[str, object]]:
     return _answer_query_impl(
         question,
@@ -817,6 +830,7 @@ def answer_query_with_trace(
         top_k=top_k,
         max_context_chars=max_context_chars,
         intent_override=intent_override,
+        tenant_id=tenant_id,
     )
 
 
@@ -826,6 +840,7 @@ def answer_query_stream(
     top_k: int = 20,
     max_context_chars: int = 8000,
     intent_override: Optional[str] = None,
+    tenant_id: str = "default",
 ):
     """Streaming variant of _answer_query_impl.
 
@@ -844,6 +859,7 @@ def answer_query_stream(
         intent_override=intent_override,
         started_at=started_at,
         request_id=request_id,
+        tenant_id=tenant_id,
     )
     yield "meta", {
         "request_id": request_id,

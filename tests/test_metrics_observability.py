@@ -79,7 +79,7 @@ def test_stage_latency_grounded_path_has_generation(monkeypatch):
 
 
 def _fake_pipeline(*, guard_reason=None, used_fallback=False, answer_mode=None):
-    def fake(question, client=None, top_k=20, max_context_chars=8000, intent_override=None):
+    def fake(question, client=None, top_k=20, max_context_chars=8000, intent_override=None, **kwargs):
         ans = AnswerResult(
             answer_text="回答本文",
             answer_with_footnotes="回答本文",

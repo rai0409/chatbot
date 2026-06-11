@@ -103,3 +103,73 @@ Report in this exact order:
 4. Git diff summary (git diff --stat, no large diffs)
 5. Final judgment: PASS / PARTIAL / FAIL, and whether it is safe to continue to Prompt012.
 6. Next prompt file: if PASS, write exactly one next recommended prompt to prompts/claude/prompt012_phase4b_deployment_packaging.md covering deployment packaging only (Dockerfile, docker-compose.yml with a vectorstore volume, .env.example with placeholder keys only — never real values, and a minimal GitHub Actions workflow running the product readiness smoke test subset). Do not execute Prompt012 in this run.
+
+Final clarification before execution:
+
+Tenant compatibility:
+
+- Preserve current single-tenant behavior through tenant_id="default".
+- Existing requests without tenant_id must behave exactly as tenant_id="default".
+- Legacy chunks without tenant_id metadata must be visible only to tenant_id="default".
+- Non-default tenants must never see legacy untagged chunks.
+
+Tenant normalization:
+
+- Normalize missing, empty, or whitespace-only tenant_id to "default".
+- Treat tenant_id as retrieval scope only, not as authentication or authorization.
+- Do not add tenant management endpoints.
+- Do not map API keys to tenants in this prompt.
+
+Isolation boundary:
+
+- Apply tenant filtering consistently to:
+  - Chroma vector retrieval
+  - BM25 / keyword retrieval
+  - parent expansion
+  - neighbor lookup
+  - approved-QA lookup
+  - answer-cache key
+  - /chat
+  - /chat/stream
+  - debug retrieval paths
+- Do not allow cross-tenant leakage through parent_id, source, document id, chunk id prefix, neighbor lookup, fallback paths, or debug traces.
+
+Chroma where compatibility:
+
+- Use a strict tenant_id equality filter for non-default tenants.
+- For tenant_id="default", include both tenant_id="default" and legacy missing-tenant chunks.
+- If Chroma cannot express missing-or-default safely in where syntax, retrieve with the safest available where clause and apply an explicit post-query metadata filter before returning results.
+- Tests must cover both vector and keyword paths.
+
+Ingest behavior:
+
+- New ingest paths should stamp tenant_id into metadata, defaulting to "default" when absent.
+- Do not rewrite, delete, or migrate existing corpus files.
+- Existing untagged corpus must remain usable for the default tenant.
+
+Cache and approved-QA:
+
+- Include tenant_id in the answer-cache key.
+- Cache entries must never be shared across tenants.
+- Approved exact-match lookup must receive tenant_id from the request.
+- Existing approved-QA behavior for default tenant must remain unchanged.
+
+Response contract:
+
+- Adding optional tenant_id to ChatRequest is allowed.
+- Do not change existing response field sets.
+- Deterministic eval smoke must remain 21/21 for default tenant.
+
+Scope control:
+
+- Do not change guard, citation validation, LLM generation, streaming protocol, API auth, CORS, metrics semantics, provider retry behavior, or cache semantics beyond adding tenant_id to the key.
+- Do not add new dependencies.
+- Keep changes minimal and localized.
+- Tests must not require network access or an OpenAI API key.
+
+Stop conditions:
+
+- If tenant filtering cannot be implemented safely in both vector and keyword retrieval without a broad rewrite, stop and report PARTIAL.
+- If parent expansion or neighbor lookup cannot be made tenant-safe with a minimal localized change, stop and report PARTIAL.
+
+If any instruction conflicts, follow this Final clarification section.

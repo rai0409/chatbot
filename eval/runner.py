@@ -252,6 +252,7 @@ def _retrieval_mode_runtime(mode: str):
         bm25_top_k: Optional[int] = None,
         rrf_k: Optional[int] = None,
         query_embedding=None,
+        tenant_id: str = "default",
     ):
         return retrieval.hybrid_retrieve(
             question,
@@ -263,6 +264,7 @@ def _retrieval_mode_runtime(mode: str):
             bm25_top_k=bm25_top_k,
             rrf_k=rrf_k,
             query_embedding=query_embedding,
+            tenant_id=tenant_id,
         )
 
     def _bm25_only_bridge(
@@ -275,6 +277,7 @@ def _retrieval_mode_runtime(mode: str):
         bm25_top_k: Optional[int] = None,
         rrf_k: Optional[int] = None,
         query_embedding=None,
+        tenant_id: str = "default",
     ):
         del client, vector_top_k, rrf_k, query_embedding
         return retrieval.keyword_retrieve(
@@ -282,6 +285,7 @@ def _retrieval_mode_runtime(mode: str):
             top_k=bm25_top_k or top_k,
             allowed_types=allowed_types,
             allowed_qualities=allowed_qualities,
+            tenant_id=tenant_id,
         )
 
     def _dense_only_bridge(
@@ -294,6 +298,7 @@ def _retrieval_mode_runtime(mode: str):
         bm25_top_k: Optional[int] = None,
         rrf_k: Optional[int] = None,
         query_embedding=None,
+        tenant_id: str = "default",
     ):
         del bm25_top_k, rrf_k
         return retrieval.vector_retrieve(
@@ -303,6 +308,7 @@ def _retrieval_mode_runtime(mode: str):
             allowed_types=allowed_types,
             allowed_qualities=allowed_qualities,
             query_embedding=query_embedding,
+            tenant_id=tenant_id,
         )
 
     def _identity_rerank(
