@@ -196,6 +196,12 @@ KEYWORD_BOOST_ENABLED = _get_bool("KEYWORD_BOOST_ENABLED", default=True)
 KEYWORD_BOOST_QUERY_TYPES = _get_list("KEYWORD_BOOST_QUERY_TYPES", ["exact_lookup", "identifier"])
 KEYWORD_BOOST_MAX_DELTA = _get_float("KEYWORD_BOOST_MAX_DELTA", default=0.05)
 
+# Optional semantic rerank stage (off by default; needs the optional
+# sentence-transformers dependency only when enabled).
+CROSS_ENCODER_RERANK_ENABLED = _get_bool("CROSS_ENCODER_RERANK_ENABLED", default=False)
+CROSS_ENCODER_MODEL = getenv_first("CROSS_ENCODER_MODEL", default="BAAI/bge-reranker-v2-m3")
+CROSS_ENCODER_TOP_N = int(getenv_first("CROSS_ENCODER_TOP_N", default="20"))
+
 APPROVED_QA_ENABLED = _get_bool("APPROVED_QA_ENABLED", default=False)
 _APPROVED_QA_PATH_RAW = getenv_first("APPROVED_QA_PATH", default="eval/cases/approved_qa_sample.jsonl")
 APPROVED_QA_PATH = str((BASE_DIR / _APPROVED_QA_PATH_RAW).resolve())

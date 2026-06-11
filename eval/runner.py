@@ -17,7 +17,7 @@ from rag_core.utils import ensure_openai_client
 SCHEMA_VERSION = "eval_runner.v1"
 RUNNER_VERSION = "pr5a-lightweight"
 _COMPACT_ID_LIMIT = 5
-_RETRIEVAL_MODES = ("bm25_only", "dense_only", "hybrid", "hybrid_rerank")
+_RETRIEVAL_MODES = ("bm25_only", "dense_only", "hybrid", "hybrid_rerank", "hybrid_rerank_ce")
 _EXPECTATION_FIELDS = (
     "expected_top_chunk_id",
     "expected_top_source_doc",
@@ -241,6 +241,7 @@ def _retrieval_mode_runtime(mode: str):
         raise ValueError(f"unsupported retrieval mode: {mode}")
     prev_hybrid = qa.hybrid_retrieve
     prev_rerank = qa.rerank_chunks
+    prev_cross_encoder_enabled = config.CROSS_ENCODER_RERANK_ENABLED
 
     def _hybrid_bridge(
         question: str,
@@ -328,6 +329,12 @@ def _retrieval_mode_runtime(mode: str):
     elif mode == "hybrid":
         qa.hybrid_retrieve = _hybrid_bridge  # type: ignore[assignment]
         qa.rerank_chunks = _identity_rerank  # type: ignore[assignment]
+    elif mode == "hybrid_rerank_ce":
+        # Heuristic rerank plus the optional cross-encoder stage; compare
+        # against hybrid_rerank via eval/rerank_promotion_gate.py before any
+        # default change.
+        qa.hybrid_retrieve = _hybrid_bridge  # type: ignore[assignment]
+        config.CROSS_ENCODER_RERANK_ENABLED = True
     else:
         qa.hybrid_retrieve = _hybrid_bridge  # type: ignore[assignment]
 
@@ -336,6 +343,7 @@ def _retrieval_mode_runtime(mode: str):
     finally:
         qa.hybrid_retrieve = prev_hybrid  # type: ignore[assignment]
         qa.rerank_chunks = prev_rerank  # type: ignore[assignment]
+        config.CROSS_ENCODER_RERANK_ENABLED = prev_cross_encoder_enabled
 
 
 def _chunk_to_view(rank: int, ch: RetrievedChunk) -> Dict[str, Any]:

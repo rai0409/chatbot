@@ -117,3 +117,48 @@ Report in this exact order:
 4. Git diff summary (git diff --stat, no large diffs)
 5. Final judgment: PASS / PARTIAL / FAIL, and whether it is safe to continue to Prompt015.
 6. Next prompt file: if PASS, write exactly one next recommended prompt to prompts/claude/prompt015_phase5b_qa_pair_chunks.md covering approved Q&A → Q+A pair RAG chunks (the README's documented-but-unbuilt route 3: convert approved records into canonical Q+A pair chunks so retrieval sees question and answer together, with an ingest script and eval cases). Do not execute Prompt015 in this run.
+
+Final clarification before execution:
+
+Default safety:
+
+- CROSS_ENCODER_RERANK_ENABLED must default to false.
+- With the knob unset or false, retrieval order, eval smoke output, API behavior, and tests must remain unchanged.
+- Do not load sentence-transformers or any model unless the cross-encoder rerank stage is explicitly enabled or the loader is explicitly invoked in a targeted test.
+
+Optional dependency behavior:
+
+- Do not add sentence-transformers to requirements.txt in this prompt.
+- Missing sentence-transformers must not break import of rag_core.cross_encoder_reranker, rag_core.qa, webapi.main, eval.runner, or tests.
+- Missing sentence-transformers should raise a clear RuntimeError only when the cross-encoder loader is explicitly invoked while enabled.
+- CI and normal tests must not download models.
+
+Rerank behavior:
+
+- Apply cross-encoder rerank only after tenant-filtered fusion and existing heuristic rerank/keyword boost.
+- Apply it before parent expansion and neighbor expansion.
+- Reorder only the configured CROSS_ENCODER_TOP_N candidates.
+- Preserve tail order exactly.
+- Store score in metadata["cross_encoder_score"] without removing existing metadata.
+- If model scoring fails, log one structured warning per process and return input order unchanged.
+
+Tenant and security behavior:
+
+- Do not change tenant filtering, API auth, API key to tenant authorization, cache key behavior, guard logic, citation behavior, streaming protocol, or provider retry behavior.
+- Cross-encoder must only see already tenant-filtered chunks.
+- Tenant authorization tests must keep passing.
+
+Eval behavior:
+
+- Add a new eval retrieval mode hybrid_rerank_ce.
+- Do not make cross-encoder the default retrieval mode.
+- Document that promotion requires comparing hybrid_rerank vs hybrid_rerank_ce on a stamped real-vector collection through eval/rerank_promotion_gate.py.
+- Do not run real-vector/model-download evals in this prompt unless already locally available and safe.
+
+Testing:
+
+- Use fake CrossEncoder/model objects.
+- Tests must not require network access, model downloads, OpenAI API keys, or sentence-transformers installation.
+- Verify default-disabled behavior without importing/loading the optional model.
+
+If any instruction conflicts, follow this Final clarification section.
