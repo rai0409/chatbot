@@ -339,6 +339,58 @@ def _create_chat_completion(client, messages):
     raise RuntimeError("unreachable: chat completion retry loop exhausted")
 
 
+def _stream_chat_completion(client, messages):
+    # Same timeout/max_tokens/retry policy as _create_chat_completion, but
+    # retries happen only before the first content token; never mid-stream.
+    attempts = 1 + max(0, int(getattr(config, "CHAT_COMPLETION_MAX_RETRIES", 1)))
+    backoff = float(getattr(config, "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", 1.0))
+    for attempt in range(attempts):
+        emitted = False
+        try:
+            stream = client.chat.completions.create(
+                model=config.CHAT_MODEL,
+                messages=messages,
+                temperature=0,
+                timeout=float(getattr(config, "CHAT_COMPLETION_TIMEOUT_SECONDS", 30.0)),
+                max_tokens=int(getattr(config, "CHAT_COMPLETION_MAX_TOKENS", 1024)),
+                stream=True,
+            )
+            for chunk in stream:
+                choices = getattr(chunk, "choices", None) or []
+                delta = ""
+                if choices:
+                    delta = getattr(getattr(choices[0], "delta", None), "content", None) or ""
+                if delta:
+                    emitted = True
+                    yield delta
+            return
+        except Exception as exc:
+            if emitted or attempt >= attempts - 1 or not _is_retryable_generation_error(exc):
+                raise
+            time.sleep(backoff * (2 ** attempt))
+
+
+def _guard_fallback_raw(guard_reason: str) -> str:
+    # No-answer responses carry no citation tags: there is no evidence that
+    # supports anything, so nothing may be cited.
+    if guard_reason == "missing_procedure_evidence":
+        fallback = "- 手順の記載が見つかりません。OCR版を確認してください。"
+        return fallback + "\n不明: 手順不明\n不足: OCR版確認"
+    body = f"- 関連情報が見つかりませんでした。理由: {guard_reason}"
+    return body + "\n不明: 根拠不足\n不足: 関連記載なし"
+
+
+def _finalize_generated_answer(raw: str, q: str, grounded: Sequence[Chunk], intent: str) -> Tuple[str, bool]:
+    raw = strip_reference_block(raw)
+    used_fallback = False
+    if not validate_output(raw, grounded, intent, config.PREFER_SORT_TERMS_CHANGE + config.PREFER_SORT_TERMS_RESET):
+        raw = extractive_fallback(q, grounded)
+        used_fallback = True
+    if "不足:" not in raw and "不明:" not in raw:
+        raw = raw.strip() + "\n不足: なし [S1]"
+    return raw, used_fallback
+
+
 class _RetrievalTraceState(NamedTuple):
     normalized_query: str
     intent: str
@@ -671,36 +723,8 @@ def _answer_query_impl(
     augmented = state.augmented_query
     retrieved = state.retrieved
 
-    if state.guard_reason == "missing_procedure_evidence":
-        # No-answer responses carry no citation tags: there is no evidence
-        # that supports anything, so nothing may be cited.
-        fallback = "- 手順の記載が見つかりません。OCR版を確認してください。"
-        raw = fallback + "\n不明: 手順不明\n不足: OCR版確認"
-        answer_chunks = state.selected_context
-        result = _build_answer_result(
-            raw,
-            answer_chunks,
-            intent=intent,
-            guard_reason=state.guard_reason,
-            used_fallback=True,
-            retrieved=retrieved,
-            rewritten_query=rewritten,
-            augmented_query=augmented,
-        )
-        _set_final_trace(
-            trace,
-            started_at,
-            answer_chunks,
-            guard_reason=result.guard_reason,
-            used_fallback=result.used_fallback,
-            answer_mode="fallback",
-            citations_count=len(result.citations),
-        )
-        return result, trace
-
     if state.guard_reason:
-        body = f"- 関連情報が見つかりませんでした。理由: {state.guard_reason}"
-        raw = body + "\n不明: 根拠不足\n不足: 関連記載なし"
+        raw = _guard_fallback_raw(state.guard_reason)
         answer_chunks = state.selected_context
         result = _build_answer_result(
             raw,
@@ -736,15 +760,9 @@ def _answer_query_impl(
             {"role": "user", "content": prompt},
         ],
     )
-    raw = resp.choices[0].message.content or ""
-    raw = strip_reference_block(raw)
-    used_fallback = False
-    if not validate_output(raw, grounded, intent, config.PREFER_SORT_TERMS_CHANGE + config.PREFER_SORT_TERMS_RESET):
-        raw = extractive_fallback(q, grounded)
-        used_fallback = True
-
-    if "不足:" not in raw and "不明:" not in raw:
-        raw = raw.strip() + "\n不足: なし [S1]"
+    raw, used_fallback = _finalize_generated_answer(
+        resp.choices[0].message.content or "", q, grounded, intent
+    )
     answer_chunks = grounded
     result = _build_answer_result(
         raw,
@@ -793,3 +811,101 @@ def answer_query_with_trace(
         max_context_chars=max_context_chars,
         intent_override=intent_override,
     )
+
+
+def answer_query_stream(
+    question: str,
+    client=None,
+    top_k: int = 20,
+    max_context_chars: int = 8000,
+    intent_override: Optional[str] = None,
+):
+    """Streaming variant of _answer_query_impl.
+
+    Yields ("meta", dict), then zero or more ("delta", {"text": ...}), then
+    ("final", (AnswerResult, trace)). Deltas are provisional; the final event
+    is authoritative (validation/extractive fallback may correct the text).
+    Guard/no-answer paths emit meta then final with no deltas.
+    """
+    started_at = time.perf_counter()
+    request_id = uuid.uuid4().hex[:12]
+    trace, state, started_at = _build_retrieval_trace(
+        question,
+        client=client,
+        top_k=top_k,
+        max_context_chars=max_context_chars,
+        intent_override=intent_override,
+        started_at=started_at,
+        request_id=request_id,
+    )
+    yield "meta", {
+        "request_id": request_id,
+        "intent": state.intent,
+        "query_type": state.query_type,
+        "guard_reason": state.guard_reason,
+        "used_fallback": state.used_fallback,
+    }
+
+    if state.guard_reason:
+        raw = _guard_fallback_raw(state.guard_reason)
+        answer_chunks = state.selected_context
+        result = _build_answer_result(
+            raw,
+            answer_chunks,
+            intent=state.intent,
+            guard_reason=state.guard_reason,
+            used_fallback=True,
+            retrieved=state.retrieved,
+            rewritten_query=state.rewritten_query,
+            augmented_query=state.augmented_query,
+        )
+        _set_final_trace(
+            trace,
+            started_at,
+            answer_chunks,
+            guard_reason=result.guard_reason,
+            used_fallback=result.used_fallback,
+            answer_mode="fallback",
+            citations_count=len(result.citations),
+        )
+        yield "final", (result, trace)
+        return
+
+    q = state.normalized_query
+    grounded = state.selected_context
+    evidence_blocks = build_evidence_blocks(grounded)
+    prompt = build_prompt(q, evidence_blocks)
+    if client is None:
+        client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
+    pieces: List[str] = []
+    for delta_text in _stream_chat_completion(
+        client,
+        [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": prompt},
+        ],
+    ):
+        pieces.append(delta_text)
+        yield "delta", {"text": delta_text}
+
+    raw, used_fallback = _finalize_generated_answer("".join(pieces), q, grounded, state.intent)
+    result = _build_answer_result(
+        raw,
+        grounded,
+        intent=state.intent,
+        guard_reason=None,
+        used_fallback=used_fallback,
+        retrieved=state.retrieved,
+        rewritten_query=state.rewritten_query,
+        augmented_query=state.augmented_query,
+    )
+    _set_final_trace(
+        trace,
+        started_at,
+        grounded,
+        guard_reason=None,
+        used_fallback=used_fallback,
+        answer_mode="fallback" if used_fallback else "grounded",
+        citations_count=len(result.citations),
+    )
+    yield "final", (result, trace)
