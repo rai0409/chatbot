@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 import config
+from rag_core import answer_cache
 from rag_core import approved_similar
 from rag_core import approved_similar_feature_reranker
 from rag_core import embedding_provider
@@ -970,12 +971,38 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
             )
             return payload
 
+        effective_top_k = req.top_k or config.TOP_K
+        effective_max_context_chars = req.max_context_chars or config.MAX_CONTEXT_CHARS
+        cache_key = None
+        if answer_cache.enabled():
+            cache_key = answer_cache.build_key(
+                req.question,
+                top_k=effective_top_k,
+                max_context_chars=effective_max_context_chars,
+            )
+            cached = answer_cache.get(cache_key)
+            if cached is not None:
+                append_audit_event(
+                    "chat",
+                    {
+                        "request_id": req.trace_id,
+                        "trace_id": req.trace_id,
+                        "tenant_id": "default",
+                        "question": req.question,
+                        "guard_reason": cached.get("guard_reason"),
+                        "used_fallback": cached.get("used_fallback"),
+                        "citations_count": len(cached.get("citations") or []),
+                        "cache_hit": True,
+                    },
+                )
+                return cached
+
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
         ans, trace = answer_query_with_trace(
             req.question,
             client=client,
-            top_k=req.top_k or config.TOP_K,
-            max_context_chars=req.max_context_chars or config.MAX_CONTEXT_CHARS,
+            top_k=effective_top_k,
+            max_context_chars=effective_max_context_chars,
         )
         append_audit_event(
             "chat",
@@ -991,9 +1018,15 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
                 "citations_count": trace.get("citations_count", len(ans.citations)),
                 "top_source_docs": _top_source_docs(trace.get("after_rerank")),
                 "latency_ms": trace.get("latency_ms"),
+                "cache_hit": False,
             },
         )
-        return ans.to_dict()
+        payload = ans.to_dict()
+        if cache_key is not None and ans.guard_reason is None and not ans.used_fallback:
+            # Only clean grounded answers are cacheable; guard/no-answer and
+            # extractive-fallback responses are never cached.
+            answer_cache.put(cache_key, payload)
+        return payload
     except Exception as exc:
         _error_requests += 1
         generation_error = _generation_error_payload(exc)
