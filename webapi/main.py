@@ -994,8 +994,9 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
             },
         )
         return ans.to_dict()
-    except Exception:
+    except Exception as exc:
         _error_requests += 1
+        generation_error = _generation_error_payload(exc)
         append_audit_event(
             "chat",
             {
@@ -1003,10 +1004,13 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
                 "trace_id": req.trace_id,
                 "tenant_id": "default",
                 "question": req.question,
-                "error": "internal error",
+                "error": "chat generation unavailable" if generation_error else "internal error",
+                "error_type": generation_error[1].get("error_type") if generation_error else None,
             },
         )
         logging.exception("chat failed trace_id=%s", req.trace_id)
+        if generation_error:
+            return JSONResponse(status_code=generation_error[0], content=generation_error[1])
         raise HTTPException(status_code=500, detail="internal error")
 
 

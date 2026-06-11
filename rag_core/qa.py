@@ -305,6 +305,40 @@ def _cut_context(chunks: Sequence[Chunk], max_chars: int) -> List[Chunk]:
     return out
 
 
+def _is_retryable_generation_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code is not None:
+        try:
+            status = int(status_code)
+        except (TypeError, ValueError):
+            status = None
+        if status is not None:
+            # 429 and provider-side 5xx are transient; other 4xx (auth,
+            # validation) never get retried.
+            return status == 429 or 500 <= status <= 599
+    name = type(exc).__name__.lower()
+    return "timeout" in name or "connection" in name
+
+
+def _create_chat_completion(client, messages):
+    attempts = 1 + max(0, int(getattr(config, "CHAT_COMPLETION_MAX_RETRIES", 1)))
+    backoff = float(getattr(config, "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", 1.0))
+    for attempt in range(attempts):
+        try:
+            return client.chat.completions.create(
+                model=config.CHAT_MODEL,
+                messages=messages,
+                temperature=0,
+                timeout=float(getattr(config, "CHAT_COMPLETION_TIMEOUT_SECONDS", 30.0)),
+                max_tokens=int(getattr(config, "CHAT_COMPLETION_MAX_TOKENS", 1024)),
+            )
+        except Exception as exc:
+            if attempt >= attempts - 1 or not _is_retryable_generation_error(exc):
+                raise
+            time.sleep(backoff * (2 ** attempt))
+    raise RuntimeError("unreachable: chat completion retry loop exhausted")
+
+
 class _RetrievalTraceState(NamedTuple):
     normalized_query: str
     intent: str
@@ -695,13 +729,12 @@ def _answer_query_impl(
     prompt = build_prompt(q, evidence_blocks)
     if client is None:
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
-    resp = client.chat.completions.create(
-        model=config.CHAT_MODEL,
-        messages=[
+    resp = _create_chat_completion(
+        client,
+        [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt},
         ],
-        temperature=0,
     )
     raw = resp.choices[0].message.content or ""
     raw = strip_reference_block(raw)
