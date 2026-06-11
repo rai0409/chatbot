@@ -594,6 +594,7 @@ def _build_retrieval_trace(
 
     if client is None and not embedding_provider.is_local_provider():
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
+    retrieval_started = time.perf_counter()
     before_rerank, retrieved, context_candidates = _retrieve_and_rerank(
         q,
         augmented,
@@ -603,6 +604,7 @@ def _build_retrieval_trace(
         intent=intent,
         query_type=query_type,
     )
+    retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
 
     trace: Dict[str, object] = {
         "request_id": request_id,
@@ -619,6 +621,7 @@ def _build_retrieval_trace(
         "retrieval_before_rerank_count": len(before_rerank),
         "retrieval_after_rerank_count": len(retrieved),
         "retrieval_after_parent_expansion_count": len(context_candidates),
+        "stage_latency_ms": {"retrieval_ms": retrieval_ms},
     }
 
     guard_grounded = _to_grounded(retrieved)
@@ -753,12 +756,16 @@ def _answer_query_impl(
     prompt = build_prompt(q, evidence_blocks)
     if client is None:
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
+    generation_started = time.perf_counter()
     resp = _create_chat_completion(
         client,
         [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": prompt},
         ],
+    )
+    trace.setdefault("stage_latency_ms", {})["generation_ms"] = int(
+        (time.perf_counter() - generation_started) * 1000
     )
     raw, used_fallback = _finalize_generated_answer(
         resp.choices[0].message.content or "", q, grounded, intent
@@ -878,6 +885,7 @@ def answer_query_stream(
     if client is None:
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
     pieces: List[str] = []
+    generation_started = time.perf_counter()
     for delta_text in _stream_chat_completion(
         client,
         [
@@ -887,6 +895,9 @@ def answer_query_stream(
     ):
         pieces.append(delta_text)
         yield "delta", {"text": delta_text}
+    trace.setdefault("stage_latency_ms", {})["generation_ms"] = int(
+        (time.perf_counter() - generation_started) * 1000
+    )
 
     raw, used_fallback = _finalize_generated_answer("".join(pieces), q, grounded, state.intent)
     result = _build_answer_result(

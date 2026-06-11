@@ -51,6 +51,7 @@ from rag_core.review_actions import (
 from rag_core.source_metadata import normalize_citation
 from rag_core.tenant_profile import resolve_tenant_product_profile
 from rag_core.utils import ensure_openai_client
+from webapi import metrics_registry
 from webapi.admin_auth import require_admin_auth
 from webapi.api_auth import require_api_auth, require_search_debug_access
 
@@ -868,12 +869,37 @@ def health():
     return payload
 
 
+def _record_chat_outcome_metrics(
+    *,
+    answer_mode: Optional[str],
+    guard_reason: Optional[str] = None,
+    used_fallback: bool = False,
+) -> None:
+    if answer_mode:
+        metrics_registry.increment("chat_answer_mode_total", str(answer_mode))
+    if guard_reason:
+        metrics_registry.increment("chat_guard_reason_total", str(guard_reason))
+    if used_fallback:
+        metrics_registry.increment("chat_used_fallback_total")
+
+
+def _record_provider_error_metric(generation_error) -> None:
+    if generation_error:
+        metrics_registry.increment(
+            "chat_provider_error_total",
+            str(generation_error[1].get("error_type") or "unknown"),
+        )
+
+
 @app.get("/metrics")
 def metrics():
+    # Counters are per-process; with multiple workers each process reports
+    # its own numbers.
     return {
         "uptime_seconds": int(time.time() - _start_time),
         "total_requests": _total_requests,
         "error_requests": _error_requests,
+        "counters": metrics_registry.snapshot(),
     }
 
 
@@ -969,6 +995,7 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
                     "citations_count": len(approved.approved_citations),
                 },
             )
+            _record_chat_outcome_metrics(answer_mode="approved_exact_match")
             return payload
 
         effective_top_k = req.top_k or config.TOP_K
@@ -995,6 +1022,8 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
                         "cache_hit": True,
                     },
                 )
+                metrics_registry.increment("chat_cache_hit_total")
+                _record_chat_outcome_metrics(answer_mode="grounded")
                 return cached
 
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
@@ -1021,6 +1050,12 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
                 "cache_hit": False,
             },
         )
+        _record_chat_outcome_metrics(
+            answer_mode=trace.get("answer_mode")
+            or ("fallback" if (ans.guard_reason or ans.used_fallback) else "grounded"),
+            guard_reason=trace.get("final_guard_reason") or ans.guard_reason,
+            used_fallback=bool(trace.get("final_used_fallback", ans.used_fallback)),
+        )
         payload = ans.to_dict()
         if cache_key is not None and ans.guard_reason is None and not ans.used_fallback:
             # Only clean grounded answers are cacheable; guard/no-answer and
@@ -1042,6 +1077,7 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
             },
         )
         logging.exception("chat failed trace_id=%s", req.trace_id)
+        _record_provider_error_metric(generation_error)
         if generation_error:
             return JSONResponse(status_code=generation_error[0], content=generation_error[1])
         raise HTTPException(status_code=500, detail="internal error")
@@ -1075,6 +1111,7 @@ def chat_stream(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
                         "citations_count": len(approved.approved_citations),
                     },
                 )
+                _record_chat_outcome_metrics(answer_mode="approved_exact_match")
                 yield _sse_event("approved", payload)
                 return
 
@@ -1111,9 +1148,15 @@ def chat_stream(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
                         "streamed": True,
                     },
                 )
+                _record_chat_outcome_metrics(
+                    answer_mode=trace.get("answer_mode"),
+                    guard_reason=trace.get("final_guard_reason") or result.guard_reason,
+                    used_fallback=bool(trace.get("final_used_fallback", result.used_fallback)),
+                )
         except Exception as exc:
             _error_requests += 1
             generation_error = _generation_error_payload(exc)
+            _record_provider_error_metric(generation_error)
             content = (
                 generation_error[1]
                 if generation_error
@@ -1613,6 +1656,11 @@ def search_debug(req: SearchDebugRequest, _access: None = Depends(require_search
                 **_top_score_detail_summary(trace.get("after_rerank")),
             },
         )
+        _record_chat_outcome_metrics(
+            answer_mode=response["answer_mode"],
+            guard_reason=response["guard_reason"],
+            used_fallback=bool(response["used_fallback"]),
+        )
         return response
     except Exception as exc:
         _error_requests += 1
@@ -1628,6 +1676,7 @@ def search_debug(req: SearchDebugRequest, _access: None = Depends(require_search
             },
         )
         logging.exception("search_debug failed trace_id=%s", req.trace_id)
+        _record_provider_error_metric(generation_error)
         if generation_error:
             return JSONResponse(status_code=generation_error[0], content=generation_error[1])
         raise HTTPException(status_code=500, detail="internal error")
