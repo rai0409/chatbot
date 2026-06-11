@@ -51,10 +51,29 @@ from rag_core.source_metadata import normalize_citation
 from rag_core.tenant_profile import resolve_tenant_product_profile
 from rag_core.utils import ensure_openai_client
 from webapi.admin_auth import require_admin_auth
+from webapi.api_auth import require_api_auth, require_search_debug_access
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 app = FastAPI()
+
+
+def _cors_allow_origins() -> List[str]:
+    raw = str(os.getenv("CORS_ALLOW_ORIGINS", ""))
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+_CORS_ORIGINS = _cors_allow_origins()
+if _CORS_ORIGINS:
+    from fastapi.middleware.cors import CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_CORS_ORIGINS,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _start_time = time.time()
 _total_requests = 0
@@ -929,7 +948,7 @@ def admin_review_action(req: ReviewActionRequest, _admin_auth: None = Depends(re
 
 
 @app.post("/chat")
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
     global _total_requests, _error_requests
     _total_requests += 1
     try:
@@ -992,7 +1011,7 @@ def chat(req: ChatRequest):
 
 
 @app.post("/chat/product-preview")
-def chat_product_preview(req: ProductPreviewChatRequest):
+def chat_product_preview(req: ProductPreviewChatRequest, _api_auth: None = Depends(require_api_auth)):
     global _total_requests, _error_requests
     _total_requests += 1
     started = time.time()
@@ -1314,7 +1333,7 @@ def chat_product_preview(req: ProductPreviewChatRequest):
 
 
 @app.post("/chat/feedback")
-def chat_feedback(req: ProductFeedbackRequest):
+def chat_feedback(req: ProductFeedbackRequest, _api_auth: None = Depends(require_api_auth)):
     feedback_token = str(req.feedback_token or "").strip()
     feedback_type = str(req.feedback_type or "").strip()
     if not feedback_token:
@@ -1340,7 +1359,7 @@ def chat_feedback(req: ProductFeedbackRequest):
 
 
 @app.post("/search")
-def search(req: SearchRequest):
+def search(req: SearchRequest, _api_auth: None = Depends(require_api_auth)):
     global _total_requests, _error_requests
     _total_requests += 1
     try:
@@ -1361,7 +1380,7 @@ def search(req: SearchRequest):
 
 
 @app.post("/search/debug")
-def search_debug(req: SearchDebugRequest):
+def search_debug(req: SearchDebugRequest, _access: None = Depends(require_search_debug_access)):
     global _total_requests, _error_requests
     _total_requests += 1
     try:

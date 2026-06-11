@@ -31,10 +31,7 @@ def _extract_token(headers: Mapping[str, str] | None) -> tuple[str | None, bool]
     return parts[1].strip(), False
 
 
-def require_admin_auth_headers(headers: Mapping[str, str] | None = None) -> None:
-    if not admin_auth_enabled():
-        return
-
+def enforce_admin_token(headers: Mapping[str, str] | None = None) -> None:
     expected = str(os.getenv("ADMIN_AUTH_TOKEN", "")).strip()
     if not expected:
         raise HTTPException(status_code=503, detail="admin auth is not configured")
@@ -46,6 +43,12 @@ def require_admin_auth_headers(headers: Mapping[str, str] | None = None) -> None
         raise HTTPException(status_code=401, detail="admin authentication required")
     if not hmac.compare_digest(provided, expected):
         raise HTTPException(status_code=403, detail="invalid admin credentials")
+
+
+def require_admin_auth_headers(headers: Mapping[str, str] | None = None) -> None:
+    if not admin_auth_enabled():
+        return
+    enforce_admin_token(headers)
 
 
 def require_admin_auth(request: Request) -> None:
