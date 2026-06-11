@@ -53,7 +53,12 @@ from rag_core.tenant_profile import resolve_tenant_product_profile
 from rag_core.utils import ensure_openai_client
 from webapi import metrics_registry
 from webapi.admin_auth import require_admin_auth
-from webapi.api_auth import require_api_auth, require_search_debug_access
+from webapi.api_auth import (
+    ApiAuthContext,
+    enforce_tenant_authorization,
+    require_api_auth,
+    require_search_debug_access,
+)
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -981,10 +986,11 @@ def admin_review_action(req: ReviewActionRequest, _admin_auth: None = Depends(re
 
 
 @app.post("/chat")
-def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
+def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth)):
     global _total_requests, _error_requests
     _total_requests += 1
     tenant_id = normalize_tenant_id(req.tenant_id)
+    enforce_tenant_authorization(api_auth, tenant_id)
     try:
         approved = _approved_qa_lookup(req.question, tenant_id=tenant_id)
         if approved is not None:
@@ -1097,10 +1103,13 @@ def _sse_event(name: str, payload: Dict[str, Any]) -> str:
 
 
 @app.post("/chat/stream")
-def chat_stream(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
+def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth)):
     global _total_requests
     _total_requests += 1
     tenant_id = normalize_tenant_id(req.tenant_id)
+    # Raise before the StreamingResponse is constructed so an unauthorized
+    # tenant gets a plain 403 and no stream ever starts.
+    enforce_tenant_authorization(api_auth, tenant_id)
 
     def _events():
         global _error_requests
@@ -1192,7 +1201,7 @@ def chat_stream(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
 
 
 @app.post("/chat/product-preview")
-def chat_product_preview(req: ProductPreviewChatRequest, _api_auth: None = Depends(require_api_auth)):
+def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth)):
     global _total_requests, _error_requests
     _total_requests += 1
     started = time.time()
@@ -1204,6 +1213,7 @@ def chat_product_preview(req: ProductPreviewChatRequest, _api_auth: None = Depen
     request_id = str(uuid.uuid4())
     trace_id = request_id
     tenant_id = (req.tenant_id or "default").strip() or "default"
+    enforce_tenant_authorization(api_auth, tenant_id)
     top_k = max(1, min(int(req.top_k or 3), 10))
     keyword_profile = req.keyword_profile
     threshold_profile = req.threshold_profile
@@ -1514,7 +1524,8 @@ def chat_product_preview(req: ProductPreviewChatRequest, _api_auth: None = Depen
 
 
 @app.post("/chat/feedback")
-def chat_feedback(req: ProductFeedbackRequest, _api_auth: None = Depends(require_api_auth)):
+def chat_feedback(req: ProductFeedbackRequest, api_auth: ApiAuthContext = Depends(require_api_auth)):
+    enforce_tenant_authorization(api_auth, normalize_tenant_id(req.tenant_id))
     feedback_token = str(req.feedback_token or "").strip()
     feedback_type = str(req.feedback_type or "").strip()
     if not feedback_token:
