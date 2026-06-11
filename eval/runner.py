@@ -84,8 +84,8 @@ class _StubChatResponse:
 
 
 class _StubChatCompletions:
-    def create(self, model: str, messages: Sequence[Dict[str, str]], temperature: float = 0):
-        del model, messages, temperature
+    def create(self, model: str, messages: Sequence[Dict[str, str]], temperature: float = 0, **kwargs):
+        del model, messages, temperature, kwargs
         return _StubChatResponse("- 根拠に基づく回答です [S1]\n不足: なし [S1]")
 
 

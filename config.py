@@ -72,6 +72,12 @@ INDEX_DIR = str((BASE_DIR / "index").resolve())
 OPENAI_API_KEY = getenv_first("OPENAI_API_KEY", default="")
 OPENAI_BASE_URL = getenv_first("OPENAI_BASE_URL", default=None)
 CHAT_MODEL = getenv_first("CHAT_MODEL", default="gpt-4o-mini")
+CHAT_COMPLETION_TIMEOUT_SECONDS = _get_float("CHAT_COMPLETION_TIMEOUT_SECONDS", default=30.0)
+CHAT_COMPLETION_MAX_RETRIES = int(getenv_first("CHAT_COMPLETION_MAX_RETRIES", default="1"))
+CHAT_COMPLETION_RETRY_BACKOFF_SECONDS = _get_float(
+    "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", default=1.0
+)
+CHAT_COMPLETION_MAX_TOKENS = int(getenv_first("CHAT_COMPLETION_MAX_TOKENS", default="1024"))
 EMBED_MODEL = getenv_first("EMBED_MODEL", default="text-embedding-3-small")
 OPENAI_EMBED_MODEL = getenv_first("OPENAI_EMBED_MODEL", default=EMBED_MODEL)
 
