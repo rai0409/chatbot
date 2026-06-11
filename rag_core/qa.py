@@ -9,7 +9,7 @@ import config
 from rag_core import embedding_provider
 from rag_core.keyword_scorer import apply_keyword_boost, classify_query_type, score_keyword_match
 from rag_core.reranker import rerank_chunks
-from rag_core.retrieval import RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, hybrid_retrieve, vector_retrieve
+from rag_core.retrieval import QueryEmbeddingBatch, RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, hybrid_retrieve, vector_retrieve
 from rag_core.utils import ensure_openai_client
 from rag_grounded import Chunk, build_citation_payloads, build_evidence_blocks, build_prompt, extractive_fallback, merge_by_page, rewrite_query, strip_reference_block, strip_source_tags, to_footnotes, validate_output
 from schemas import AnswerResult, CitationOut, RetrievedChunkOut
@@ -361,22 +361,40 @@ def _retrieve_and_rerank(
     intent: str,
     query_type: str,
 ) -> Tuple[List[RetrievedChunk], List[RetrievedChunk], List[RetrievedChunk]]:
-    base = hybrid_retrieve(
-        question,
-        client,
-        top_k=top_k,
-        vector_top_k=config.VECTOR_TOP_K,
-        bm25_top_k=config.BM25_TOP_K,
-        rrf_k=config.HYBRID_RRF_K,
-    )
-    aug = hybrid_retrieve(
-        augmented_query,
-        client,
-        top_k=top_k,
-        vector_top_k=config.VECTOR_TOP_K,
-        bm25_top_k=config.BM25_TOP_K,
-        rrf_k=config.HYBRID_RRF_K,
-    )
+    if augmented_query == question:
+        # Identical queries would produce identical passes; retrieve once.
+        base = hybrid_retrieve(
+            question,
+            client,
+            top_k=top_k,
+            vector_top_k=config.VECTOR_TOP_K,
+            bm25_top_k=config.BM25_TOP_K,
+            rrf_k=config.HYBRID_RRF_K,
+        )
+        aug = base
+    else:
+        # Lazy batch: both queries are embedded in one embed_queries call the
+        # first time vector retrieval asks for an embedding; stubbed or
+        # keyword-only paths never trigger embedding.
+        embedding_batch = QueryEmbeddingBatch([question, augmented_query], client=client)
+        base = hybrid_retrieve(
+            question,
+            client,
+            top_k=top_k,
+            vector_top_k=config.VECTOR_TOP_K,
+            bm25_top_k=config.BM25_TOP_K,
+            rrf_k=config.HYBRID_RRF_K,
+            query_embedding=lambda: embedding_batch.get(question),
+        )
+        aug = hybrid_retrieve(
+            augmented_query,
+            client,
+            top_k=top_k,
+            vector_top_k=config.VECTOR_TOP_K,
+            bm25_top_k=config.BM25_TOP_K,
+            rrf_k=config.HYBRID_RRF_K,
+            query_embedding=lambda: embedding_batch.get(augmented_query),
+        )
     before_rerank = _unique_chunks(base + aug)
     if intent == "procedure":
         before_rerank = _unique_chunks(add_neighbor_chunks(before_rerank))

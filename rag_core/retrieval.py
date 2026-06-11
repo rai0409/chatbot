@@ -255,16 +255,48 @@ def _load_keyword_index() -> _KeywordIndex:
         return index
 
 
+class QueryEmbeddingBatch:
+    """Lazily embeds a fixed set of queries in one embed_queries call.
+
+    Embedding happens only when the first vector is requested, so keyword-only
+    and stubbed-vector paths never trigger an embedding call at all.
+    """
+
+    def __init__(self, queries: Sequence[str], client=None):
+        self._queries = list(dict.fromkeys(q for q in queries if q))
+        self._client = client
+        self._embeddings: Optional[Dict[str, List[float]]] = None
+
+    def get(self, query: str) -> List[float]:
+        if self._embeddings is None:
+            vectors = embedder.embed_queries(self._queries, client=self._client)
+            self._embeddings = {q: list(v) for q, v in zip(self._queries, vectors)}
+        if query not in self._embeddings:
+            self._embeddings[query] = list(
+                embedder.embed_queries([query], client=self._client)[0]
+            )
+        return self._embeddings[query]
+
+
+def _resolve_query_embedding(question: str, client, query_embedding) -> List[float]:
+    if query_embedding is None:
+        return embedder.embed_queries([question], client=client)[0]
+    if callable(query_embedding):
+        return list(query_embedding())
+    return list(query_embedding)
+
+
 def vector_retrieve(
     question: str,
     client,
     top_k: int,
     allowed_types=None,
     allowed_qualities=None,
+    query_embedding=None,
 ) -> List[RetrievedChunk]:
     collection = store.get_vectorstore()
     where = _build_base_where(allowed_types, allowed_qualities)
-    embedding = embedder.embed_queries([question], client=client)[0]
+    embedding = _resolve_query_embedding(question, client, query_embedding)
     oversample = max(1, int(getattr(config, "CHILD_RETRIEVAL_OVERSAMPLE", 2)))
     n_results = max(top_k, top_k * oversample)
     res = collection.query(query_embeddings=[embedding], n_results=n_results, where=where)
@@ -369,6 +401,7 @@ def hybrid_retrieve(
     vector_top_k: Optional[int] = None,
     bm25_top_k: Optional[int] = None,
     rrf_k: Optional[int] = None,
+    query_embedding=None,
 ) -> List[RetrievedChunk]:
     if not config.ENABLE_HYBRID_RETRIEVAL:
         return vector_retrieve(
@@ -377,6 +410,7 @@ def hybrid_retrieve(
             top_k=top_k,
             allowed_types=allowed_types,
             allowed_qualities=allowed_qualities,
+            query_embedding=query_embedding,
         )
 
     v_top_k = vector_top_k or config.VECTOR_TOP_K or top_k
@@ -388,6 +422,7 @@ def hybrid_retrieve(
         top_k=v_top_k,
         allowed_types=allowed_types,
         allowed_qualities=allowed_qualities,
+        query_embedding=query_embedding,
     )
     keyword_hits = keyword_retrieve(
         question,

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Dict, Optional
+from threading import Lock
+from typing import Any, Dict, Optional
 
 import chromadb
 
@@ -12,6 +13,25 @@ from rag_core import embedding_provider
 logger = logging.getLogger(__name__)
 
 _FINGERPRINT_KEYS = ("embed_provider", "embed_model")
+
+# Reused chromadb.PersistentClient instances keyed by resolved vectorstore path,
+# so each query does not pay client construction cost.
+_CLIENT_CACHE: Dict[str, Any] = {}
+_CLIENT_LOCK = Lock()
+
+
+def _get_persistent_client(path: str):
+    with _CLIENT_LOCK:
+        client = _CLIENT_CACHE.get(path)
+        if client is None:
+            client = chromadb.PersistentClient(path=path)
+            _CLIENT_CACHE[path] = client
+        return client
+
+
+def reset_vectorstore_clients() -> None:
+    with _CLIENT_LOCK:
+        _CLIENT_CACHE.clear()
 
 # Legacy collections without a fingerprint stamp already warned about, keyed by
 # collection name, so the warning is emitted once per process instead of per query.
@@ -23,7 +43,7 @@ def get_vectorstore(
     *,
     verify_embedding_fingerprint: bool = True,
 ):
-    client = chromadb.PersistentClient(path=config.VECTORSTORE_DIR)
+    client = _get_persistent_client(config.VECTORSTORE_DIR)
     name = (
         collection_name
         or config.getenv_first("CHROMA_COLLECTION")

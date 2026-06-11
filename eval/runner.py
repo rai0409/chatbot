@@ -251,6 +251,7 @@ def _retrieval_mode_runtime(mode: str):
         vector_top_k: Optional[int] = None,
         bm25_top_k: Optional[int] = None,
         rrf_k: Optional[int] = None,
+        query_embedding=None,
     ):
         return retrieval.hybrid_retrieve(
             question,
@@ -261,6 +262,7 @@ def _retrieval_mode_runtime(mode: str):
             vector_top_k=vector_top_k,
             bm25_top_k=bm25_top_k,
             rrf_k=rrf_k,
+            query_embedding=query_embedding,
         )
 
     def _bm25_only_bridge(
@@ -272,8 +274,9 @@ def _retrieval_mode_runtime(mode: str):
         vector_top_k: Optional[int] = None,
         bm25_top_k: Optional[int] = None,
         rrf_k: Optional[int] = None,
+        query_embedding=None,
     ):
-        del client, vector_top_k, rrf_k
+        del client, vector_top_k, rrf_k, query_embedding
         return retrieval.keyword_retrieve(
             question,
             top_k=bm25_top_k or top_k,
@@ -290,6 +293,7 @@ def _retrieval_mode_runtime(mode: str):
         vector_top_k: Optional[int] = None,
         bm25_top_k: Optional[int] = None,
         rrf_k: Optional[int] = None,
+        query_embedding=None,
     ):
         del bm25_top_k, rrf_k
         return retrieval.vector_retrieve(
@@ -298,6 +302,7 @@ def _retrieval_mode_runtime(mode: str):
             top_k=vector_top_k or top_k,
             allowed_types=allowed_types,
             allowed_qualities=allowed_qualities,
+            query_embedding=query_embedding,
         )
 
     def _identity_rerank(
