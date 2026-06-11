@@ -108,3 +108,54 @@ Report in this exact order:
 4. Git diff summary (git diff --stat, no large diffs)
 5. Final judgment: PASS / PARTIAL / FAIL, and whether it is safe to continue to Prompt010.
 6. Next prompt file: if PASS, write exactly one next recommended prompt to prompts/claude/prompt010_phase3b_observability.md covering operational metrics only (per-stage latency breakdown in the trace — embed/retrieve/rerank/generate; /metrics counters for answer_mode, guard_reason, used_fallback, cache_hit, provider error_type; no new dependencies, in-process counters with a documented multi-worker caveat). Do not execute Prompt010 in this run.
+
+Final clarification before execution:
+
+Cache scope:
+
+- Implement answer cache for non-streaming POST /chat only.
+- Do not cache /chat/stream.
+- Do not cache /search, /search/debug, product preview, retrieval results, embeddings, or raw provider responses.
+- Do not add Redis, disk persistence, database tables, or new dependencies.
+
+Cache enablement:
+
+- ANSWER_CACHE_ENABLED defaults to false.
+- With ANSWER_CACHE_ENABLED unset or false, /chat behavior must remain unchanged and the cache must be bypassed completely.
+
+Cache key and staleness:
+
+- Key must include normalized question text.
+- Key must include corpus state sufficient to prevent stale answers after corpus or approved-QA updates.
+- Include at minimum CHUNKS_JSONL_PATH identity, mtime, size, approved-QA path identity when enabled, approved-QA mtime/size when present, top_k, and max_context_chars.
+- If a required corpus or approved-QA file is missing, represent that missing state explicitly in the key.
+- If a reliable corpus-state signal cannot be found safely, stop and report PARTIAL rather than implementing a stale cache.
+
+Cache eligibility:
+
+- Cache only clean grounded successful answers.
+- Do not cache guard/no-answer responses.
+- Do not cache extractive fallback responses.
+- Do not cache provider errors or internal errors.
+- Do not cache responses with used_fallback=true or non-null guard_reason.
+- Approved exact-match behavior remains authoritative and must be checked before cache lookup.
+
+Response contract:
+
+- Do not add cache_hit to the /chat response payload.
+- cache_hit may be recorded in audit/logging only.
+- A cache hit response must be value-identical to the original cached response dict.
+
+Concurrency and bounds:
+
+- Cache must be bounded LRU.
+- Cache access must be thread-safe.
+- Add tests for eviction, disabled behavior, hit behavior, fallback non-caching, approved path precedence, and stale-key prevention.
+
+Scope control:
+
+- Do not change retrieval, guard, citations, auth, CORS, streaming, or tenant behavior.
+- Do not add new dependencies.
+- Tests must not require network access or an OpenAI API key.
+
+If any instruction conflicts, follow this Final clarification section.
