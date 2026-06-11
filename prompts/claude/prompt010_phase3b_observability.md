@@ -100,3 +100,43 @@ Report in this exact order:
 4. Git diff summary (git diff --stat, no large diffs)
 5. Final judgment: PASS / PARTIAL / FAIL, and whether it is safe to continue to Prompt011.
 6. Next prompt file: if PASS, write exactly one next recommended prompt to prompts/claude/prompt011_phase4a_tenant_isolation.md covering tenant isolation in the retrieval layer (tenant_id in chunk metadata at ingest, tenant filter in the Chroma where clause and BM25 metadata filter, tenant threading through /chat; default tenant preserves current single-tenant behavior). Do not execute Prompt011 in this run.
+
+Final clarification before execution:
+
+Metrics scope:
+
+- Implement operational observability only.
+- Do not add Prometheus client, OpenTelemetry, Redis, database tables, external exporters, or new dependencies.
+- Metrics must be in-process only and thread-safe.
+- Document that counters are per-process and not globally aggregated across multiple workers.
+
+Response contract:
+
+- Do not add metrics fields to /chat, /chat/stream, /search, or product-preview normal response payloads.
+- Existing response field sets must remain unchanged.
+- /metrics may add only the counters object while preserving the existing uptime, total_requests, and error_requests fields.
+- stage_latency_ms may be added only to existing trace/debug structures where trace data is already expected.
+
+Latency tracking:
+
+- Add per-stage latency only where the code already has clear stage boundaries.
+- Prefer coarse safe stages over invasive refactors:
+  - retrieval_ms for _retrieve_and_rerank / retrieval-trace work
+  - generation_ms for LLM generation only when it runs
+- Do not rewrite retrieval or generation pipelines just to get perfect timing.
+- For guard/approved paths, generation_ms should be 0 or absent, consistently tested.
+
+Counters:
+
+- Count answer_mode, guard_reason, used_fallback, cache_hit, and provider error_type.
+- Use stable enum-like labels only.
+- Avoid unbounded labels such as raw user queries, file paths, exception messages, request IDs, or tokens.
+- Never record secrets or request bodies in metrics.
+
+Scope control:
+
+- Do not change retrieval, guard, citations, auth, CORS, streaming, cache semantics, or tenant behavior.
+- Do not add new dependencies.
+- Tests must not require network access or an OpenAI API key.
+
+If any instruction conflicts, follow this Final clarification section.

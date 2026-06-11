@@ -26,6 +26,15 @@ Checklist:
 - [ ] `/health` remains unauthenticated by design; confirm it leaks no sensitive values.
 - [ ] CORS origins are an explicit allowlist; no wildcard with credentials.
 
+## Observability
+
+- `GET /metrics` returns uptime, request totals, and a `counters` object
+  (answer modes, guard reasons, fallback/cache-hit counts, provider error
+  types). Counters are **per-process**: with multiple uvicorn workers each
+  worker reports only its own numbers; aggregate externally if needed.
+- Trace data (`/search/debug`, audit events) includes `stage_latency_ms`
+  with `retrieval_ms` and, when generation runs, `generation_ms`.
+
 ## Runtime Safety
 
 - [ ] `/chat` default behavior is unchanged.
