@@ -638,8 +638,10 @@ def _answer_query_impl(
     retrieved = state.retrieved
 
     if state.guard_reason == "missing_procedure_evidence":
-        fallback = "- 手順の記載が見つかりません。OCR版を確認してください。 [S1]"
-        raw = fallback + "\n不明: 手順不明 [S1]\n不足: OCR版確認 [S1]"
+        # No-answer responses carry no citation tags: there is no evidence
+        # that supports anything, so nothing may be cited.
+        fallback = "- 手順の記載が見つかりません。OCR版を確認してください。"
+        raw = fallback + "\n不明: 手順不明\n不足: OCR版確認"
         answer_chunks = state.selected_context
         result = _build_answer_result(
             raw,
@@ -663,8 +665,8 @@ def _answer_query_impl(
         return result, trace
 
     if state.guard_reason:
-        body = f"- 関連情報が見つかりませんでした。理由: {state.guard_reason} [S1]"
-        raw = body + "\n不明: 根拠不足 [S1]\n不足: 関連記載なし [S1]"
+        body = f"- 関連情報が見つかりませんでした。理由: {state.guard_reason}"
+        raw = body + "\n不明: 根拠不足\n不足: 関連記載なし"
         answer_chunks = state.selected_context
         result = _build_answer_result(
             raw,

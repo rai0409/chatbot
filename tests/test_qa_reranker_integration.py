@@ -35,8 +35,10 @@ def test_answer_query_uses_reranker_in_chat_path(monkeypatch):
     res = qa.answer_query("PR2 を教えて", client=object(), top_k=5)
     assert [it.metadata["id"] for it in res.retrieved] == ["B", "A"]
     assert all("retrieval_source" in it.metadata for it in res.retrieved)
-    assert "参考資料:" in res.answer_with_footnotes
-    assert "[1]" in res.answer_with_footnotes
+    # Guard fired (soft_distance): no-answer responses carry no citations.
+    assert res.citations == []
+    assert "参考資料:" not in res.answer_with_footnotes
+    assert "[S" not in res.answer_text
     if res.citations:
         assert set(res.citations[0].__dict__.keys()) == {"number", "source_doc", "source_pages", "chunk_id"}
     assert set(res.to_dict().keys()) == {

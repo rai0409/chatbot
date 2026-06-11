@@ -176,6 +176,10 @@ def strip_source_tags(answer: str) -> str:
 
 def to_footnotes(answer: str, chunks: Sequence[Chunk]) -> str:
     order = collect_source_order(answer)
+    if not order:
+        # Untagged answers (no-answer fallbacks) get no 参考資料 block:
+        # an empty or placeholder reference list would fabricate grounding.
+        return answer.strip()
 
     def _replace(match):
         sid = match.group(1)
