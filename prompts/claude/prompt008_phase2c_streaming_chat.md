@@ -100,3 +100,51 @@ Report in this exact order:
 4. Git diff summary (git diff --stat, no large diffs)
 5. Final judgment: PASS / PARTIAL / FAIL, and whether it is safe to continue to Prompt009.
 6. Next prompt file: if PASS, write exactly one next recommended prompt to prompts/claude/prompt009_phase3a_answer_cache.md covering a normalized-question answer cache for /chat (LRU keyed on normalized question + corpus state, bounded size, opt-in via env, bypass on cache-miss-only semantics, no staleness across approved-QA or corpus updates). Do not execute Prompt009 in this run.
+
+Final clarification before execution:
+
+Endpoint strategy:
+
+- Add a new endpoint POST /chat/stream only.
+- Do not modify the existing POST /chat behavior, response field set, or success/error contract.
+- Existing /chat tests and behavior must remain unchanged.
+
+Reuse and refactor boundary:
+
+- Prefer reusing existing retrieval, guard, citation, validation, and AnswerResult helpers.
+- If a helper named _build_retrieval_trace or _build_answer_result does not exist, do not invent a large refactor to create a broad pipeline abstraction.
+- In that case, extract only the smallest local helper necessary to avoid duplicating the full pipeline.
+- Stop and report PARTIAL if implementing /chat/stream requires rewriting the core /chat pipeline.
+
+SSE event contract:
+
+- The final event is authoritative.
+- Delta events are provisional.
+- Tests must not require delta text to equal the final validated answer when validation or extractive fallback changes the answer.
+- For grounded happy-path fake outputs where validation passes, it is acceptable to assert that concatenated deltas match the final answer text.
+- For validation-failure cases, assert that final carries the corrected fallback answer and real citations.
+
+Guard and approved behavior:
+
+- Approved exact-match answers should not call the streaming LLM path; emit approved or final and end.
+- Guard/no-answer fallbacks should not stream LLM deltas; emit meta then final and end.
+- Guard/no-answer citations must follow Prompt005: citations == [] and no fabricated [S1].
+
+Prompt007 integration:
+
+- Reuse Prompt007 timeout/max_tokens/retry policy for streaming call setup.
+- Retry only before the first token.
+- Never retry after any delta token has been emitted.
+- Provider error before first token should emit one error event using _generation_error_payload classification.
+- Provider error after tokens have been emitted should emit one error event and end the stream; do not fabricate a final answer.
+
+Scope control:
+
+- Do not implement WebSockets.
+- Do not implement frontend changes.
+- Do not implement caching.
+- Do not change retrieval, guard, citation, auth, CORS, or tenant behavior.
+- Do not add new dependencies.
+- Use fake streaming clients in tests. Tests must not require network access or an OpenAI API key.
+
+If any instruction conflicts, follow this Final clarification section.

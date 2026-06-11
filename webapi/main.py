@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 import config
@@ -39,7 +39,7 @@ from rag_core.product_contract import (
 from rag_core.feedback_rerank_profile import PROFILE_PATH, apply_feedback_preview_rerank
 from rag_core.product_profile import load_product_profile
 from rag_core.product_route_policy import build_route_policy
-from rag_core.qa import answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
+from rag_core.qa import answer_query_stream, answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
 from rag_core.retrieval import RetrievedChunk, keyword_index_status
 from rag_core.review_actions import (
     ALLOWED_ACTION_TYPES,
@@ -1012,6 +1012,96 @@ def chat(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
         if generation_error:
             return JSONResponse(status_code=generation_error[0], content=generation_error[1])
         raise HTTPException(status_code=500, detail="internal error")
+
+
+def _sse_event(name: str, payload: Dict[str, Any]) -> str:
+    return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.post("/chat/stream")
+def chat_stream(req: ChatRequest, _api_auth: None = Depends(require_api_auth)):
+    global _total_requests
+    _total_requests += 1
+
+    def _events():
+        global _error_requests
+        try:
+            approved = _approved_qa_lookup(req.question)
+            if approved is not None:
+                payload = _approved_chat_payload(approved)
+                append_audit_event(
+                    "chat",
+                    {
+                        "request_id": req.trace_id,
+                        "trace_id": req.trace_id,
+                        "tenant_id": approved.tenant_id,
+                        "question": req.question,
+                        "normalized_question": approved.normalized_question,
+                        "answer_mode": "approved_exact_match",
+                        "approved_qa_id": approved.qa_id,
+                        "citations_count": len(approved.approved_citations),
+                    },
+                )
+                yield _sse_event("approved", payload)
+                return
+
+            client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
+            result = None
+            trace = None
+            for name, payload in answer_query_stream(
+                req.question,
+                client=client,
+                top_k=req.top_k or config.TOP_K,
+                max_context_chars=req.max_context_chars or config.MAX_CONTEXT_CHARS,
+            ):
+                if name == "final":
+                    result, trace = payload
+                    yield _sse_event("final", result.to_dict())
+                else:
+                    yield _sse_event(name, payload)
+            if result is not None and trace is not None:
+                append_audit_event(
+                    "chat",
+                    {
+                        "request_id": trace.get("request_id"),
+                        "trace_id": req.trace_id or trace.get("request_id"),
+                        "tenant_id": "default",
+                        "question": req.question,
+                        "normalized_query": trace.get("normalized_query"),
+                        "intent": trace.get("intent") or result.intent,
+                        "guard_reason": trace.get("final_guard_reason") or result.guard_reason,
+                        "used_fallback": trace.get("final_used_fallback", result.used_fallback),
+                        "citations_count": trace.get("citations_count", len(result.citations)),
+                        "top_source_docs": _top_source_docs(trace.get("after_rerank")),
+                        "latency_ms": trace.get("latency_ms"),
+                        "answer_mode": trace.get("answer_mode"),
+                        "streamed": True,
+                    },
+                )
+        except Exception as exc:
+            _error_requests += 1
+            generation_error = _generation_error_payload(exc)
+            content = (
+                generation_error[1]
+                if generation_error
+                else {"detail": "internal error", "error_type": None}
+            )
+            append_audit_event(
+                "chat",
+                {
+                    "request_id": None,
+                    "trace_id": req.trace_id,
+                    "tenant_id": "default",
+                    "question": req.question,
+                    "error": "chat generation unavailable" if generation_error else "internal error",
+                    "error_type": content.get("error_type"),
+                    "streamed": True,
+                },
+            )
+            logging.exception("chat_stream failed trace_id=%s", req.trace_id)
+            yield _sse_event("error", content)
+
+    return StreamingResponse(_events(), media_type="text/event-stream")
 
 
 @app.post("/chat/product-preview")
