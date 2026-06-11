@@ -16,12 +16,14 @@ Env vars (all optional; defaults preserve open local behavior):
 
 - `API_AUTH_ENABLED` (default: false) — when true, `/chat`, `/search`, `/search/debug`, `/chat/product-preview`, and `/chat/feedback` require an API key via `X-Api-Key` or `Authorization: Bearer`.
 - `API_AUTH_KEYS` (default: empty) — comma-separated accepted keys. If auth is enabled and no keys are configured, all protected requests are rejected with 503.
+- `API_AUTH_TENANT_MAP` (default: empty) — optional API-key-to-tenant authorization map, format `key1=tenant_a,key2=tenant_a|tenant_b`. When set (with API auth enabled), the requested `tenant_id` (missing/blank normalizes to `default`) is enforced server-side on `/chat`, `/chat/stream`, `/chat/product-preview`, and `/chat/feedback`: a key may access only its listed tenants, and a valid key missing from the map is rejected with 403 (fail closed). When unset, legacy behavior is preserved: any valid API key may access any requested `tenant_id`. Never commit real keys; rotate any key that leaks.
 - `SEARCH_DEBUG_ENABLED` (default: true) — when false, `/search/debug` returns 404.
 - `CORS_ALLOW_ORIGINS` (default: empty) — comma-separated origin allowlist. Empty means no CORS middleware is added.
 
 Checklist:
 
 - [ ] `API_AUTH_ENABLED=true` and non-empty `API_AUTH_KEYS` on any public deployment.
+- [ ] `API_AUTH_TENANT_MAP` is configured on any deployment that serves more than the default tenant.
 - [ ] `/search/debug` is disabled (`SEARCH_DEBUG_ENABLED=false`) or protected: with API auth enabled it additionally requires the admin token (`ADMIN_AUTH_TOKEN`).
 - [ ] `/health` remains unauthenticated by design; confirm it leaks no sensitive values.
 - [ ] CORS origins are an explicit allowlist; no wildcard with credentials.
