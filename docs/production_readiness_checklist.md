@@ -10,6 +10,22 @@ This checklist is for commercial RAG / chatbot exposure readiness. It is a smoke
 - [ ] `ADMIN_AUTH_TOKEN` is configured and non-empty when admin auth is enabled.
 - [ ] Admin routes are not publicly exposed unless auth is enabled and verified.
 
+## API Auth
+
+Env vars (all optional; defaults preserve open local behavior):
+
+- `API_AUTH_ENABLED` (default: false) — when true, `/chat`, `/search`, `/search/debug`, `/chat/product-preview`, and `/chat/feedback` require an API key via `X-Api-Key` or `Authorization: Bearer`.
+- `API_AUTH_KEYS` (default: empty) — comma-separated accepted keys. If auth is enabled and no keys are configured, all protected requests are rejected with 503.
+- `SEARCH_DEBUG_ENABLED` (default: true) — when false, `/search/debug` returns 404.
+- `CORS_ALLOW_ORIGINS` (default: empty) — comma-separated origin allowlist. Empty means no CORS middleware is added.
+
+Checklist:
+
+- [ ] `API_AUTH_ENABLED=true` and non-empty `API_AUTH_KEYS` on any public deployment.
+- [ ] `/search/debug` is disabled (`SEARCH_DEBUG_ENABLED=false`) or protected: with API auth enabled it additionally requires the admin token (`ADMIN_AUTH_TOKEN`).
+- [ ] `/health` remains unauthenticated by design; confirm it leaks no sensitive values.
+- [ ] CORS origins are an explicit allowlist; no wildcard with credentials.
+
 ## Runtime Safety
 
 - [ ] `/chat` default behavior is unchanged.
