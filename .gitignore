@@ -16,6 +16,10 @@ runs/
 # local vectorstore artifacts
 vectorstore/
 
+# local backup archives (scripts/backup.sh)
+backups/
+restore_staging_*/
+
 chatbot_src.zip
 output_app.zip
 output_ops.zip
