@@ -106,8 +106,12 @@ def approved_qa_record_to_canonical_row(record: dict, *, chunk_index: int | None
         "chunk_type": CHUNK_TYPE,
         "title": title,
         "section_path": section_path,
-        "chunk_role": "parent",
-        "parent_chunk_id": qa_id,
+        # Self-contained retrieval unit: ranked like ordinary (child) chunks
+        # and never parent-expanded — the pair already carries its full
+        # answer context. chunk_role="parent" would lose to every child
+        # chunk in keyword/vector ranking and never surface.
+        "chunk_role": "child",
+        "parent_chunk_id": "",
         "searchable_text": pair_text,
         "display_text": pair_text,
         "language": _compact(record.get("language")) or "ja",
@@ -115,6 +119,7 @@ def approved_qa_record_to_canonical_row(record: dict, *, chunk_index: int | None
         "doc_version": _compact(record.get("doc_version")),
         "extraction_method": "approved_qa_to_canonical_jsonl",
         "qa_id": qa_id,
+        "approved_qa_id": qa_id,
         "question_text": question,
         "answer_text": answer,
         "normalized_question": normalized_question,
@@ -167,9 +172,13 @@ def convert_approved_qa_to_canonical(
 
     rows: List[dict] = []
     skipped = 0
+    skipped_by_reason: dict[str, int] = {}
     for record in records:
-        if _compact(record.get("status")) != "approved":
+        status = _compact(record.get("status"))
+        if status != "approved":
             skipped += 1
+            reason = f"status={status or 'missing'}"
+            skipped_by_reason[reason] = skipped_by_reason.get(reason, 0) + 1
             continue
         rows.append(approved_qa_record_to_canonical_row(record, chunk_index=len(rows) + 1))
 
@@ -180,6 +189,7 @@ def convert_approved_qa_to_canonical(
         "approved_records": len(rows),
         "written_records": len(rows),
         "skipped_records": skipped,
+        "skipped_by_reason": skipped_by_reason,
         "output_path": str(output_path),
     }
     print(
@@ -188,6 +198,7 @@ def convert_approved_qa_to_canonical(
         f"approved_records={summary['approved_records']} "
         f"written_records={summary['written_records']} "
         f"skipped_records={summary['skipped_records']} "
+        f"skipped_by_reason={json.dumps(skipped_by_reason, ensure_ascii=False, sort_keys=True)} "
         f"output_path={summary['output_path']}"
     )
     return summary
