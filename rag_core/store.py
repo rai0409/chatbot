@@ -97,6 +97,11 @@ def verify_collection_fingerprint(collection, provider_name: Optional[str] = Non
 def stamp_collection_fingerprint(collection, provider_name: Optional[str] = None) -> Dict[str, str]:
     fingerprint = embedding_provider.active_fingerprint(provider_name)
     metadata = dict(getattr(collection, "metadata", None) or {})
+    # chromadb rejects any "hnsw:*" key in modify() (the distance function is
+    # immutable after creation), so echoing the creation metadata back made
+    # every stamp attempt fail — strip those keys and only write the
+    # fingerprint metadata.
+    metadata = {k: v for k, v in metadata.items() if not str(k).startswith("hnsw:")}
     metadata.update(fingerprint)
     collection.modify(metadata=metadata)
     return fingerprint
