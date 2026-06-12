@@ -389,6 +389,40 @@ image itself contains only code; see `.dockerignore`.
 
 ---
 
+## Multi-format input support
+
+Word / Excel / CSV / PowerPoint / PDF documents can be converted into the
+same canonical chunk JSONL used by the existing ingest/eval pipeline:
+
+| Format | Parser | Chunk types |
+|---|---|---|
+| CSV | stdlib `csv` | `row`, `qa_pair` |
+| XLSX | stdlib zip/XML (no openpyxl) | `row`, `qa_pair` (per sheet, with `sheet_name`/`row_number`/`cell_range`) |
+| DOCX | stdlib zip/XML (no python-docx) | `paragraph` (with `heading_path`), `table_row`, `qa_pair` |
+| PPTX | stdlib zip/XML (no python-pptx) | `slide` (with `slide_number`/`slide_title`), `table_row` |
+| PDF | adapter around `scripts/pdf_to_canonical_jsonl.py` | existing PDF chunking (page metadata preserved) |
+
+FAQ-style tables in CSV/XLSX/DOCX are detected by obvious column headers
+(`question`/`answer`, `質問`/`回答`, `Q`/`A`, `問い合わせ`/`回答`, `質疑`/`応答`)
+and emitted as Q+A pair chunks whose `searchable_text` contains both the
+question and the answer.
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/convert_document_to_canonical_jsonl.py \
+  --input docs_in/faq.xlsx --output index/faq.jsonl --tenant-id default
+
+# also: --input manual.docx / deck.pptx / faq.csv / spec.pdf  (--format auto by extension)
+```
+
+Notes:
+
+- Conversion only writes JSONL. **Nothing is ingested into the vectorstore
+  automatically** — ingest stays the explicit `scripts/ingest_canonical_jsonl.py` step.
+- OCR / image extraction is not included yet (image-only PDFs need the
+  existing `--ocr` path of the PDF converter; pictures in Office files are skipped).
+- XLSX values are cached cell values: formulas surface as their last computed
+  result and date cells surface as raw serial numbers.
+
 ## Ingestion
 
 Legacy fixed-window PDF chunking still works.
