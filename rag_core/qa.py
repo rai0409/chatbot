@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 import config
 from rag_core import embedding_provider
 from rag_core.cross_encoder_reranker import rerank as cross_encoder_rerank
+from rag_core.ja_text import normalize_japanese_text
 from rag_core.keyword_scorer import apply_keyword_boost, classify_query_type, score_keyword_match
 from rag_core.reranker import rerank_chunks
 from rag_core.retrieval import QueryEmbeddingBatch, RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, hybrid_retrieve, normalize_tenant_id, vector_retrieve
@@ -140,7 +141,47 @@ def _should_bypass_too_general(question: str, retrieved: Sequence[RetrievedChunk
         seen.add(term)
         if term in top_text and term not in second_text:
             return True
-    return False
+
+    return _evidence_coverage_bypass(question, retrieved)
+
+
+# Evidence-coverage bypass thresholds, calibrated on the Prompt017 real-vector
+# baseline (runs/eval/too_general_guard_analysis.json: fixes 11/16 false
+# abstains, breaks 0/8 correct abstains). The too_general token-run count
+# treats whole Japanese sentences as <=2 "tokens", so real business questions
+# were guarded as if they were vague.
+_TOO_GENERAL_CONTENT_TERM_RE = re.compile(r"[ァ-ヴー]{2,}|[一-龥]{2,}|[A-Za-z0-9]{2,}")
+_TOO_GENERAL_WORD_RUN_RE = re.compile(r"[A-Za-z0-9ぁ-んァ-ヴー一-龥]+")
+_TOO_GENERAL_MIN_FULL_QUESTION_CONTENT_LEN = 12
+_TOO_GENERAL_MIN_SINGLE_TERM_LEN = 3
+
+
+def _evidence_coverage_bypass(question: str, retrieved: Sequence[RetrievedChunk]) -> bool:
+    """Bypass too_general when the top-1 evidence fully covers the query terms.
+
+    Two conservative branches, both requiring EVERY content term (kanji /
+    katakana / alnum run) of the query to appear in the top-1 chunk:
+    - a full-length business question (content >= 12 chars) is not "general"
+      when its terms are all evidenced;
+    - a single specific lookup term (>= 3 chars) evidenced in the top chunk
+      is a legitimate lookup, not vagueness.
+    Genuinely vague queries keep firing: no content terms (これは？), generic
+    2-char single terms (運用は？), and short multi-term overview asks
+    (電子入札制度の概要は？ stays guarded because it is short with 2 terms).
+    """
+    top_meta = retrieved[0].metadata or {}
+    top_text = str(top_meta.get("searchable_text") or "") or (retrieved[0].text or "")
+    question_norm = normalize_japanese_text(question or "")
+    top_norm = normalize_japanese_text(top_text)
+    if not top_norm:
+        return False
+    terms = list(dict.fromkeys(_TOO_GENERAL_CONTENT_TERM_RE.findall(question_norm)))
+    if not terms or any(t not in top_norm for t in terms):
+        return False
+    content_len = sum(len(run) for run in _TOO_GENERAL_WORD_RUN_RE.findall(question_norm))
+    if content_len >= _TOO_GENERAL_MIN_FULL_QUESTION_CONTENT_LEN:
+        return True
+    return len(terms) == 1 and len(terms[0]) >= _TOO_GENERAL_MIN_SINGLE_TERM_LEN
 
 
 def _guard_evidence(retrieved: Sequence[RetrievedChunk]) -> Dict[str, object]:
