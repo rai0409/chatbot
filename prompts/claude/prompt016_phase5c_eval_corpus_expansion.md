@@ -117,3 +117,53 @@ Report in this exact order:
 4. Git diff summary (git diff --stat, no large diffs)
 5. Final judgment: PASS / PARTIAL / FAIL, and whether the corpus now supports real-vector guard calibration as the next prompt.
 6. Next prompt file: if PASS, write exactly one next recommended prompt to prompts/claude/prompt017_phase5d_real_vector_guard_calibration.md covering measurement of vector-distance distributions on the stamped real-vector collection over the expanded corpus (answerable vs abstain cases), recommended RAG_MAX_DISTANCE / soft-threshold values with evidence, and before/after false-answer and false-abstain rates. Do not execute Prompt017 in this run.
+
+Final clarification before execution:
+
+Eval scope:
+
+- Implement eval corpus expansion only.
+- Do not change production retrieval, guard thresholds, citations, API behavior, auth, tenant authorization, cache, streaming, metrics, Docker, or cross-encoder defaults.
+- Do not ingest into production vectorstore.
+- Do not read or print .env.
+- Do not require network access, model downloads, or an OpenAI API key.
+
+Case quality:
+
+- Every new eval case must have an explicit reason and label source.
+- Prefer real-document-derived cases from approved-QA records, qa_pair fixtures, and existing canonical chunks.
+- Do not add filler cases merely to increase the count.
+- If reaching 100+ high-quality combined cases is not possible from available local data, create the maximum high-quality set and report PARTIAL with the exact count and reason.
+- Do not fabricate gold_chunk_ids, gold_doc_ids, or expected abstain labels.
+
+Coverage:
+
+- Include retrieval-positive cases.
+- Include stored-question approved-QA regression cases.
+- Include answer-only-term qa_pair cases.
+- Include paraphrase cases.
+- Include abstain/no-answer cases.
+- Include tenant-isolation-sensitive cases where safe.
+- Preserve or document gold_chunk_ids, gold_doc_ids, expected_abstain, and any expected guard labels.
+
+Baseline:
+
+- Run and save a deterministic baseline report for the expanded corpus.
+- Baseline must include the current deterministic mode supported locally.
+- Gold-only case failures are measurements, not automatic regressions; report them honestly.
+- Do not run real-vector or model-download comparisons unless local stamped vectorstore and optional models are already available and safe.
+- Do not claim accuracy improvement unless measured.
+
+Safety:
+
+- Existing smoke eval must remain 21/21.
+- Existing qa_pair eval must remain passing.
+- Existing Prompt013 security tests must remain passing.
+- Existing Prompt014 cross-encoder tests must remain passing.
+
+Next prompt:
+
+- Prompt017 should only calibrate real-vector guard thresholds after this corpus exists.
+- Do not perform Prompt017 calibration in this run.
+
+If any instruction conflicts, follow this Final clarification section.
