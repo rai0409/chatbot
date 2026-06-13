@@ -47,10 +47,16 @@ Checklist:
 
 - `GET /metrics` returns uptime, request totals, and a `counters` object
   (answer modes, guard reasons, fallback/cache-hit counts, provider error
-  types). Counters are **per-process**: with multiple uvicorn workers each
-  worker reports only its own numbers; aggregate externally if needed.
+  types, plus `api_rate_limited_total` and `api_auth_rejection_total`).
+  Counters are **per-process**: with multiple uvicorn workers each worker
+  reports only its own numbers; aggregate externally if needed.
+- `GET /metrics?format=prometheus` serves the same counters in Prometheus
+  text exposition format (stdlib only, no extra collector). Labels are stable
+  enum values only — never API keys, key fingerprints, or query text.
 - Trace data (`/search/debug`, audit events) includes `stage_latency_ms`
   with `retrieval_ms` and, when generation runs, `generation_ms`.
+- Alert threshold starting points and the metric each maps to are documented
+  in `docs/operations.md` (Alert thresholds).
 
 ## Runtime Safety
 

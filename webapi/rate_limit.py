@@ -8,6 +8,7 @@ from typing import Callable, Dict, Tuple
 
 from fastapi import Depends, HTTPException
 
+from webapi import metrics_registry
 from webapi.api_auth import ApiAuthContext, require_api_auth
 
 
@@ -96,6 +97,11 @@ def enforce_rate_limit(auth, limiter: FixedWindowRateLimiter | None = None) -> N
     active = limiter if limiter is not None else _limiter
     allowed, retry_after = active.check(_bucket_for(auth), rate_limit_requests_per_minute())
     if not allowed:
+        # Observability only: label by auth-state, never the fingerprint or key.
+        bucketed = "authenticated" if (
+            isinstance(auth, ApiAuthContext) and auth.key_fingerprint
+        ) else "anonymous"
+        metrics_registry.increment("api_rate_limited_total", bucketed)
         raise HTTPException(
             status_code=429,
             detail="rate limit exceeded",

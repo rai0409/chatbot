@@ -8,7 +8,13 @@ from dataclasses import dataclass, field
 
 from fastapi import HTTPException, Request
 
+from webapi import metrics_registry
 from webapi.admin_auth import enforce_admin_token
+
+
+def _record_auth_rejection(reason: str) -> None:
+    # Observability only: stable enum labels, never raw keys or query text.
+    metrics_registry.increment("api_auth_rejection_total", reason)
 
 
 _ENABLED_VALUES = {"1", "true", "yes", "on"}
@@ -117,10 +123,13 @@ def require_api_auth_headers(headers: Mapping[str, str] | None = None) -> ApiAut
 
     provided, malformed = _extract_key(headers)
     if malformed:
+        _record_auth_rejection("invalid_credentials")
         raise HTTPException(status_code=403, detail="invalid api credentials")
     if not provided:
+        _record_auth_rejection("missing_credentials")
         raise HTTPException(status_code=401, detail="api authentication required")
     if not any(hmac.compare_digest(provided, key) for key in keys):
+        _record_auth_rejection("invalid_credentials")
         raise HTTPException(status_code=403, detail="invalid api credentials")
 
     raw_map = _tenant_map_raw()
@@ -157,6 +166,7 @@ def enforce_tenant_authorization(auth: ApiAuthContext | None, tenant_id) -> None
     if not isinstance(auth, ApiAuthContext):
         return
     if not auth.tenant_allowed(tenant_id):
+        _record_auth_rejection("tenant_forbidden")
         raise HTTPException(status_code=403, detail="tenant not authorized for this api key")
 
 

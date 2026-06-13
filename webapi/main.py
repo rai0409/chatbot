@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 import config
@@ -903,15 +903,22 @@ def _record_provider_error_metric(generation_error) -> None:
 
 
 @app.get("/metrics")
-def metrics():
+def metrics(format: Optional[str] = None):
     # Counters are per-process; with multiple workers each process reports
-    # its own numbers.
-    return {
+    # its own numbers. Default output is JSON; ?format=prometheus returns the
+    # Prometheus text exposition format generated from the same counters.
+    payload = {
         "uptime_seconds": int(time.time() - _start_time),
         "total_requests": _total_requests,
         "error_requests": _error_requests,
         "counters": metrics_registry.snapshot(),
     }
+    if str(format or "").strip().lower() == "prometheus":
+        return PlainTextResponse(
+            metrics_registry.to_prometheus(payload),
+            media_type=metrics_registry.PROMETHEUS_CONTENT_TYPE,
+        )
+    return payload
 
 
 @app.get("/product-preview", response_class=HTMLResponse)
