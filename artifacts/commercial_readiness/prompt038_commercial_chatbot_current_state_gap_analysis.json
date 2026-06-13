@@ -1,0 +1,123 @@
+{
+  "branch": "eval/real-vector-evidence",
+  "checks": {
+    "full_suite_run": false,
+    "ignore_searchable_workaround_present": true,
+    "pytest_collect_only": "761 collected",
+    "readiness_report_decision": "needs_review"
+  },
+  "confirmed_capabilities": [
+    "multiformat_ingestion",
+    "japanese_chunking_normalization",
+    "hybrid_retrieval",
+    "chroma_and_safe_where",
+    "citations",
+    "approved_qa_exact_match",
+    "abstain_guard",
+    "enduser_chat_ui",
+    "tenant_isolation_reload_restore",
+    "api_key_tenant_authorization",
+    "rate_limiting_default_off",
+    "enterprise_auth_bridge_default_off",
+    "metrics_json_prometheus",
+    "local_alert_checker",
+    "deploy_smoke_backup_restore",
+    "dry_run_onboarding_import_manifest",
+    "readiness_report_limited_beta_pack",
+    "sse_streaming"
+  ],
+  "generated_at": "2026-06-13T15:58:28.138756+00:00",
+  "head_commit": "9358cf383ed72bee8393c781c7521e90670d859f",
+  "immediate_next_prompt": "prompts/claude/product/prompt039_pilot_validation_and_demo_readiness_pack.md",
+  "missing_capabilities": [
+    {
+      "id": "manufacturing_pilot_validation_pack",
+      "order": 1,
+      "severity": "P0"
+    },
+    {
+      "id": "pilot_one_pager_demo_script",
+      "order": 2,
+      "severity": "P0"
+    },
+    {
+      "id": "real_document_evaluation_workflow",
+      "order": 3,
+      "severity": "P1"
+    },
+    {
+      "id": "safe_collection_promotion_workflow",
+      "order": 4,
+      "severity": "P1"
+    },
+    {
+      "id": "sso_reverse_proxy_deployment_guide",
+      "order": 5,
+      "severity": "P1"
+    },
+    {
+      "id": "scheduled_monitoring_escalation",
+      "order": 6,
+      "severity": "P2"
+    },
+    {
+      "id": "ha_sla_compliance",
+      "order": null,
+      "severity": "P2"
+    },
+    {
+      "id": "scalable_multitenant_saas_pgvector_qdrant",
+      "order": null,
+      "severity": "P2"
+    },
+    {
+      "id": "cross_encoder_promotion_parked",
+      "order": null,
+      "severity": "P2"
+    }
+  ],
+  "not_safe_to_claim": [
+    "accuracy_numbers_on_real_or_manufacturing_docs",
+    "general_production_ha_sla",
+    "multitenant_saas_scale_compliance",
+    "full_in_app_sso_saml_oidc_ad",
+    "always_on_wired_monitoring",
+    "superiority_over_named_competitor"
+  ],
+  "partial_capabilities": [
+    "evaluation_coverage_no_manufacturing_set",
+    "demo_readiness_no_script",
+    "enterprise_auth_no_per_idp_guide",
+    "monitoring_not_scheduled",
+    "no_safe_collection_promotion",
+    "stale_ignore_searchable_workaround"
+  ],
+  "product": "蔵伝 / KuraDen — on-prem internal-document RAG / business-manual QA",
+  "readiness": {
+    "first_paid_annual_contract": "PARTIAL",
+    "general_production": "NOT_READY",
+    "internal_demo": "READY",
+    "limited_external_beta": "READY_WITH_CONDITIONS",
+    "manufacturing_one_dept_poc": "READY_WITH_CONDITIONS"
+  },
+  "recommended_next_prompts": [
+    "prompt039_pilot_validation_and_demo_readiness_pack",
+    "prompt040_pilot_one_pager_and_sales_kit",
+    "prompt041_safe_collection_promotion_workflow",
+    "prompt042_real_document_evaluation_workflow",
+    "prompt043_sso_reverse_proxy_deployment_guide",
+    "prompt044_cleanup_obsolete_ignore_searchable_workaround"
+  ],
+  "report": "prompt038_commercial_chatbot_current_state_gap_analysis",
+  "safe_to_claim_poc": [
+    "on_prem_no_cloud_dependency",
+    "multiformat_with_citations",
+    "abstain_not_hallucinate",
+    "approved_qa_deterministic",
+    "tenant_isolation_reload_restore_verified",
+    "api_key_tenant_authorization",
+    "optional_default_off_enterprise_auth_bridge",
+    "backup_restore_deploy_smoke_local_alert_checker",
+    "minimal_enduser_chat_ui"
+  ]
+}
