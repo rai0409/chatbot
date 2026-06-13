@@ -931,6 +931,20 @@ def product_preview_page():
         raise HTTPException(status_code=500, detail="product preview page unavailable")
 
 
+@app.get("/chat-ui", response_class=HTMLResponse)
+def chat_ui_page():
+    # Serves the minimal end-user chat UI (static shell only). The page calls
+    # the existing /chat/stream and /chat/feedback endpoints, which keep their
+    # own API-auth / tenant-authorization / rate-limit enforcement; this route
+    # adds no new auth scheme and carries no secrets.
+    path = _STATIC_DIR / "chat.html"
+    try:
+        return HTMLResponse(path.read_text(encoding="utf-8"))
+    except Exception:
+        logging.exception("chat ui page unavailable")
+        raise HTTPException(status_code=500, detail="chat ui page unavailable")
+
+
 @app.get("/admin/review", response_class=HTMLResponse)
 def admin_review_page(_admin_auth: None = Depends(require_admin_auth)):
     path = _STATIC_DIR / "review_queue.html"

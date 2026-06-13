@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex,nofollow" />
+<title>社内ナレッジ アシスタント（オンプレ版）</title>
+<style>
+  :root { --fg:#1f2933; --muted:#647084; --line:#d7dde5; --accent:#0b6b5b; --warn:#8a5a00; --bg:#f5f7fa; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif;
+         color: var(--fg); background: var(--bg); }
+  header { background:#fff; border-bottom:1px solid var(--line); padding:12px 16px; }
+  header h1 { font-size:16px; margin:0; }
+  header p { margin:4px 0 0; font-size:12px; color:var(--muted); }
+  main { max-width: 860px; margin:0 auto; padding:16px; }
+  details.settings { background:#fff; border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin-bottom:12px; }
+  details.settings summary { cursor:pointer; font-size:13px; color:var(--muted); }
+  .field { display:flex; flex-direction:column; gap:4px; margin:8px 0; }
+  .field label { font-size:12px; color:var(--muted); }
+  .field input { padding:8px; border:1px solid var(--line); border-radius:6px; font-size:14px; }
+  #log { display:flex; flex-direction:column; gap:12px; margin-bottom:16px; }
+  .turn { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .q { font-weight:600; }
+  .a { white-space:pre-wrap; margin-top:8px; }
+  .abstain { background:#fff8e6; border:1px solid #f0d9a0; color:var(--warn); padding:8px 10px; border-radius:6px; margin-top:8px; font-size:13px; }
+  .sources { margin-top:10px; font-size:12px; color:var(--muted); }
+  .sources ol { margin:4px 0 0; padding-left:18px; }
+  .feedback { margin-top:10px; display:flex; gap:8px; align-items:center; }
+  .feedback button { font-size:12px; padding:5px 8px; border:1px solid var(--line); background:#fff; border-radius:6px; cursor:pointer; }
+  .feedback .done { color:var(--accent); font-size:12px; }
+  .composer { position:sticky; bottom:0; background:var(--bg); padding-top:8px; display:flex; gap:8px; }
+  .composer textarea { flex:1; min-height:46px; max-height:160px; padding:10px; border:1px solid var(--line); border-radius:8px; font-size:15px; resize:vertical; }
+  .composer button { padding:0 18px; border:0; background:var(--accent); color:#fff; border-radius:8px; font-size:15px; cursor:pointer; }
+  .composer button[disabled] { opacity:.5; cursor:default; }
+  .hint { font-size:12px; color:var(--muted); margin:4px 2px 0; }
+  .err { color:#a12a2a; font-size:13px; margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>社内ナレッジ アシスタント<span style="font-weight:400;color:var(--muted)">（オンプレ版）</span></h1>
+  <p>社内文書から<strong>出典付き</strong>で回答します。確実な根拠が無い場合は「分かりません」と答えます。</p>
+</header>
+<main>
+  <details class="settings">
+    <summary>接続設定（必要な場合のみ）</summary>
+    <div class="field">
+      <label for="apiKey">APIキー（認証が有効な環境のみ。ブラウザ内のみ保持し、ページには保存されません）</label>
+      <input id="apiKey" type="password" autocomplete="off" placeholder="未入力可（ローカル/認証無効時）" />
+    </div>
+    <div class="field">
+      <label for="tenantId">テナントID（未入力は default）</label>
+      <input id="tenantId" type="text" autocomplete="off" placeholder="default" />
+    </div>
+  </details>
+
+  <div id="log" aria-live="polite"></div>
+
+  <div class="composer">
+    <textarea id="q" placeholder="質問を入力（例：装置Xの起動手順は？）" aria-label="質問"></textarea>
+    <button id="send" type="button">送信</button>
+  </div>
+  <p class="hint">回答は登録済み社内文書に基づきます。誤りを見つけたら各回答のフィードバックでお知らせください。</p>
+</main>
+
+<script>
+"use strict";
+// Minimal end-user client for the on-prem pilot. Reuses POST /chat/stream (SSE)
+// and POST /chat/feedback. No API key is hardcoded here: when API auth is on,
+// the operator enters the pilot key at runtime; it is kept in memory only and
+// sent as the X-Api-Key header. Default (auth disabled) works with no key.
+(function () {
+  var log = document.getElementById("log");
+  var qEl = document.getElementById("q");
+  var sendBtn = document.getElementById("send");
+  var apiKeyEl = document.getElementById("apiKey");
+  var tenantEl = document.getElementById("tenantId");
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function uuid() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return "q-" + Date.now() + "-" + Math.floor(Math.random() * 1e9);
+  }
+  function headers() {
+    var h = { "Content-Type": "application/json" };
+    var key = (apiKeyEl.value || "").trim();
+    if (key) h["X-Api-Key"] = key; // runtime only; never persisted to the page
+    return h;
+  }
+  function tenant() {
+    return (tenantEl.value || "").trim() || "default";
+  }
+
+  function renderSources(container, citations) {
+    if (!citations || !citations.length) return;
+    var box = document.createElement("div");
+    box.className = "sources";
+    var items = citations.map(function (c) {
+      var doc = c.source_doc || c.title || c.source_title || "出典";
+      var pages = Array.isArray(c.source_pages) && c.source_pages.length ? " p." + c.source_pages.join(",") : "";
+      return "<li>" + esc(doc) + esc(pages) + "</li>";
+    }).join("");
+    box.innerHTML = "出典:<ol>" + items + "</ol>";
+    container.appendChild(box);
+  }
+
+  function renderAbstain(container) {
+    var b = document.createElement("div");
+    b.className = "abstain";
+    b.textContent = "確実な根拠が登録文書内に見つからなかったため、回答できません。";
+    container.appendChild(b);
+  }
+
+  function attachFeedback(container, token, tenantId) {
+    var box = document.createElement("div");
+    box.className = "feedback";
+    var label = document.createElement("span");
+    label.style.fontSize = "12px"; label.style.color = "var(--muted)";
+    label.textContent = "この回答は役に立ちましたか？";
+    box.appendChild(label);
+    var opts = [
+      { t: "good", txt: "役に立った" },
+      { t: "bad", txt: "役に立たなかった" },
+      { t: "human_review_requested", txt: "人に確認したい" }
+    ];
+    opts.forEach(function (o) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = o.txt;
+      btn.addEventListener("click", function () {
+        sendFeedback(token, o.t, tenantId, box);
+      });
+      box.appendChild(btn);
+    });
+    container.appendChild(box);
+  }
+
+  function sendFeedback(token, type, tenantId, box) {
+    fetch("/chat/feedback", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ feedback_token: token, trace_id: token, feedback_type: type, tenant_id: tenantId })
+    }).then(function (r) {
+      box.innerHTML = r.ok
+        ? '<span class="done">フィードバックを受け付けました。ありがとうございます。</span>'
+        : '<span class="err">フィードバックを送信できませんでした。</span>';
+    }).catch(function () {
+      box.innerHTML = '<span class="err">フィードバックを送信できませんでした。</span>';
+    });
+  }
+
+  function applyAnswer(turn, ansEl, data) {
+    var txt = (data && (data.answer_text || data.answer_with_footnotes)) || "";
+    var abstained = !!(data && (data.guard_reason || data.used_fallback)) || !txt;
+    if (txt) ansEl.textContent = txt;
+    if (abstained) renderAbstain(turn);
+    renderSources(turn, data && data.citations);
+  }
+
+  // Parse an SSE byte stream from fetch() (EventSource cannot POST).
+  function streamChat(question, turn, ansEl, token, tenantId) {
+    return fetch("/chat/stream", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ question: question, tenant_id: tenantId, trace_id: token })
+    }).then(function (resp) {
+      if (!resp.ok || !resp.body) {
+        // Show a generic, key-free message; never echo headers/keys.
+        var e = document.createElement("div");
+        e.className = "err";
+        e.textContent = resp.status === 401 ? "認証が必要です。接続設定でキーを入力してください。"
+          : resp.status === 403 ? "このテナントへのアクセス権がありません。"
+          : resp.status === 429 ? "アクセスが集中しています。少し待って再試行してください。"
+          : "回答を取得できませんでした。";
+        turn.appendChild(e);
+        return;
+      }
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder("utf-8");
+      var buf = "";
+      var streamed = "";
+      var settled = false;
+      function handleEvent(name, dataStr) {
+        var data = null;
+        try { data = dataStr ? JSON.parse(dataStr) : null; } catch (_) { data = null; }
+        if (name === "delta" && data && typeof data.text === "string") {
+          streamed += data.text; ansEl.textContent = streamed;
+        } else if (name === "final" || name === "approved") {
+          settled = true; applyAnswer(turn, ansEl, data);
+          attachFeedback(turn, token, tenantId);
+        } else if (name === "error") {
+          settled = true;
+          var e = document.createElement("div");
+          e.className = "err"; e.textContent = "回答を取得できませんでした。";
+          turn.appendChild(e);
+        }
+      }
+      function parseFrames() {
+        var idx;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          var frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          var name = "message", dataLines = [];
+          frame.split("\n").forEach(function (line) {
+            if (line.indexOf("event:") === 0) name = line.slice(6).trim();
+            else if (line.indexOf("data:") === 0) dataLines.push(line.slice(5).trim());
+          });
+          handleEvent(name, dataLines.join("\n"));
+        }
+      }
+      function pump() {
+        return reader.read().then(function (res) {
+          if (res.done) {
+            if (!settled && streamed) attachFeedback(turn, token, tenantId);
+            return;
+          }
+          buf += decoder.decode(res.value, { stream: true });
+          parseFrames();
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(function () {
+      var e = document.createElement("div");
+      e.className = "err"; e.textContent = "回答を取得できませんでした。";
+      turn.appendChild(e);
+    });
+  }
+
+  function ask() {
+    var question = (qEl.value || "").trim();
+    if (!question) return;
+    var tenantId = tenant();
+    var token = uuid();
+
+    var turn = document.createElement("div");
+    turn.className = "turn";
+    var q = document.createElement("div");
+    q.className = "q"; q.textContent = question;
+    var a = document.createElement("div");
+    a.className = "a"; a.textContent = "…";
+    turn.appendChild(q); turn.appendChild(a);
+    log.appendChild(turn);
+    qEl.value = "";
+    sendBtn.disabled = true;
+    streamChat(question, turn, a, token, tenantId).then(function () {
+      sendBtn.disabled = false;
+      if (a.textContent === "…") a.textContent = "";
+    });
+  }
+
+  sendBtn.addEventListener("click", ask);
+  qEl.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ask(); }
+  });
+})();
+</script>
+</body>
+</html>
