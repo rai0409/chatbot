@@ -1,0 +1,174 @@
+{
+  "execution_rule": "sequential; each commits/tags only on PASS; stop on FAIL/PARTIAL and write resume/blocker report",
+  "generated_at": "2026-06-13T16:33:56.291908+00:00",
+  "head_commit_at_plan": "026b3d03e8deba92e54ae2ac7ac3858c0bf9f11b",
+  "orchestrator": "prompt040_commercial_production_upgrade_orchestrator",
+  "prompt041_execution": "started_then_paused_with_resume_report",
+  "sso_recommendation": "OIDC/OAuth2 Authorization Code + PKCE (default-off, in-app) gated behind prompt045 decision; SAML/LDAP via proxy/gateway; no homegrown crypto; add smallest widely-used dep (authlib candidate) only if prompt045 justifies",
+  "stages": [
+    {
+      "commit_message": "prompt041 commercial chat workspace ui",
+      "depends_on": [],
+      "prompt": "prompts/claude/product/prompt041_commercial_chat_workspace_ui.md",
+      "purpose": "Upgrade /chat-ui into a ChatGPT/Claude-style workspace (sidebar, citations panel, abstain/feedback) over existing APIs; UI tests; no raw key.",
+      "series": "ui",
+      "tag": "prompt041-commercial-chat-workspace-ui",
+      "title": "Commercial chat workspace UI"
+    },
+    {
+      "commit_message": "prompt042 conversation history and thread persistence",
+      "depends_on": [
+        "prompt041"
+      ],
+      "prompt": "prompts/claude/product/prompt042_conversation_history_and_thread_persistence.md",
+      "purpose": "Smallest local persistence boundary with tenant/user isolation + retention; no secrets; no broadened tenant access; tests.",
+      "series": "ui",
+      "tag": "prompt042-conversation-history-and-thread-persistence",
+      "title": "Conversation history & thread persistence"
+    },
+    {
+      "commit_message": "prompt043 admin console role based branding ui",
+      "depends_on": [
+        "prompt041"
+      ],
+      "prompt": "prompts/claude/product/prompt043_admin_console_role_based_branding_ui.md",
+      "purpose": "Admin/operator/user/viewer UI gating with backend enforcement; customer logo/text/theme config; review queue surface.",
+      "series": "ui",
+      "tag": "prompt043-admin-console-role-based-branding-ui",
+      "title": "Admin console + role-aware + branding UI"
+    },
+    {
+      "commit_message": "prompt044 document ingestion ui and job status",
+      "depends_on": [
+        "prompt041",
+        "prompt043"
+      ],
+      "prompt": "prompts/claude/product/prompt044_document_ingestion_ui_and_job_status.md",
+      "purpose": "Ingestion UI + job status reusing dry-run onboarding/import manifest; staging/non-production collection only; validation + tests.",
+      "series": "ui",
+      "tag": "prompt044-document-ingestion-ui-and-job-status",
+      "title": "Document ingestion UI & job status"
+    },
+    {
+      "commit_message": "prompt045 enterprise sso architecture decision",
+      "depends_on": [
+        "prompt037"
+      ],
+      "prompt": "prompts/claude/product/prompt045_enterprise_sso_architecture_decision.md",
+      "purpose": "Decide exact SSO path (OIDC vs SAML/LDAP vs proxy); dependency analysis; decision report; no runtime change.",
+      "series": "sso",
+      "tag": "prompt045-enterprise-sso-architecture-decision",
+      "title": "Enterprise SSO architecture decision"
+    },
+    {
+      "commit_message": "prompt046 oidc login session integration",
+      "depends_on": [
+        "prompt045"
+      ],
+      "prompt": "prompts/claude/product/prompt046_oidc_login_session_integration.md",
+      "purpose": "Default-off OIDC Auth Code + PKCE login/session via safe library; secure state/nonce/cookies; API key path intact; tests with mock IdP.",
+      "series": "sso",
+      "tag": "prompt046-oidc-login-session-integration",
+      "title": "OIDC login/session integration"
+    },
+    {
+      "commit_message": "prompt047 group tenant rbac mapping and audit",
+      "depends_on": [
+        "prompt046"
+      ],
+      "prompt": "prompts/claude/product/prompt047_group_tenant_rbac_mapping_and_audit.md",
+      "purpose": "Map IdP groups to tenant + role; cross-tenant rejection; audit-safe fingerprints; role enforcement; tests.",
+      "series": "sso",
+      "tag": "prompt047-group-tenant-rbac-mapping-and-audit",
+      "title": "Group→tenant RBAC mapping + audit"
+    },
+    {
+      "commit_message": "prompt048 entra okta reverse proxy tls deployment guides",
+      "depends_on": [
+        "prompt046",
+        "prompt047"
+      ],
+      "prompt": "prompts/claude/product/prompt048_entra_okta_reverse_proxy_tls_deployment_guides.md",
+      "purpose": "Production deployment guides; what is locally tested vs requires a real customer IdP tenant.",
+      "series": "sso",
+      "tag": "prompt048-entra-okta-reverse-proxy-tls-deployment-guides",
+      "title": "Entra/Okta/proxy/TLS deployment guides"
+    },
+    {
+      "commit_message": "prompt049 prometheus grafana observability pack",
+      "depends_on": [
+        "prompt036"
+      ],
+      "prompt": "prompts/claude/product/prompt049_prometheus_grafana_observability_pack.md",
+      "purpose": "Scrape config + dashboard JSON + alert rules over safe aggregate metrics; no secrets/tenant data; tests/docs.",
+      "series": "ops",
+      "tag": "prompt049-prometheus-grafana-observability-pack",
+      "title": "Prometheus + Grafana observability pack"
+    },
+    {
+      "commit_message": "prompt050 systemd cron monitoring runner",
+      "depends_on": [
+        "prompt036",
+        "prompt049"
+      ],
+      "prompt": "prompts/claude/product/prompt050_systemd_cron_monitoring_runner.md",
+      "purpose": "systemd service/timer + cron fallback for periodic health/metrics/alert checks; log rotation; retention; local docs; tests.",
+      "series": "ops",
+      "tag": "prompt050-systemd-cron-monitoring-runner",
+      "title": "systemd/cron monitoring runner"
+    },
+    {
+      "commit_message": "prompt051 slack email alert notifications",
+      "depends_on": [
+        "prompt036",
+        "prompt050"
+      ],
+      "prompt": "prompts/claude/product/prompt051_slack_email_alert_notifications.md",
+      "purpose": "Slack webhook + SMTP notifications for alert output; env-only secrets never logged; retry/backoff + severity routing; mock-only tests.",
+      "series": "ops",
+      "tag": "prompt051-slack-email-alert-notifications",
+      "title": "Slack + email alert notifications"
+    },
+    {
+      "commit_message": "prompt052 slo sla incident escalation runbook",
+      "depends_on": [
+        "prompt049",
+        "prompt050",
+        "prompt051"
+      ],
+      "prompt": "prompts/claude/product/prompt052_slo_sla_incident_escalation_runbook.md",
+      "purpose": "Honest SLO/SLA + escalation runbook + customer comms templates for first paid annual contract discussions.",
+      "series": "ops",
+      "tag": "prompt052-slo-sla-incident-escalation-runbook",
+      "title": "SLO/SLA + incident escalation runbook"
+    },
+    {
+      "commit_message": "prompt053 commercial production acceptance gate",
+      "depends_on": [
+        "prompt041",
+        "prompt042",
+        "prompt043",
+        "prompt044",
+        "prompt046",
+        "prompt047",
+        "prompt048",
+        "prompt049",
+        "prompt050",
+        "prompt051",
+        "prompt052"
+      ],
+      "prompt": "prompts/claude/product/prompt053_commercial_production_acceptance_gate.md",
+      "purpose": "Acceptance gate across UI/SSO/ops/security/tests/docs; recompute the five readiness judgments.",
+      "series": "gate",
+      "tag": "prompt053-commercial-production-acceptance-gate",
+      "title": "Commercial production acceptance gate"
+    }
+  ],
+  "stop_conditions": [
+    "any stage FAIL/PARTIAL",
+    "secret/.env access",
+    "unrelated orphan modification",
+    "weakened auth/tenant/isolation/rate-limit/production_safe",
+    "unjustified dependency or runtime/threshold change"
+  ]
+}
