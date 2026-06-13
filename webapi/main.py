@@ -992,6 +992,98 @@ def admin_review_action(req: ReviewActionRequest, _admin_auth: None = Depends(re
     return response
 
 
+_CHAT_SAFE_PROFILE = "production_safe"
+
+
+def resolve_chat_runtime_profile(tenant_id, *, customer_id=None) -> Optional[Dict[str, Any]]:
+    # Default OFF: returns None and the chat path runs unchanged. When
+    # CHAT_USE_TENANT_PROFILE is true, resolve the per-tenant product profile
+    # using the already-authenticated tenant context and return a compact
+    # runtime descriptor. Any resolution/config problem fails closed to the
+    # safest profile (production_safe). This never bypasses tenant
+    # authorization or isolation, and never touches guard, cross-encoder, or
+    # distance settings — it only applies the resolved profile's candidate
+    # limit and records the safe profile identifier.
+    if not getattr(config, "CHAT_USE_TENANT_PROFILE", False):
+        return None
+
+    profile_name = _CHAT_SAFE_PROFILE
+    decision = "fallback_safe"
+    try:
+        resolution = resolve_tenant_product_profile(
+            tenant_id or "default", customer_id=customer_id, strict=False
+        )
+        decision = str(resolution.get("decision") or "") or "resolved"
+        resolved = resolution.get("resolved_profile")
+        # disabled / rejected / unknown → no resolved_profile → safest profile.
+        profile_name = (
+            str(resolved or resolution.get("default_profile") or _CHAT_SAFE_PROFILE).strip()
+            or _CHAT_SAFE_PROFILE
+        )
+    except Exception:
+        logging.exception("chat tenant profile resolution failed; using safe profile")
+        profile_name = _CHAT_SAFE_PROFILE
+        decision = "resolution_error"
+
+    def _load_limit(name: str):
+        # Returns (ok, max_candidates_internal). ok is False when the profile
+        # cannot be loaded as itself — load_product_profile silently falls back
+        # to the default profile for unknown names, which we treat as invalid
+        # so resolution fails closed to the safest profile rather than serving
+        # a different (possibly more permissive) profile.
+        try:
+            profile = load_product_profile(name)
+            policy = build_route_policy(profile)
+            # Never serve a profile that auto-answers similar candidates.
+            policy.setdefault("answer_policy", {})["allow_similar_auto_answer"] = False
+            if str(policy.get("profile_name") or "") != name:
+                return False, None
+            limits = policy.get("limits") if isinstance(policy.get("limits"), dict) else {}
+            raw_limit = limits.get("max_candidates_internal")
+            return True, (raw_limit if isinstance(raw_limit, int) and raw_limit > 0 else None)
+        except Exception:
+            logging.exception("chat product profile load failed for %s; using safe profile", name)
+            return False, None
+
+    ok, max_internal = _load_limit(profile_name)
+    if not ok:
+        profile_name = _CHAT_SAFE_PROFILE
+        decision = "invalid_profile_fallback_safe"
+        ok_safe, max_internal = _load_limit(_CHAT_SAFE_PROFILE)
+        if not ok_safe:
+            max_internal = None
+
+    return {
+        "profile_name": profile_name,
+        "max_candidates_internal": max_internal,
+        "decision": decision,
+    }
+
+
+def _apply_chat_profile_top_k(effective_top_k: int, runtime_profile: Optional[Dict[str, Any]]) -> int:
+    if not runtime_profile:
+        return effective_top_k
+    limit = runtime_profile.get("max_candidates_internal")
+    if isinstance(limit, int) and limit > 0:
+        return max(1, min(effective_top_k, limit))
+    return effective_top_k
+
+
+def _record_chat_profile_metric(runtime_profile: Optional[Dict[str, Any]]) -> None:
+    if runtime_profile and runtime_profile.get("profile_name"):
+        # Safe enum label (a product profile name); never keys or query text.
+        metrics_registry.increment("chat_tenant_profile_total", str(runtime_profile["profile_name"]))
+
+
+def _annotate_chat_profile(event: Dict[str, Any], runtime_profile: Optional[Dict[str, Any]]) -> None:
+    # Only adds safe identifiers (profile name + decision) when the runtime
+    # profile is active; leaves the audit event untouched when default-off.
+    if not runtime_profile:
+        return
+    event["product_profile"] = runtime_profile.get("profile_name")
+    event["tenant_profile_decision"] = runtime_profile.get("decision")
+
+
 @app.post("/chat")
 def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited)):
     global _total_requests, _error_requests
@@ -1018,8 +1110,10 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
             _record_chat_outcome_metrics(answer_mode="approved_exact_match")
             return payload
 
-        effective_top_k = req.top_k or config.TOP_K
+        runtime_profile = resolve_chat_runtime_profile(tenant_id)
+        effective_top_k = _apply_chat_profile_top_k(req.top_k or config.TOP_K, runtime_profile)
         effective_max_context_chars = req.max_context_chars or config.MAX_CONTEXT_CHARS
+        _record_chat_profile_metric(runtime_profile)
         cache_key = None
         if answer_cache.enabled():
             cache_key = answer_cache.build_key(
@@ -1055,23 +1149,22 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
             max_context_chars=effective_max_context_chars,
             tenant_id=tenant_id,
         )
-        append_audit_event(
-            "chat",
-            {
-                "request_id": trace.get("request_id"),
-                "trace_id": req.trace_id or trace.get("request_id"),
-                "tenant_id": tenant_id,
-                "question": req.question,
-                "normalized_query": trace.get("normalized_query"),
-                "intent": trace.get("intent") or ans.intent,
-                "guard_reason": trace.get("final_guard_reason") or ans.guard_reason,
-                "used_fallback": trace.get("final_used_fallback", ans.used_fallback),
-                "citations_count": trace.get("citations_count", len(ans.citations)),
-                "top_source_docs": _top_source_docs(trace.get("after_rerank")),
-                "latency_ms": trace.get("latency_ms"),
-                "cache_hit": False,
-            },
-        )
+        chat_event = {
+            "request_id": trace.get("request_id"),
+            "trace_id": req.trace_id or trace.get("request_id"),
+            "tenant_id": tenant_id,
+            "question": req.question,
+            "normalized_query": trace.get("normalized_query"),
+            "intent": trace.get("intent") or ans.intent,
+            "guard_reason": trace.get("final_guard_reason") or ans.guard_reason,
+            "used_fallback": trace.get("final_used_fallback", ans.used_fallback),
+            "citations_count": trace.get("citations_count", len(ans.citations)),
+            "top_source_docs": _top_source_docs(trace.get("after_rerank")),
+            "latency_ms": trace.get("latency_ms"),
+            "cache_hit": False,
+        }
+        _annotate_chat_profile(chat_event, runtime_profile)
+        append_audit_event("chat", chat_event)
         _record_chat_outcome_metrics(
             answer_mode=trace.get("answer_mode")
             or ("fallback" if (ans.guard_reason or ans.used_fallback) else "grounded"),
@@ -1141,13 +1234,16 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                 yield _sse_event("approved", payload)
                 return
 
+            runtime_profile = resolve_chat_runtime_profile(tenant_id)
+            effective_top_k = _apply_chat_profile_top_k(req.top_k or config.TOP_K, runtime_profile)
+            _record_chat_profile_metric(runtime_profile)
             client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
             result = None
             trace = None
             for name, payload in answer_query_stream(
                 req.question,
                 client=client,
-                top_k=req.top_k or config.TOP_K,
+                top_k=effective_top_k,
                 max_context_chars=req.max_context_chars or config.MAX_CONTEXT_CHARS,
                 tenant_id=tenant_id,
             ):
@@ -1157,24 +1253,23 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                 else:
                     yield _sse_event(name, payload)
             if result is not None and trace is not None:
-                append_audit_event(
-                    "chat",
-                    {
-                        "request_id": trace.get("request_id"),
-                        "trace_id": req.trace_id or trace.get("request_id"),
-                        "tenant_id": tenant_id,
-                        "question": req.question,
-                        "normalized_query": trace.get("normalized_query"),
-                        "intent": trace.get("intent") or result.intent,
-                        "guard_reason": trace.get("final_guard_reason") or result.guard_reason,
-                        "used_fallback": trace.get("final_used_fallback", result.used_fallback),
-                        "citations_count": trace.get("citations_count", len(result.citations)),
-                        "top_source_docs": _top_source_docs(trace.get("after_rerank")),
-                        "latency_ms": trace.get("latency_ms"),
-                        "answer_mode": trace.get("answer_mode"),
-                        "streamed": True,
-                    },
-                )
+                stream_event = {
+                    "request_id": trace.get("request_id"),
+                    "trace_id": req.trace_id or trace.get("request_id"),
+                    "tenant_id": tenant_id,
+                    "question": req.question,
+                    "normalized_query": trace.get("normalized_query"),
+                    "intent": trace.get("intent") or result.intent,
+                    "guard_reason": trace.get("final_guard_reason") or result.guard_reason,
+                    "used_fallback": trace.get("final_used_fallback", result.used_fallback),
+                    "citations_count": trace.get("citations_count", len(result.citations)),
+                    "top_source_docs": _top_source_docs(trace.get("after_rerank")),
+                    "latency_ms": trace.get("latency_ms"),
+                    "answer_mode": trace.get("answer_mode"),
+                    "streamed": True,
+                }
+                _annotate_chat_profile(stream_event, runtime_profile)
+                append_audit_event("chat", stream_event)
                 _record_chat_outcome_metrics(
                     answer_mode=trace.get("answer_mode"),
                     guard_reason=trace.get("final_guard_reason") or result.guard_reason,
