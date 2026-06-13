@@ -114,6 +114,16 @@ def _extract_key(headers: Mapping[str, str] | None) -> tuple[str | None, bool]:
 
 
 def require_api_auth_headers(headers: Mapping[str, str] | None = None) -> ApiAuthContext:
+    # Optional default-off enterprise auth bridge (trusted reverse-proxy
+    # headers). Lazy import avoids a circular import; returns None when disabled
+    # or when the request carries no enterprise signal, so the API key path
+    # below stays exactly unchanged.
+    from webapi import enterprise_auth
+
+    enterprise_ctx = enterprise_auth.resolve_enterprise_auth(headers)
+    if enterprise_ctx is not None:
+        return enterprise_ctx
+
     if not api_auth_enabled():
         return ApiAuthContext()
 
