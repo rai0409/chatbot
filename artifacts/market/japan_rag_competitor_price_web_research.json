@@ -1,0 +1,396 @@
+{
+  "competitors": [
+    {
+      "category": "enterprise GenAI/RAG",
+      "company": "JAPAN AI",
+      "deployment": "domestic-DC SaaS",
+      "manufacturing_evidence": "not_confirmed",
+      "name": "JAPAN AI CHAT/AGENT",
+      "pricing_label": "quote_required",
+      "security": [
+        "domestic data centers",
+        "no-training(claimed)"
+      ],
+      "url": "https://japan-ai.co.jp/chat/"
+    },
+    {
+      "category": "enterprise GenAI/RAG",
+      "company": "Exa Enterprise AI / ExaWizards",
+      "deployment": "domestic SaaS",
+      "manufacturing_evidence": "not_confirmed",
+      "name": "exaBase 生成AI",
+      "pricing_label": "quote_required",
+      "proxy": "1000+ companies",
+      "security": [
+        "domestic data processing",
+        "IP restriction",
+        "access logs",
+        "input not used for training"
+      ],
+      "url": "https://exawizards.com/exabase/gpt/"
+    },
+    {
+      "category": "enterprise RAG/LLM platform",
+      "company": "Allganize Japan",
+      "deployment": "on-prem/private + on-prem LLM",
+      "manufacturing_evidence": "table-aware RAG; logos not mfg-specific",
+      "name": "Allganize Alli",
+      "pricing_label": "quote_required",
+      "proxy": "NTT Docomo, JR Kyushu",
+      "security": [
+        "closed environment",
+        "on-prem LLM"
+      ],
+      "url": "https://www.allganize.ai/ja/alli-llm-ops"
+    },
+    {
+      "category": "internal helpdesk / AI FAQ",
+      "company": "PKSHA Technology",
+      "deployment": "SaaS (Teams)",
+      "manufacturing_evidence": "internal helpdesk",
+      "name": "PKSHA AI Helpdesk/Chatbot/FAQ",
+      "pricing_label": "quote_required",
+      "proxy": "vendor claim: 国内シェアNo.1 AIチャットエージェント",
+      "security": [
+        "enterprise SaaS"
+      ],
+      "url": "https://aisaas.pkshatech.com/ai-helpdesk/"
+    },
+    {
+      "category": "customer-support chatbot",
+      "company": "Karakuri",
+      "deployment": "SaaS",
+      "manufacturing_evidence": "CS-focused",
+      "name": "KARAKURI chatbot",
+      "pricing_label": "quote_required",
+      "proxy": "Sony Network Communications",
+      "security": [
+        "own LLM KARAKURI LM",
+        "hybrid rule+GenAI"
+      ],
+      "url": "https://karakuri.ai/"
+    },
+    {
+      "category": "ChatGPT-wrapper + RAG",
+      "company": "Knowledge Sense",
+      "deployment": "SaaS (OpenAI API)",
+      "manufacturing_evidence": "general internal-use",
+      "name": "ChatSense",
+      "price": "from ¥980/month + token PAYG",
+      "pricing_label": "public_price_verified",
+      "proxy": "400+ companies (Nikkei)",
+      "security": [
+        "no training on data",
+        "secure env"
+      ],
+      "url": "https://chatsense.jp/"
+    },
+    {
+      "category": "enterprise RAG / internal FAQ",
+      "company": "Neos",
+      "deployment": "SaaS",
+      "manufacturing_evidence": "宮崎電子機器 case",
+      "name": "OfficeBot",
+      "pricing_label": "quote_required",
+      "proxy": "~90% accuracy (vendor)",
+      "security": [
+        "RAG+Rerank",
+        "image/graph/table reading"
+      ],
+      "url": "https://officebot.jp/function/"
+    },
+    {
+      "category": "AI FAQ / search",
+      "company": "Helpfeel Inc.",
+      "deployment": "SaaS",
+      "manufacturing_evidence": "FAQ-general",
+      "name": "Helpfeel",
+      "pricing_label": "quote_required",
+      "proxy": "900+ sites, 99% retention",
+      "security": [
+        "curated FAQ + GenAI search",
+        "hallucination-free framing"
+      ],
+      "url": "https://boxil.jp/service/6943/"
+    },
+    {
+      "category": "cloud RAG platform",
+      "company": "Microsoft",
+      "deployment": "managed cloud + SI",
+      "manufacturing_evidence": "DIY/SI",
+      "name": "Microsoft Copilot Studio / Azure OpenAI + AI Search",
+      "price": "usage-based API (dev/server extra)",
+      "pricing_label": "public_price_verified",
+      "security": [
+        "Azure enterprise controls"
+      ],
+      "url": "https://biz.techvan.co.jp/tech-microsoft/blog/contents/azure_openai_service_price.html"
+    },
+    {
+      "category": "cloud RAG platform",
+      "company": "AWS",
+      "deployment": "managed cloud (no on-prem)",
+      "manufacturing_evidence": "DIY/SI",
+      "name": "Amazon Bedrock Knowledge Bases",
+      "price": "consumption-based; OpenSearch Serverless ~$345/mo floor; BDA $0.010/page",
+      "pricing_label": "public_price_verified",
+      "security": [
+        "AWS enterprise controls"
+      ],
+      "url": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    {
+      "category": "cloud RAG platform",
+      "company": "Google Cloud",
+      "deployment": "managed cloud (explicitly no on-prem)",
+      "manufacturing_evidence": "DIY/SI",
+      "name": "Google Vertex AI Search",
+      "price": "$1.50/1k (Standard), $4.00/1k (Enterprise) queries; 10k/mo free",
+      "pricing_label": "public_price_verified",
+      "security": [
+        "GCP enterprise controls"
+      ],
+      "url": "https://cloud.google.com/generative-ai-app-builder/pricing"
+    },
+    {
+      "category": "OSS/SI GenAI platform",
+      "company": "LangGenius (Ricoh JP partner; SI e.g. Sateraito)",
+      "deployment": "cloud tiers + self-host/on-prem",
+      "manufacturing_evidence": "DIY/SI",
+      "name": "Dify",
+      "price": "Sandbox free / Professional / Team; enterprise quote",
+      "pricing_label": "public_price_verified",
+      "security": [
+        "self-host closed network"
+      ],
+      "url": "https://dify.ai/jp/pricing"
+    },
+    {
+      "category": "enterprise RAG (multimodal)",
+      "company": "Stockmark",
+      "deployment": "SaaS/API",
+      "manufacturing_evidence": "manufacturing-oriented (Nikkei)",
+      "name": "Stockmark A Technology (SAT)",
+      "pricing_label": "quote_required",
+      "proxy": "Nikkei coverage",
+      "security": [
+        "multimodal RAG charts/figures"
+      ],
+      "url": "https://stockmark.co.jp/news/20240625"
+    },
+    {
+      "category": "enterprise GenAI/RAG",
+      "company": "ELYZA (KDDI group)",
+      "deployment": "SaaS/enterprise",
+      "manufacturing_evidence": "field-staff app building",
+      "name": "ELYZA Works",
+      "pricing_label": "quote_required",
+      "proxy": "JR West case (+54%)",
+      "security": [
+        "Japanese LLM"
+      ],
+      "url": "https://note.com/elyza/n/n7cd59e020596"
+    },
+    {
+      "category": "workspace AI Q&A",
+      "company": "Notion",
+      "deployment": "SaaS (no on-prem)",
+      "manufacturing_evidence": "general",
+      "name": "Notion AI / Q&A",
+      "price": "per-seat add-on (not JP-specific)",
+      "pricing_label": "public_price_verified",
+      "security": [
+        "workspace permissions"
+      ],
+      "url": "https://www.notion.so/product/ai"
+    }
+  ],
+  "generated_at": "2026-06-13T11:22:53.958614+00:00",
+  "market_share_findings": {
+    "proxy_signals_only": {
+      "Allganize": "NTT Docomo, JR Kyushu (logos)",
+      "ChatSense": "400+ companies (Nikkei/PR)",
+      "ELYZA": "KDDI group, JR West case",
+      "Helpfeel": "900+ sites, 99% retention (vendor)",
+      "KARAKURI": "Sony Network Communications (logo)",
+      "PKSHA": "vendor claim: 国内シェアNo.1 AIチャットエージェント (not verified share)",
+      "exaBase": "1,000+ companies (vendor)"
+    },
+    "verified_market_share": "market_share_unknown"
+  },
+  "next_recommended_prompt": "prompts/claude/product/prompt033_minimal_enduser_chat_ui_for_onprem_pilot.md",
+  "pricing_summary": {
+    "note": "No exact enterprise JP RAG price asserted as fact; all such vendors are quote-based.",
+    "public_price_verified": [
+      "ChatSense (from ¥980/mo + token)",
+      "Google Vertex AI Search ($1.50-$4.00/1k queries)",
+      "Amazon Bedrock KB (consumption; ~$345/mo OpenSearch floor)",
+      "Azure OpenAI (usage-based)",
+      "Dify (cloud tiers)",
+      "Notion AI (per-seat add-on)"
+    ],
+    "quote_required": [
+      "JAPAN AI",
+      "exaBase",
+      "Allganize Alli",
+      "PKSHA",
+      "KARAKURI",
+      "OfficeBot",
+      "Helpfeel",
+      "Stockmark",
+      "ELYZA"
+    ]
+  },
+  "recommended_first_segment": "manufacturing internal technical-knowledge / manuals / procedure QA, on-prem single-department pilot",
+  "recommended_poc_price_range": {
+    "first_year_license": "¥3M-¥12M/year",
+    "label": "our_proposed_pricing",
+    "note": "anchored to quote-based JP enterprise RAG norms; not competitor-verified",
+    "poc_3_months": "¥1.5M-¥5M"
+  },
+  "report": "japan_rag_competitor_price_web_research",
+  "research_date": "2026-06-13",
+  "sources": [
+    "https://japan-ai.co.jp/chat/",
+    "https://boxil.jp/service/50441/",
+    "https://exawizards.com/exabase/gpt/",
+    "https://exawizards.com/archives/25896/",
+    "https://exawizards.com/archives/31092/",
+    "https://www.allganize.ai/ja/alli-llm-ops",
+    "https://www.allganize.ai/ja/alli-gpt",
+    "https://blog-ja.allganize.ai/tag/use_case/",
+    "https://aisaas.pkshatech.com/ai-helpdesk/",
+    "https://aisaas.pkshatech.com/chatbot/",
+    "https://boxil.jp/service/9194/",
+    "https://karakuri.ai/",
+    "https://karakuri.ai/case/",
+    "https://prtimes.jp/main/html/rd/p/000000101.000025663.html",
+    "https://chatsense.jp/",
+    "https://prtimes.jp/main/html/rd/p/000000208.000073671.html",
+    "https://www.nikkei.com/compass/content/PRTKDB000000117_000073671/preview",
+    "https://officebot.jp/function/",
+    "https://officebot.jp/interview/miyazakidenshikiki/",
+    "https://boxil.jp/service/6943/",
+    "https://saas.imitsu.jp/cate-faq-system/service/2264",
+    "https://biz.techvan.co.jp/tech-microsoft/blog/contents/azure_openai_service_price.html",
+    "https://aws.amazon.com/bedrock/pricing/",
+    "https://faun.pub/aws-bedrock-knowledge-base-minimum-cost-beware-f2a2dac383d0",
+    "https://cloud.google.com/generative-ai-app-builder/pricing",
+    "https://dify.ai/jp/pricing",
+    "https://www.sateraito.jp/Dify/index.html",
+    "https://stockmark.co.jp/news/20240625",
+    "https://www.nikkei.com/article/DGXZQOUC2879U0Y5A520C2000000/",
+    "https://note.com/elyza/n/n7cd59e020596",
+    "https://exawizards.com/column/article/ai/generative-ai-for-business/"
+  ],
+  "top_10_opportunities": [
+    {
+      "annual": "¥3M-¥12M",
+      "function": "technical/quality/IT",
+      "industry": "manufacturing",
+      "poc": "¥1.5M-¥5M",
+      "rank": 1,
+      "security": "high",
+      "users": "500-5000",
+      "win_probability": "high"
+    },
+    {
+      "annual": "¥3M-¥9M",
+      "function": "shop-floor/safety",
+      "industry": "manufacturing",
+      "poc": "¥1.5M-¥4M",
+      "rank": 2,
+      "security": "high",
+      "users": "300-3000",
+      "win_probability": "high"
+    },
+    {
+      "annual": "¥2M-¥6M",
+      "function": "dev/SRE knowledge",
+      "industry": "IT/SaaS",
+      "poc": "¥1M-¥3M",
+      "rank": 3,
+      "security": "medium",
+      "users": "100-1000",
+      "win_probability": "high"
+    },
+    {
+      "annual": "¥2M-¥8M",
+      "function": "IT helpdesk",
+      "industry": "all",
+      "poc": "¥1M-¥3M",
+      "rank": 4,
+      "security": "medium",
+      "users": "300-5000",
+      "win_probability": "medium-high"
+    },
+    {
+      "annual": "¥2M-¥8M",
+      "function": "sales enablement",
+      "industry": "BtoB mfg/IT",
+      "poc": "¥1M-¥4M",
+      "rank": 5,
+      "security": "medium",
+      "users": "200-2000",
+      "win_probability": "medium"
+    },
+    {
+      "annual": "¥3M-¥9M",
+      "function": "field/safety",
+      "industry": "construction/logistics",
+      "poc": "¥1.5M-¥4M",
+      "rank": 6,
+      "security": "medium-high",
+      "users": "300-3000",
+      "win_probability": "medium"
+    },
+    {
+      "annual": "¥3M-¥10M",
+      "function": "hospital admin/safety",
+      "industry": "healthcare",
+      "poc": "¥2M-¥5M",
+      "rank": 7,
+      "security": "high",
+      "users": "500-3000",
+      "win_probability": "medium"
+    },
+    {
+      "annual": "¥6M-¥30M",
+      "function": "compliance/ops",
+      "industry": "finance/insurance",
+      "poc": "¥3M-¥8M",
+      "rank": 8,
+      "security": "very_high",
+      "users": "1000-10000",
+      "win_probability": "low-medium"
+    },
+    {
+      "annual": "tender",
+      "function": "internal admin",
+      "industry": "public sector",
+      "poc": "¥2M-¥6M",
+      "rank": 9,
+      "security": "high",
+      "users": "500-5000",
+      "win_probability": "low-medium"
+    },
+    {
+      "annual": "¥3M-¥9M",
+      "function": "legal dept",
+      "industry": "legal/IP",
+      "poc": "¥1.5M-¥4M",
+      "rank": 10,
+      "security": "high",
+      "users": "50-500",
+      "win_probability": "low-medium"
+    }
+  ],
+  "unsupported_claims": [
+    "any specific competitor enterprise price as fact",
+    "any market-share percentage",
+    "enterprise/general-production readiness, multi-tenant SaaS, HA/scale, SSO, wired monitoring",
+    "manufacturing accuracy/latency at production scale",
+    "superiority over a named competitor (no benchmark run)"
+  ],
+  "web_access_available": true
+}
