@@ -12,6 +12,25 @@ Generated alongside the regenerated static readiness report at
 of writing: **`needs_review`** — critical static safety checks pass; open
 items are review/deployment-configuration warnings, not code blockers).
 
+## Blocker cleanup (Prompt026)
+
+- The known pre-beta test blocker
+  (`tests/test_embedding_fingerprint.py::test_ingest_stamps_collection_fingerprint`,
+  `KeyError: 'hnsw:space'`) is **closed**: the fingerprint-stamping path
+  already strips immutable `hnsw:*` keys before `collection.modify()`; the
+  test's fake collection was corrected to model real Chroma (merge + preserve
+  the immutable `hnsw` config) instead of replacing metadata. No production or
+  default vectorstore is mutated.
+- The operational launch workflow is now packaged:
+  - `docs/reports/limited_beta_launch_checklist.md`
+  - `docs/reports/limited_beta_rollback_runbook.md`
+  - `docs/reports/pilot_tenant_onboarding_runbook.md`
+  - `scripts/limited_beta_preflight.sh` (safe-by-default repo-local preflight)
+
+These close the launch-readiness packaging gap but **do not** weaken any
+condition below; the recommendation remains GO **with conditions** for a
+limited beta only.
+
 ## Batch outcomes (B1–B6)
 
 | Batch | Scope | Status | Evidence |
@@ -104,5 +123,8 @@ serving, or any deployment that cannot meet the conditions above.
 Promote beyond limited beta only after: `/chat` tenant runtime wiring and
 durable persistence land (blockers 1–2), a recorded rerank promotion
 decision (3), an automated post-deploy smoke (6), and an automated rollback
-path (5). Re-run `eval/production_readiness_report.py` and update this
+path (5). Before the first pilot caller, work through
+`docs/reports/limited_beta_launch_checklist.md` and run
+`scripts/limited_beta_preflight.sh` (exit 0). Re-run
+`eval/production_readiness_report.py` and update this
 document at that point.
