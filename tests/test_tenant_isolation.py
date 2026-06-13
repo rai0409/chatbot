@@ -16,6 +16,19 @@ def _write_corpus(path, rows):
     )
 
 
+def _flatten_where(where):
+    # Accepts either a flat where dict or the Chroma-safe {"$and": [...]} form
+    # and returns a flat {key: value} mapping for assertions.
+    if not where:
+        return {}
+    if "$and" in where:
+        flat = {}
+        for clause in where["$and"]:
+            flat.update(clause)
+        return flat
+    return dict(where)
+
+
 def _setup_corpus(monkeypatch, tmp_path):
     corpus = tmp_path / "chunks.jsonl"
     _write_corpus(
@@ -78,11 +91,18 @@ def test_vector_tenant_filtering(monkeypatch):
 
     default_hits = retrieval.vector_retrieve("共通の説明", None, top_k=10)
     assert {h.metadata["id"] for h in default_hits} == {"legacy-1", "default-1"}
-    assert "tenant_id" not in fake.where_clauses[0]
+    # Default tenant adds no tenant_id clause (single-condition where is emitted
+    # as-is; isolation for the default tenant relies on the post-query filter).
+    assert "tenant_id" not in _flatten_where(fake.where_clauses[0])
 
     tenant_b_hits = retrieval.vector_retrieve("共通の説明", None, top_k=10, tenant_id="tenant_b")
     assert {h.metadata["id"] for h in tenant_b_hits} == {"tenant-b-1"}
-    assert fake.where_clauses[1]["tenant_id"] == "tenant_b"
+    # Multi-condition where (searchable + tenant_id) must reach Chroma in the
+    # Chroma-safe $and form, with the tenant_id clause preserved.
+    clause = fake.where_clauses[1]
+    assert "$and" in clause
+    flat = _flatten_where(clause)
+    assert flat["tenant_id"] == "tenant_b"
 
 
 def test_parent_expansion_does_not_cross_tenants(monkeypatch, tmp_path):

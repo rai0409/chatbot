@@ -111,6 +111,23 @@ def _build_base_where(allowed_types=None, allowed_qualities=None, tenant_id: str
     return where
 
 
+def _to_chroma_where(where: Optional[Dict]) -> Optional[Dict]:
+    # Chroma's where validator accepts exactly one top-level operator, so a flat
+    # multi-condition dict (e.g. {"searchable": 1, "tenant_id": "t"}) is invalid
+    # and must be expressed as a single $and over one-key clauses. This converter
+    # is applied only at the Chroma boundary (collection.query / collection.get);
+    # the flat form returned by _build_base_where is preserved for the in-memory
+    # _meta_matches_where filter and the keyword path. Conditions are not added
+    # or removed, so tenant isolation and searchable filtering are unchanged.
+    if not where:
+        return None
+    items = list(where.items())
+    if len(items) == 1:
+        key, value = items[0]
+        return {key: value}
+    return {"$and": [{key: value} for key, value in items]}
+
+
 def _meta_matches_where(meta: Dict, where: Dict) -> bool:
     if not where:
         return True
@@ -321,7 +338,9 @@ def vector_retrieve(
     embedding = _resolve_query_embedding(question, client, query_embedding)
     oversample = max(1, int(getattr(config, "CHILD_RETRIEVAL_OVERSAMPLE", 2)))
     n_results = max(top_k, top_k * oversample)
-    res = collection.query(query_embeddings=[embedding], n_results=n_results, where=where)
+    res = collection.query(
+        query_embeddings=[embedding], n_results=n_results, where=_to_chroma_where(where)
+    )
     docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
     dists = res.get("distances", [[]])[0]
@@ -627,7 +646,9 @@ def add_neighbor_chunks(
             if delta == 0:
                 continue
             try:
-                res = collection.get(where={"doc_id": doc_id, "chunk_index": idx + delta})
+                res = collection.get(
+                    where=_to_chroma_where({"doc_id": doc_id, "chunk_index": idx + delta})
+                )
                 for text, meta in zip(res.get("documents", []), res.get("metadatas", [])):
                     m = dict(meta or {})
                     if not _tenant_matches(m, tenant_id):
