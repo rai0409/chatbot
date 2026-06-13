@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex,nofollow" />
+<title>蔵伝 / KuraDen — 文書取込（ドライラン）</title>
+<style>
+  body { font-family: system-ui, "Noto Sans JP", Meiryo, sans-serif; color: #1f2933;
+         background: #f3f5f8; margin: 0; padding: 24px; }
+  .card { max-width: 820px; margin: 0 auto; background: #fff; border: 1px solid #e2e7ee;
+          border-radius: 10px; padding: 18px 20px; }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  p.note { color: #6b7684; font-size: 13px; margin-top: 0; }
+  label { display: block; font-size: 12px; color: #6b7684; margin: 12px 0 4px; }
+  input, textarea { width: 100%; padding: 8px; border: 1px solid #e2e7ee; border-radius: 6px; font-size: 14px; }
+  textarea { min-height: 90px; resize: vertical; }
+  button { margin-top: 14px; padding: 9px 16px; border: 0; background: #0b6b5b; color: #fff;
+           border-radius: 8px; font-size: 14px; cursor: pointer; }
+  pre { background: #0f1f1c; color: #d7e7e2; padding: 12px; border-radius: 8px; overflow: auto;
+        font-size: 12px; margin-top: 14px; }
+  .jobs { margin-top: 18px; font-size: 13px; }
+  .jobs h2 { font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>文書取込（ドライラン検証）</h1>
+  <p class="note">登録予定の正規化チャンク JSONL を検証します（重複ID・テナント不一致・衝突）。
+    これは<strong>ドライランのみ</strong>で、ベクトルストアは一切変更しません。
+    本番/既定コレクションは拒否されます。合成・サニタイズ済みデータのみを使用してください。</p>
+
+  <label for="inputs">入力 JSONL パス（1行に1ファイル）</label>
+  <textarea id="inputs" placeholder="eval/cases/manufacturing_pilot/manufacturing_chunks.jsonl"></textarea>
+
+  <label for="tenant">想定テナントID（任意）</label>
+  <input id="tenant" type="text" placeholder="pilot_tenant_a" />
+
+  <label for="collection">対象コレクション（任意・非本番のみ）</label>
+  <input id="collection" type="text" placeholder="pilot_collection_v1" />
+
+  <button id="run" type="button">ドライラン検証を実行</button>
+
+  <pre id="result" hidden></pre>
+
+  <div class="jobs">
+    <h2>ジョブ履歴</h2>
+    <pre id="jobs" hidden></pre>
+  </div>
+</div>
+
+<script>
+"use strict";
+(function () {
+  function adminToken() {
+    // The admin console is reached after the operator authenticates; this page
+    // does not store any secret. Token (if required) is read from the field the
+    // operator may add to the URL hash by their gateway; never hardcoded.
+    return "";
+  }
+  function headers() {
+    var h = { "Content-Type": "application/json" };
+    var t = adminToken();
+    if (t) h["X-Admin-Token"] = t;
+    return h;
+  }
+  function show(el, obj) { el.hidden = false; el.textContent = JSON.stringify(obj, null, 2); }
+
+  document.getElementById("run").addEventListener("click", function () {
+    var inputs = (document.getElementById("inputs").value || "")
+      .split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
+    var body = {
+      inputs: inputs,
+      expected_tenant: (document.getElementById("tenant").value || "").trim() || null,
+      collection: (document.getElementById("collection").value || "").trim() || null
+    };
+    fetch("/admin/ingestion/dry-run", { method: "POST", headers: headers(), body: JSON.stringify(body) })
+      .then(function (r) { return r.json(); })
+      .then(function (res) { show(document.getElementById("result"), res); refreshJobs(); })
+      .catch(function () { show(document.getElementById("result"), { error: "request failed" }); });
+  });
+
+  function refreshJobs() {
+    fetch("/admin/ingestion/jobs", { headers: headers() })
+      .then(function (r) { return r.ok ? r.json() : { jobs: [] }; })
+      .then(function (res) { show(document.getElementById("jobs"), res.jobs || []); })
+      .catch(function () {});
+  }
+  refreshJobs();
+})();
+</script>
+</body>
+</html>
