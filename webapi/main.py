@@ -53,6 +53,7 @@ from rag_core.tenant_profile import resolve_tenant_product_profile
 from rag_core.utils import ensure_openai_client
 from webapi import branding
 from webapi import conversation_store
+from webapi import ingestion_jobs
 from webapi import metrics_registry
 from webapi.admin_auth import admin_auth_enabled, require_admin_auth
 from webapi.api_auth import (
@@ -1026,6 +1027,55 @@ def admin_review_action(req: ReviewActionRequest, _admin_auth: None = Depends(re
     if not stored:
         response["warning"] = "review_action_logging_failed"
     return response
+
+
+# --- Document ingestion UI + job status (admin-gated; dry-run, non-prod) ----
+
+
+class IngestionDryRunRequest(BaseModel):
+    inputs: List[str]
+    expected_tenant: Optional[str] = None
+    collection: Optional[str] = None
+
+
+@app.get("/admin/ingestion", response_class=HTMLResponse)
+def ingestion_page(_admin_auth: None = Depends(require_admin_auth)):
+    path = _STATIC_DIR / "ingestion.html"
+    try:
+        return HTMLResponse(path.read_text(encoding="utf-8"))
+    except Exception:
+        logging.exception("ingestion page unavailable")
+        raise HTTPException(status_code=500, detail="ingestion page unavailable")
+
+
+@app.post("/admin/ingestion/dry-run")
+def ingestion_dry_run(req: IngestionDryRunRequest, _admin_auth: None = Depends(require_admin_auth)):
+    inputs = [str(p) for p in (req.inputs or []) if str(p).strip()]
+    if not inputs:
+        raise HTTPException(status_code=400, detail="inputs is required")
+    # Refuse the production/default collection outright (never mutated anyway;
+    # this is a dry-run validation only).
+    if req.collection is not None and ingestion_jobs.is_production_collection(req.collection):
+        raise HTTPException(status_code=400, detail="refusing production/default collection")
+    try:
+        return ingestion_jobs.run_dry_run(
+            inputs, expected_tenant=req.expected_tenant, collection=req.collection
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/admin/ingestion/jobs")
+def ingestion_jobs_list(_admin_auth: None = Depends(require_admin_auth)):
+    return {"jobs": ingestion_jobs.list_jobs()}
+
+
+@app.get("/admin/ingestion/jobs/{job_id}")
+def ingestion_job_status(job_id: str, _admin_auth: None = Depends(require_admin_auth)):
+    job = ingestion_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return job
 
 
 _CHAT_SAFE_PROFILE = "production_safe"
