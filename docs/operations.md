@@ -151,6 +151,52 @@ Notes:
   `docs/security_operations.md`) on exposed deployments; proxy-level rate
   limiting remains useful as defense in depth
 
+## Enterprise auth bridge (optional, default off)
+
+A default-off bridge lets a customer-controlled **SSO/IdP gateway** (SAML,
+OIDC, LDAP/AD, Okta, Azure AD — all **outside** this app) authenticate the user
+and forward trusted identity headers. This app only verifies a shared trust
+signal and maps the identity onto the existing tenant authorization; it is the
+integration boundary, not an IdP.
+
+Enable with:
+
+```bash
+ENTERPRISE_AUTH_ENABLED=true
+ENTERPRISE_AUTH_TRUST_TOKEN=<shared secret only the proxy knows>
+ENTERPRISE_AUTH_TENANT_MAP=entTenantA=tenant_a,grpX=tenant_b|tenant_c
+```
+
+The trusted proxy must (a) authenticate the user against the real IdP, (b)
+**strip any client-supplied** `X-Enterprise-*` headers, then (c) inject:
+
+- `X-Enterprise-Auth-Trust: <ENTERPRISE_AUTH_TRUST_TOKEN>` (required)
+- `X-Enterprise-Tenant: <enterprise identity/tenant/group>` (mapped to allowed tenants)
+- `X-Enterprise-User` / `X-Enterprise-Email` / `X-Enterprise-Groups` (optional; only a sha256 fingerprint is retained)
+
+nginx sketch (the proxy sets the trust token from its own secret, never from
+the client):
+
+```nginx
+proxy_set_header X-Enterprise-Auth-Trust "REPLACE_WITH_PROXY_SECRET";
+proxy_set_header X-Enterprise-Tenant     $sso_tenant;   # from the IdP assertion
+# and clear inbound spoofing:
+proxy_set_header X-Enterprise-User       $sso_user;
+```
+
+Behavior:
+
+- **Disabled (default):** `X-Enterprise-*` headers are never read; the API key
+  path is exactly unchanged.
+- **Enabled:** enterprise headers are honored only with a matching trust token;
+  a missing trust token fails 401, an invalid one 403, an unmapped identity 403.
+  The mapped identity sets `allowed_tenants`; the request `tenant_id` is still
+  checked against it (cross-tenant access is rejected, never broadened). The API
+  key path keeps working for requests without enterprise headers. No trust
+  token, API key, raw identity, prompt, or document text is logged or returned
+  (only a fingerprint and stable enum counters such as `api_enterprise_auth_total`
+  / `api_auth_rejection_total`). See `webapi/enterprise_auth.py`.
+
 ## Log retention (runs/audit/)
 
 What the audit JSONL contains: request/trace ids, tenant id, question text,
