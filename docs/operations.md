@@ -110,8 +110,9 @@ Notes:
   the proxy is transport security, not authentication
 - `/search/debug` should stay disabled (`SEARCH_DEBUG_ENABLED=false`) on any
   exposed deployment
-- rate limiting at the proxy is a stopgap until the application-level
-  limiter ships (separate security-ops batch)
+- enable the application-level limiter (`RATE_LIMIT_ENABLED=true`, see
+  `docs/security_operations.md`) on exposed deployments; proxy-level rate
+  limiting remains useful as defense in depth
 
 ## Log retention (runs/audit/)
 
