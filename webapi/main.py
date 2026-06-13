@@ -1649,6 +1649,10 @@ def chat_feedback(req: ProductFeedbackRequest, api_auth: ApiAuthContext = Depend
     if feedback_type not in _ALLOWED_FEEDBACK_TYPES:
         raise HTTPException(status_code=400, detail="invalid feedback_type")
 
+    # Observability only: feedback_type is a stable enum label (good / bad /
+    # neutral / human_review_requested); never a raw key, query, or document.
+    metrics_registry.increment("chat_feedback_total", feedback_type)
+
     event = _feedback_audit_event(
         req,
         feedback_token=feedback_token,

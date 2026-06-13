@@ -230,3 +230,29 @@ Notes:
   alert on it from the proxy or an external monitor (it is never rate limited)
 - denominators (chat request counts) come from `app_requests_total` and the
   `chat_answer_mode_total` buckets; compute rates in the scraper
+
+### Local alert checker (no external monitor required)
+
+For a limited on-prem/private pilot you can evaluate these thresholds locally,
+without Prometheus/Grafana/cloud, against a saved `/metrics` JSON snapshot:
+
+```bash
+# evaluate a snapshot (exit 0 OK / 1 WARN / 2 CRITICAL)
+curl -s http://127.0.0.1:8000/metrics > snap.json
+python scripts/alert_check.py snap.json
+# or stream it
+curl -s http://127.0.0.1:8000/metrics | python scripts/alert_check.py -   --json
+```
+
+- The thresholds live in `webapi/alerting.py` (`DEFAULT_THRESHOLDS`) and mirror
+  the table above; override per deployment by editing that dict or passing your
+  own to `evaluate_alerts(payload, thresholds=...)`.
+- Signals evaluated: chat **error rate**, **fallback (abstain/no-answer) rate**,
+  **guard-trip rate**, **zero-success on a non-empty window** (CRITICAL),
+  **429** and **auth-rejection** counts, and — when present —
+  **feedback human-review rate** (`chat_feedback_total`) and an optional
+  **p95 latency** field. Rate signals report OK below `min_requests_for_rate`
+  to avoid alerting on tiny windows.
+- The checker reads only metric names (stable enum labels) and integer counts:
+  no API keys, prompts, document text, or `.env` values. It makes no network
+  call and is per-process (same caveat as `/metrics`).
