@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -51,11 +51,13 @@ from rag_core.review_actions import (
 from rag_core.source_metadata import normalize_citation
 from rag_core.tenant_profile import resolve_tenant_product_profile
 from rag_core.utils import ensure_openai_client
+from webapi import branding
 from webapi import conversation_store
 from webapi import metrics_registry
-from webapi.admin_auth import require_admin_auth
+from webapi.admin_auth import admin_auth_enabled, require_admin_auth
 from webapi.api_auth import (
     ApiAuthContext,
+    api_auth_enabled,
     enforce_tenant_authorization,
     require_search_debug_access,
 )
@@ -944,6 +946,25 @@ def chat_ui_page():
     except Exception:
         logging.exception("chat ui page unavailable")
         raise HTTPException(status_code=500, detail="chat ui page unavailable")
+
+
+@app.get("/branding")
+def branding_endpoint():
+    # Safe, secret-free display config for the workspace (logo text, product
+    # name, subtitle, theme color). No API keys, tokens, or tenant data.
+    return branding.branding_config()
+
+
+@app.get("/ui/context")
+def ui_context(request: Request):
+    # Backend-authoritative UI context. Role is used by the UI only to show/hide
+    # panels; privileged routes (/admin/review*) are independently enforced by
+    # require_admin_auth. No secrets / raw keys are returned.
+    return {
+        "role": branding.resolve_role(request.headers),
+        "admin_auth_enabled": admin_auth_enabled(),
+        "api_auth_enabled": api_auth_enabled(),
+    }
 
 
 @app.get("/admin/review", response_class=HTMLResponse)
