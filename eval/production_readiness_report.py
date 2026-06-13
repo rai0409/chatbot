@@ -26,6 +26,9 @@ DEFAULT_OUTPUT_DIR = ROOT / "artifacts" / "readiness"
 
 KEY_FILES = {
     "admin_auth": ROOT / "webapi" / "admin_auth.py",
+    "api_auth": ROOT / "webapi" / "api_auth.py",
+    "rate_limit": ROOT / "webapi" / "rate_limit.py",
+    "security_operations_doc": ROOT / "docs" / "security_operations.md",
     "webapi_main": ROOT / "webapi" / "main.py",
     "smoke_script": ROOT / "scripts" / "product_readiness_smoke.sh",
     "checklist": ROOT / "docs" / "production_readiness_checklist.md",
@@ -59,6 +62,7 @@ RECOMMENDED_NEXT_STEPS = [
     "generate/review knowledge manifest",
     "review tenant mapping",
     "enable ADMIN_AUTH_ENABLED=true with ADMIN_AUTH_TOKEN in production",
+    "enable API_AUTH_ENABLED=true and RATE_LIMIT_ENABLED=true before external exposure (see docs/security_operations.md)",
     "keep similar auto-answer disabled",
     "run limited pilot via /chat/product-preview before /chat runtime wiring",
 ]
@@ -70,6 +74,7 @@ def build_report(root: Path = ROOT) -> dict[str, Any]:
     product_profiles = _product_profiles_summary(root)
     tenant_profiles = _tenant_profiles_summary(root)
     admin_auth = _admin_auth_summary(root, paths)
+    security_operations = _security_operations_summary(paths)
     knowledge_manifest = _knowledge_manifest_summary(paths)
     citation_metadata = _citation_metadata_summary(paths)
     rerank_promotion = _rerank_promotion_summary(paths)
@@ -79,6 +84,7 @@ def build_report(root: Path = ROOT) -> dict[str, Any]:
         product_profiles=product_profiles,
         tenant_profiles=tenant_profiles,
         admin_auth=admin_auth,
+        security_operations=security_operations,
         knowledge_manifest=knowledge_manifest,
         citation_metadata=citation_metadata,
         rerank_promotion=rerank_promotion,
@@ -100,6 +106,7 @@ def build_report(root: Path = ROOT) -> dict[str, Any]:
         "product_profiles": product_profiles,
         "tenant_profiles": tenant_profiles,
         "admin_auth": admin_auth,
+        "security_operations": security_operations,
         "knowledge_manifest": knowledge_manifest,
         "citation_metadata": citation_metadata,
         "rerank_promotion": rerank_promotion,
@@ -124,6 +131,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     product_profiles = report.get("product_profiles", {})
     tenant_profiles = report.get("tenant_profiles", {})
     admin = report.get("admin_auth", {})
+    security_ops = report.get("security_operations", {})
     knowledge = report.get("knowledge_manifest", {})
     citation = report.get("citation_metadata", {})
     rerank = report.get("rerank_promotion", {})
@@ -173,6 +181,18 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.append(f"Env vars: `{admin.get('env_vars')}`")
     lines.append(f"Default mode: `{admin.get('default_mode')}`")
     lines.append(f"Production guidance: {admin.get('production_guidance')}")
+
+    lines.extend(["", "## Security Operations"])
+    lines.append(f"API auth helper present: `{security_ops.get('api_auth_helper_present')}`")
+    lines.append(f"Protected POST routes detected: `{security_ops.get('protected_post_routes_detected')}`")
+    lines.append(f"API-key tenant authorization present: `{security_ops.get('tenant_authorization_present')}`")
+    lines.append(
+        f"Rate limiter present: `{security_ops.get('rate_limit_helper_present')}` "
+        f"(default off: `{security_ops.get('rate_limit_default_off')}`)"
+    )
+    lines.append(f"Security operations runbook present: `{security_ops.get('security_operations_doc_present')}`")
+    lines.append(f"Env vars: `{security_ops.get('env_vars')}`")
+    lines.append(f"Production guidance: {security_ops.get('production_guidance')}")
 
     lines.extend(["", "## Knowledge And Citation Metadata"])
     lines.append(
@@ -331,6 +351,42 @@ def _admin_auth_summary(root: Path, paths: dict[str, Path]) -> dict[str, Any]:
     }
 
 
+def _security_operations_summary(paths: dict[str, Path]) -> dict[str, Any]:
+    main_text = _read_text(paths["webapi_main"])
+    api_auth_text = _read_text(paths["api_auth"])
+    rate_limit_text = _read_text(paths["rate_limit"])
+    # Protected POST endpoints share one dependency that enforces API auth and
+    # (default-off) rate limiting; counting it covers both guards at once.
+    protected_routes = main_text.count("Depends(require_api_auth_rate_limited)")
+    tenant_authorization_present = (
+        "API_AUTH_TENANT_MAP" in api_auth_text and "_parse_tenant_map" in api_auth_text
+    )
+    rate_limit_default_off = (
+        "RATE_LIMIT_ENABLED" in rate_limit_text and "rate_limit_enabled" in rate_limit_text
+    )
+    return {
+        "api_auth_helper_present": paths["api_auth"].exists(),
+        "protected_post_routes_detected": protected_routes,
+        "tenant_authorization_present": tenant_authorization_present,
+        "rate_limit_helper_present": paths["rate_limit"].exists(),
+        "rate_limit_default_off": rate_limit_default_off,
+        "security_operations_doc_present": paths["security_operations_doc"].exists(),
+        "env_vars": [
+            "API_AUTH_ENABLED",
+            "API_AUTH_KEYS",
+            "API_AUTH_TENANT_MAP",
+            "RATE_LIMIT_ENABLED",
+            "RATE_LIMIT_REQUESTS_PER_MINUTE",
+        ],
+        "production_guidance": (
+            "Set API_AUTH_ENABLED=true with non-empty API_AUTH_KEYS, configure "
+            "API_AUTH_TENANT_MAP for multi-tenant deployments, and enable "
+            "RATE_LIMIT_ENABLED=true before external exposure. See "
+            "docs/security_operations.md for rotation and secrets handling."
+        ),
+    }
+
+
 def _knowledge_manifest_summary(paths: dict[str, Path]) -> dict[str, Any]:
     warnings: list[str] = []
     generated_present = paths["generated_manifest"].exists()
@@ -389,6 +445,7 @@ def _safety_checks(
     product_profiles: dict[str, Any],
     tenant_profiles: dict[str, Any],
     admin_auth: dict[str, Any],
+    security_operations: dict[str, Any],
     knowledge_manifest: dict[str, Any],
     citation_metadata: dict[str, Any],
     rerank_promotion: dict[str, Any],
@@ -412,6 +469,17 @@ def _safety_checks(
         "knowledge_manifest_helper_present": bool(knowledge_manifest.get("helper_present")),
         "citation_source_metadata_helper_present": bool(citation_metadata.get("source_metadata_helper_present")),
         "feature_rerank_promotion_gate_present": bool(rerank_promotion.get("gate_present")),
+        "api_auth_guard_present": bool(
+            security_operations.get("api_auth_helper_present")
+            and security_operations.get("protected_post_routes_detected", 0) >= 1
+        ),
+        "api_key_tenant_authorization_present": bool(security_operations.get("tenant_authorization_present")),
+        "rate_limit_guard_present": bool(
+            security_operations.get("rate_limit_helper_present")
+            and security_operations.get("rate_limit_default_off")
+            and security_operations.get("protected_post_routes_detected", 0) >= 1
+        ),
+        "security_operations_doc_present": bool(security_operations.get("security_operations_doc_present")),
     }
 
 
@@ -448,6 +516,10 @@ def _readiness_decision(
         "approved_similar_candidate_only_present",
         "knowledge_manifest_helper_present",
         "citation_source_metadata_helper_present",
+        "api_auth_guard_present",
+        "api_key_tenant_authorization_present",
+        "rate_limit_guard_present",
+        "security_operations_doc_present",
     ):
         if not safety_checks.get(key):
             critical.append(key)

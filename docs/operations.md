@@ -130,3 +130,66 @@ Policy guidance (set per deployment contract):
   confidentiality as the source documents; include them in tenant
   offboarding deletion
 - backups include `runs/audit/` — retention applies to archives too
+
+## Metrics export
+
+`GET /metrics` serves the in-process counters in two formats:
+
+```bash
+# JSON (default) — uptime, request totals, and a counters object
+curl -s http://127.0.0.1:8000/metrics
+
+# Prometheus text exposition (version 0.0.4) for a scraper
+curl -s 'http://127.0.0.1:8000/metrics?format=prometheus'
+```
+
+The Prometheus output is generated from the same counters; no extra
+dependency or collector process is involved. Counter labels are stable
+enum-like values only (answer modes, guard reasons, error types, auth
+rejection reasons, rate-limit bucket) — never API keys, key fingerprints,
+or query text.
+
+**Per-process caveat (important for alerting):** counters are per-process.
+With N uvicorn workers each worker exposes only its own numbers, and a
+scrape hits one worker. Aggregate across workers/instances in the scraper
+(e.g. `sum without (instance)`), and size rate-based thresholds with the
+worker count in mind. This is the same caveat as the JSON counters and the
+rate limiter.
+
+Counters of interest (all `_total`):
+
+| Counter | Labels | Meaning |
+| --- | --- | --- |
+| `app_requests_total` | — | requests handled by this process |
+| `app_error_requests_total` | — | errored requests in this process |
+| `chat_answer_mode_total` | answer mode | grounded / fallback / approved_exact_match / candidate_only |
+| `chat_guard_reason_total` | guard reason | confidence-guard trips by reason |
+| `chat_used_fallback_total` | — | answers that fell back to no-answer/extractive |
+| `chat_provider_error_total` | error type | LLM provider errors (rate_limited, timeout, …) |
+| `chat_cache_hit_total` | — | answer-cache hits |
+| `api_rate_limited_total` | `authenticated`/`anonymous` | requests rejected with 429 by the limiter |
+| `api_auth_rejection_total` | `missing_credentials`/`invalid_credentials`/`tenant_forbidden` | requests rejected with 401/403 by API auth |
+
+## Alert thresholds
+
+Starting points only — **tune per deployment** against an observed baseline,
+and remember the per-process caveat above. Rates are over a rolling window
+(suggest 5–15 min) unless noted.
+
+| Signal | Metric / source | Starting threshold | Rationale |
+| --- | --- | --- | --- |
+| Provider error rate | `chat_provider_error_total` ÷ chat requests | warn >2%, page >10% over 5 min | sustained LLM-provider failures degrade answers; spikes mean an outage or quota exhaustion |
+| Fallback rate | `chat_used_fallback_total` ÷ chat requests | warn >30%, page >60% over 15 min | high no-answer/extractive fallback means retrieval or corpus coverage regressed |
+| Guard-trip rate | `chat_guard_reason_total` (sum) ÷ chat requests | warn >40% over 15 min | the confidence guard abstaining often signals a query/corpus mismatch or a mis-calibrated threshold |
+| 429 rate | `api_rate_limited_total` | warn >0 sustained, page on sharp climb | persistent 429s mean a client exceeds its budget or an abusive caller — investigate before raising limits |
+| Auth-rejection rate | `api_auth_rejection_total` | warn on `invalid_credentials` spikes; page on sustained bursts | a burst of `invalid_credentials`/`tenant_forbidden` suggests a misconfigured client or credential probing |
+| `/health` failures | `GET /health` non-200 from the uptime check | page on 2 consecutive failures | the liveness/readiness signal; back it with the reverse-proxy or external monitor, not `/metrics` |
+
+Notes:
+
+- thresholds are starting points to calibrate against your own baseline; the
+  right numbers depend on traffic mix and tenant behavior
+- `/health` is unauthenticated by design and is the canonical liveness probe;
+  alert on it from the proxy or an external monitor (it is never rate limited)
+- denominators (chat request counts) come from `app_requests_total` and the
+  `chat_answer_mode_total` buckets; compute rates in the scraper
