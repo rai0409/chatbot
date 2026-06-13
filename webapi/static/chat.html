@@ -82,6 +82,7 @@
     <nav class="conv-list" id="convList" aria-label="会話履歴">
       <div class="placeholder">会話履歴はこの端末のセッション内のみ表示されます。</div>
     </nav>
+    <a class="new-chat" id="adminLink" href="/admin/review" hidden>管理コンソール</a>
     <div class="sidebar-foot">データは社外に送信されません（オンプレ運用）。</div>
   </aside>
 
@@ -292,8 +293,31 @@
     qEl.focus();
   }
 
+  // Apply safe branding + backend-authoritative role gating (cosmetic only;
+  // privileged routes are enforced server-side regardless of this UI).
+  function applyBranding() {
+    fetch("/branding").then(function (r) { return r.ok ? r.json() : null; }).then(function (b) {
+      if (!b) return;
+      var name = document.getElementById("brandName");
+      var sub = document.getElementById("brandSub");
+      if (b.product_name && name) name.textContent = b.product_name;
+      if (b.subtitle && sub) sub.textContent = b.subtitle;
+      if (b.theme_color) document.documentElement.style.setProperty("--accent", b.theme_color);
+    }).catch(function () {});
+  }
+  function applyRole() {
+    fetch("/ui/context").then(function (r) { return r.ok ? r.json() : null; }).then(function (ctx) {
+      if (ctx && ctx.role === "admin") {
+        var link = document.getElementById("adminLink");
+        if (link) link.hidden = false;
+      }
+    }).catch(function () {});
+  }
+
   sendBtn.addEventListener("click", ask);
   newChatBtn.addEventListener("click", newConversation);
+  applyBranding();
+  applyRole();
   qEl.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ask(); }
   });
