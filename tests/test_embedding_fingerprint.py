@@ -21,8 +21,20 @@ class FakeCollection:
         self.upserts.append({"ids": list(ids), "documents": list(documents)})
 
     def modify(self, metadata=None, name=None):
+        # Mirror chromadb: modify() rejects immutable hnsw:* keys, and the
+        # collection preserves its existing configuration (e.g. hnsw:space)
+        # across metadata updates rather than wiping it. Merge, don't replace,
+        # so stamping the embedding fingerprint never clobbers creation
+        # metadata.
         if metadata is not None:
-            self.metadata = dict(metadata)
+            if any(str(key).startswith("hnsw:") for key in metadata):
+                raise ValueError(
+                    "Changing the distance function of a collection once it is "
+                    "created is not supported currently."
+                )
+            self.metadata.update(metadata)
+        if name is not None:
+            self.name = name
 
 
 def _use_local_test_model(monkeypatch):
