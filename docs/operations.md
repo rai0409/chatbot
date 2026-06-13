@@ -67,6 +67,25 @@ scripts/persistence_isolation_check.sh
   Chroma `PersistentClient` — not a managed, HA, or concurrent-writer
   multi-tenant database. Those remain general-production items.
 
+## End-user chat UI (`GET /chat-ui`)
+
+A minimal browser UI for non-engineer pilot users is served at **`GET /chat-ui`**
+(static page `webapi/static/chat.html`, vanilla HTML/CSS/JS, no build/CDN).
+
+- It **reuses the existing endpoints**: `POST /chat/stream` (SSE) for answers
+  and `POST /chat/feedback` for feedback. It does **not** change answering,
+  the `too_general` guard, tenant authorization/isolation, rate-limiting, or
+  `production_safe` behavior — those stay enforced on the data endpoints.
+- It shows the answer, **citations/sources**, an **abstain/no-answer** notice
+  when the system has no supported answer, and good / bad / human-review
+  feedback controls.
+- **Access uses the existing API key model.** No key is hardcoded in the page;
+  when `API_AUTH_ENABLED=true` the operator enters the pilot key at runtime
+  (kept in browser memory only, sent as `X-Api-Key`). With API auth disabled
+  the page works locally with no key, exactly like `/chat` today.
+- Behind TLS in production (see below); never expose `:8000` directly. Backed
+  by `tests/test_enduser_chat_ui.py`.
+
 ## Reverse proxy / TLS reference
 
 The container serves plain HTTP on `:8000` and must not be exposed directly.
