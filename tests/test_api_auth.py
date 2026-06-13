@@ -147,7 +147,14 @@ def _route(path: str, method: str) -> APIRoute:
 
 
 def _has_dependency(route: APIRoute, func) -> bool:
-    return any(dependency.call is func for dependency in route.dependant.dependencies)
+    # require_api_auth is wired in as a sub-dependency of the rate-limit
+    # wrapper since prompt024, so traverse one level of sub-dependencies.
+    for dependency in route.dependant.dependencies:
+        if dependency.call is func:
+            return True
+        if any(sub.call is func for sub in dependency.dependencies):
+            return True
+    return False
 
 
 def test_public_endpoints_are_guarded_by_api_auth():

@@ -28,6 +28,21 @@ Checklist:
 - [ ] `/health` remains unauthenticated by design; confirm it leaks no sensitive values.
 - [ ] CORS origins are an explicit allowlist; no wildcard with credentials.
 
+## Rate Limiting
+
+Env vars (defaults preserve existing behavior — the limiter is OFF unless enabled):
+
+- `RATE_LIMIT_ENABLED` (default: false) — when true, the API-key-protected POST endpoints (`/chat`, `/chat/stream`, `/chat/product-preview`, `/chat/feedback`, `/search`) enforce an in-process request budget AFTER authentication. Requests over budget receive 429 with a `Retry-After` header and `{"detail": "rate limit exceeded"}`. `/health` and `/metrics` are never rate limited.
+- `RATE_LIMIT_REQUESTS_PER_MINUTE` (default: 60) — fixed-window budget per API key fingerprint (sha256-derived; raw keys never enter limiter state). Requests without a key fingerprint (auth disabled) share one anonymous bucket. With auth enabled, rejected (401/403) requests never consume budget.
+
+Semantics caveat: the limiter is **per-process** (same caveat as the metrics counters). With N uvicorn workers the effective global limit is up to N × `RATE_LIMIT_REQUESTS_PER_MINUTE`. Distributed limiting (e.g. Redis) is an explicit non-goal; size the per-minute budget with the worker count in mind, and keep proxy-level limits as defense in depth.
+
+Checklist:
+
+- [ ] `RATE_LIMIT_ENABLED=true` on any public deployment, with a budget sized for worker count.
+- [ ] 429 responses carry `Retry-After` and never echo API keys.
+- [ ] See `docs/security_operations.md` for key rotation and secrets handling.
+
 ## Observability
 
 - `GET /metrics` returns uptime, request totals, and a `counters` object

@@ -251,8 +251,17 @@ def _route(path: str, method: str) -> APIRoute:
     raise AssertionError(f"route not found: {method} {path}")
 
 
+def _has_api_auth(route: APIRoute) -> bool:
+    # require_api_auth is wired in as a sub-dependency of the rate-limit
+    # wrapper since prompt024, so traverse one level of sub-dependencies.
+    for dep in route.dependant.dependencies:
+        if dep.call is require_api_auth:
+            return True
+        if any(sub.call is require_api_auth for sub in dep.dependencies):
+            return True
+    return False
+
+
 def test_chat_stream_route_has_api_auth_and_chat_unchanged():
-    stream_route = _route("/chat/stream", "POST")
-    assert any(dep.call is require_api_auth for dep in stream_route.dependant.dependencies)
-    chat_route = _route("/chat", "POST")
-    assert any(dep.call is require_api_auth for dep in chat_route.dependant.dependencies)
+    assert _has_api_auth(_route("/chat/stream", "POST"))
+    assert _has_api_auth(_route("/chat", "POST"))

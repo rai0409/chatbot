@@ -56,9 +56,9 @@ from webapi.admin_auth import require_admin_auth
 from webapi.api_auth import (
     ApiAuthContext,
     enforce_tenant_authorization,
-    require_api_auth,
     require_search_debug_access,
 )
+from webapi.rate_limit import require_api_auth_rate_limited
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -986,7 +986,7 @@ def admin_review_action(req: ReviewActionRequest, _admin_auth: None = Depends(re
 
 
 @app.post("/chat")
-def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth)):
+def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited)):
     global _total_requests, _error_requests
     _total_requests += 1
     tenant_id = normalize_tenant_id(req.tenant_id)
@@ -1103,7 +1103,7 @@ def _sse_event(name: str, payload: Dict[str, Any]) -> str:
 
 
 @app.post("/chat/stream")
-def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth)):
+def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited)):
     global _total_requests
     _total_requests += 1
     tenant_id = normalize_tenant_id(req.tenant_id)
@@ -1201,7 +1201,7 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
 
 
 @app.post("/chat/product-preview")
-def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth)):
+def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited)):
     global _total_requests, _error_requests
     _total_requests += 1
     started = time.time()
@@ -1524,7 +1524,7 @@ def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContex
 
 
 @app.post("/chat/feedback")
-def chat_feedback(req: ProductFeedbackRequest, api_auth: ApiAuthContext = Depends(require_api_auth)):
+def chat_feedback(req: ProductFeedbackRequest, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited)):
     enforce_tenant_authorization(api_auth, normalize_tenant_id(req.tenant_id))
     feedback_token = str(req.feedback_token or "").strip()
     feedback_type = str(req.feedback_type or "").strip()
@@ -1551,7 +1551,7 @@ def chat_feedback(req: ProductFeedbackRequest, api_auth: ApiAuthContext = Depend
 
 
 @app.post("/search")
-def search(req: SearchRequest, _api_auth: None = Depends(require_api_auth)):
+def search(req: SearchRequest, _api_auth: None = Depends(require_api_auth_rate_limited)):
     global _total_requests, _error_requests
     _total_requests += 1
     try:
