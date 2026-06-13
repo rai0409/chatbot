@@ -1,0 +1,133 @@
+{
+  "blockers": [
+    {
+      "before_beta": true,
+      "id": "chat_tenant_profile_runtime_wiring",
+      "note": "isolation/authorization wired+tested on /chat; per-tenant profile resolution is preview-only",
+      "risk": "high"
+    },
+    {
+      "before_beta": false,
+      "id": "durable_multi_tenant_persistence",
+      "note": "single-node local chromadb.PersistentClient; metadata-filter isolation",
+      "risk": "high"
+    },
+    {
+      "before_beta": false,
+      "id": "cross_encoder_rerank_promotion_decision",
+      "note": "rerank OFF; no promotion artifact; model not cached",
+      "risk": "medium"
+    },
+    {
+      "before_beta": false,
+      "id": "production_default_vectorstore_handling",
+      "risk": "medium"
+    },
+    {
+      "before_beta": false,
+      "id": "post_deploy_smoke_automation",
+      "risk": "medium"
+    },
+    {
+      "before_beta": false,
+      "id": "automated_rollback_path",
+      "risk": "medium"
+    },
+    {
+      "before_beta": false,
+      "id": "external_secret_store_integration",
+      "risk": "medium"
+    },
+    {
+      "before_beta": false,
+      "id": "distributed_rate_limiting",
+      "risk": "medium"
+    },
+    {
+      "before_beta": true,
+      "id": "operational_ownership",
+      "risk": "medium"
+    },
+    {
+      "before_beta": false,
+      "id": "real_customer_data_onboarding_controls",
+      "risk": "high"
+    },
+    {
+      "before_beta": true,
+      "id": "monitoring_alerting_implementation",
+      "risk": "medium"
+    },
+    {
+      "before_beta": false,
+      "id": "integration_e2e_and_eval_gaps",
+      "risk": "medium"
+    }
+  ],
+  "branch": "eval/real-vector-evidence",
+  "completed_capabilities": [
+    "approved_qa_exact_match",
+    "qa_pair_chunking",
+    "multiformat_ingestion",
+    "dry_run_onboarding_and_import_manifest",
+    "tenant_isolation_and_authorization",
+    "api_auth_and_admin_search_debug",
+    "rate_limiting_in_process",
+    "deploy_smoke",
+    "backup_and_restore",
+    "tls_reverse_proxy_docs",
+    "audit_and_log_retention",
+    "metrics_json_and_prometheus_export",
+    "production_readiness_report",
+    "limited_beta_launch_checklist",
+    "rollback_runbook",
+    "pilot_tenant_onboarding_runbook",
+    "limited_beta_preflight_script",
+    "retrieval_and_citation_quality",
+    "guard_abstain_behavior"
+  ],
+  "current_decision": "GO_with_conditions_limited_beta_only",
+  "general_production_ready": false,
+  "generated_at": "2026-06-13T08:12:08.369629+00:00",
+  "head_commit": "7ad3cde64af862f48be7e5615bcbd401a11d8891",
+  "partial_capabilities": [
+    "real_corpus_and_eval_coverage_modest_synthetic",
+    "alert_thresholds_documented_not_wired",
+    "rate_limiting_per_process_not_distributed",
+    "chat_per_tenant_profile_runtime_wiring_preview_only"
+  ],
+  "readiness_report_blockers": [],
+  "readiness_report_decision": "needs_review",
+  "recommended_next_prompt": {
+    "sequencing": "before durable persistence; lower risk; keeps safe default",
+    "summary": "Add resolve_tenant_product_profile to /chat and /chat/stream gated by a default-false env flag (e.g. CHAT_USE_TENANT_PROFILE); default unknown tenants to production_safe; preserve isolation/authorization, too_general guard, cross-encoder settings, distance thresholds; add tests proving default-off is unchanged, mapped tenant resolves, unknown falls back to production_safe, overrides cannot enable disabled features.",
+    "title": "Wire per-tenant product-profile resolution into /chat behind a default-off flag"
+  },
+  "report": "current_state_after_prompt026_limited_beta_pack",
+  "tags_detected": [
+    "prompt013-security-tenant-authorization",
+    "prompt014-phase5a-cross-encoder-rerank",
+    "prompt015-phase5b-qa-pair-chunks",
+    "prompt016-phase5c-eval-corpus-expansion",
+    "prompt017-phase5d-guard-calibration",
+    "prompt018-multiformat-ingestion-foundation",
+    "prompt021-phase5f-too-general-guard-redesign",
+    "prompt022-multiformat-onboarding",
+    "prompt023-deploy-ops",
+    "prompt024-security-ops",
+    "prompt025-observability-beta-gate",
+    "prompt026-limited-beta-launch-pack"
+  ],
+  "verification_results": {
+    "docker_deploy_smoke": "not run (documented: scripts/limited_beta_preflight.sh --with-docker-smoke; docker present)",
+    "fingerprint_and_calibration": "15 passed",
+    "limited_beta_preflight": "exit 0 (PREFLIGHT OK)",
+    "product_readiness_smoke": "exit 0 (117 passed)",
+    "pytest_collect_only": "700 collected",
+    "pytest_full_suite": "700 passed, 0 failed",
+    "qa_pair_eval": "7/7",
+    "rate_limit_metrics_observability_readiness": "53 passed",
+    "smoke_eval": "21/21",
+    "tenant_isolation_and_authorization": "27 passed"
+  }
+}
