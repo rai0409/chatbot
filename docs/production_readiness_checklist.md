@@ -67,6 +67,29 @@ Checklist:
 - [ ] Production rerank is not enabled by default.
 - [ ] LLM answer and LLM rerank are off unless explicitly enabled by a safe profile and policy.
 
+## Chat Tenant Product Profile
+
+- `CHAT_USE_TENANT_PROFILE` (default: false) — when true, `/chat` and
+  `/chat/stream` resolve the per-tenant product profile at runtime using the
+  already-authenticated tenant context and apply the resolved profile's
+  candidate limit. Default false leaves `/chat` and `/chat/stream` behavior
+  unchanged.
+- Unknown, disabled, rejected, or invalid tenant profiles **fail closed** to
+  the safest profile (`production_safe`); resolution never selects a more
+  permissive profile.
+- Enabling this does **not** replace or weaken API auth, tenant
+  authorization, or tenant isolation — authorization is enforced before any
+  profile-specific runtime behavior.
+- Recommended for limited beta: enable alongside `API_AUTH_TENANT_MAP` so each
+  pilot tenant is served its mapped profile; safe to leave off to serve all
+  tenants with the default pipeline.
+
+Checklist:
+
+- [ ] `CHAT_USE_TENANT_PROFILE` set deliberately per deployment (default off).
+- [ ] With it enabled, `API_AUTH_TENANT_MAP` maps every served tenant.
+- [ ] Unknown/invalid tenants observed to fall back to `production_safe`.
+
 ## Product Profiles
 
 - [ ] `production_safe` disables similar auto-answer.

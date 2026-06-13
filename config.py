@@ -211,6 +211,11 @@ APPROVED_SIMILAR_CANDIDATES_TOP_K = int(getenv_first("APPROVED_SIMILAR_CANDIDATE
 ANSWER_CACHE_ENABLED = _get_bool("ANSWER_CACHE_ENABLED", default=False)
 ANSWER_CACHE_MAX_ENTRIES = int(getenv_first("ANSWER_CACHE_MAX_ENTRIES", default="256"))
 
+# Default OFF. When true, /chat and /chat/stream resolve the per-tenant product
+# profile at runtime (safest-profile fallback) instead of running the unprofiled
+# default pipeline. Behavior is byte-for-byte unchanged while false.
+CHAT_USE_TENANT_PROFILE = _get_bool("CHAT_USE_TENANT_PROFILE", default=False)
+
 DISABLE_GUARD = _get_bool("DISABLE_GUARD", default=False)
 IGNORE_SEARCHABLE = _get_bool("IGNORE_SEARCHABLE", default=False)
 LOG_WHERE = _get_bool("LOG_WHERE", default=False)
