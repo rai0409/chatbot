@@ -49,6 +49,24 @@ bash scripts/restore.sh backups/chatbot_backup_<TS>.tar.gz --in-place --source-d
   in-flight chroma write may invalidate that night's archive (the manifest
   check will catch it at restore time).
 
+### Persistence reload / restore isolation verification
+
+```bash
+# synthetic, non-production, no .env, no network/model downloads
+scripts/persistence_isolation_check.sh
+```
+
+- Proves, with synthetic two-tenant data in a temp store under a
+  **non-production** collection (`pilot_persist_check_v1`), that stored records
+  and the embedding fingerprint survive a Chroma client reload (simulated
+  restart) and a hash-verified backup/restore, and that tenant isolation holds
+  after both (each tenant retrieves only its own chunks).
+- Backed by `tests/test_durable_multitenant_persistence.py`. The production /
+  default vectorstore and collection are never opened or mutated.
+- Scope note: this proves **single-node** durability and isolation on the local
+  Chroma `PersistentClient` — not a managed, HA, or concurrent-writer
+  multi-tenant database. Those remain general-production items.
+
 ## Reverse proxy / TLS reference
 
 The container serves plain HTTP on `:8000` and must not be exposed directly.
