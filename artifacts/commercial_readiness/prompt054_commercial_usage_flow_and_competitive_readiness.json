@@ -1,0 +1,123 @@
+{
+  "analysis_type": "analysis_docs_only_no_runtime_change",
+  "can_be_sold_now": "yes_with_conditions",
+  "competitive_comparison_basis": "archetype_comparison_not_fresh_market_share_research; repo market reports cited; external freshness not revalidated",
+  "full_suite_run_this_prompt": false,
+  "generated_at": "2026-06-14T03:07:16.519793+00:00",
+  "head_commit": "2220ebe8a1b16d6a0fb662a081351daa11bd02fd",
+  "key_evidence_paths": [
+    "webapi/oidc_auth.py",
+    "webapi/rbac.py",
+    "webapi/enterprise_auth.py",
+    "webapi/conversation_store.py",
+    "webapi/ingestion_jobs.py",
+    "webapi/branding.py",
+    "webapi/alerting.py",
+    "webapi/notifications.py",
+    "webapi/static/chat.html",
+    "deploy/observability/",
+    "deploy/monitoring/",
+    "scripts/monitoring_runner.sh",
+    "docs/reports/prompt053_commercial_production_acceptance_gate.md",
+    "docs/reports/japan_rag_competitor_price_web_research.md"
+  ],
+  "mock_tested_only": [
+    "oidc_login_session_real_idp",
+    "enterprise_auth_bridge_real_proxy",
+    "slack_email_notifications_real_endpoints",
+    "group_tenant_rbac_real_group_claims"
+  ],
+  "new_prompt_generated_this_task": false,
+  "next_recommended_prompt": "prompts/claude/product/prompt039_pilot_validation_and_demo_readiness_pack.md",
+  "readiness_labels": {
+    "first_paid_annual_contract": "READY_WITH_CONDITIONS",
+    "general_production": "NOT_READY",
+    "internal_demo": "READY",
+    "limited_external_beta": "READY_WITH_CONDITIONS",
+    "manufacturing_one_department_poc": "READY_WITH_CONDITIONS"
+  },
+  "report": "prompt054_commercial_usage_flow_and_competitive_readiness",
+  "safe_claims": [
+    "on_prem_no_cloud_dependency",
+    "multiformat_with_citations",
+    "abstain_not_hallucinate",
+    "approved_qa_deterministic",
+    "tenant_isolation_reload_restore_verified",
+    "default_off_layered_auth_failclosed_no_secret_exposure",
+    "commercial_ui_admin_console_branding_ingestion_dryrun",
+    "operations_pack_prometheus_grafana_alerts_backup_restore",
+    "832_tests_pass"
+  ],
+  "sell_to": "Japanese mid-to-large manufacturer, single-department on-prem PoC (production_safe)",
+  "tests_collected": 832,
+  "top_commercial_blockers": [
+    {
+      "id": "manufacturing_accuracy_unmeasured",
+      "priority": "P0"
+    },
+    {
+      "id": "manufacturing_demo_validation_pack",
+      "priority": "P0"
+    },
+    {
+      "id": "real_customer_idp_end_to_end_sso_test",
+      "priority": "P1"
+    },
+    {
+      "id": "safe_collection_promotion_workflow",
+      "priority": "P1"
+    },
+    {
+      "id": "monitoring_alerting_wired_at_customer",
+      "priority": "P1"
+    },
+    {
+      "id": "real_document_evaluation_workflow",
+      "priority": "P1"
+    },
+    {
+      "id": "support_oncall_staffing_model",
+      "priority": "P1"
+    },
+    {
+      "id": "ha_failover",
+      "priority": "P2"
+    },
+    {
+      "id": "24x7_support_compliance_audit_export_retention",
+      "priority": "P2"
+    },
+    {
+      "id": "large_scale_multitenant_saas",
+      "priority": "P2"
+    },
+    {
+      "id": "cross_encoder_reranker_promotion",
+      "priority": "P3"
+    },
+    {
+      "id": "pgvector_qdrant_migration",
+      "priority": "P3"
+    }
+  ],
+  "top_implemented_capabilities": [
+    "core_rag_qa_citations_abstain_approved_qa",
+    "tenant_isolation_reload_restore_verified",
+    "layered_default_off_auth_apikey_proxy_bridge_oidc_rbac_failclosed",
+    "commercial_chat_workspace_ui_branding_admin_console",
+    "document_ingestion_dryrun_ui_and_job_status",
+    "observability_prometheus_grafana_alerts_local_checker",
+    "systemd_cron_monitoring_runner",
+    "backup_restore_deploy_smoke",
+    "832_tests_pass_at_head"
+  ],
+  "unsafe_claims": [
+    "accuracy_numbers_on_real_or_manufacturing_docs",
+    "end_to_end_sso_verified_against_real_idp",
+    "general_production_ha_24x7_sla_failover",
+    "compliance_certifications",
+    "large_scale_multitenant_saas",
+    "competitor_superiority",
+    "notifications_alerting_proven_in_production"
+  ]
+}
