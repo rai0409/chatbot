@@ -1,0 +1,267 @@
+{
+  "auto_executable_without_real_env": [
+    "prompt056",
+    "prompt057",
+    "prompt059",
+    "prompt060",
+    "prompt061",
+    "prompt062",
+    "prompt063",
+    "prompt064",
+    "prompt066",
+    "prompt067",
+    "prompt068",
+    "prompt069",
+    "prompt070"
+  ],
+  "dependency_order": [
+    "prompt056",
+    "prompt057",
+    "prompt058",
+    "prompt059",
+    "prompt060",
+    "prompt061",
+    "prompt062",
+    "prompt063",
+    "prompt064",
+    "prompt065",
+    "prompt066",
+    "prompt067",
+    "prompt068",
+    "prompt069",
+    "prompt070"
+  ],
+  "done_criteria": "all P0 prompts PASS (synthetic) + real-env steps documented; P1/P2 analysis+ops packs PASS; prompt070 gate recomputes readiness conservatively",
+  "generated_at": "2026-06-14T03:54:14.902722+00:00",
+  "generated_prompts": [
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [],
+      "done_criteria": "gated promotion+rollback script + tests; prod/default refused; full suite green",
+      "expected_commit_tag": "prompt056-safe-collection-promotion-workflow",
+      "main_risks": [
+        "unsafe prod-collection mutation",
+        "isolation regression"
+      ],
+      "priority": "P0",
+      "prompt": "prompts/claude/product/prompt056_safe_collection_promotion_workflow.md",
+      "requires_real_customer_environment": false
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [],
+      "done_criteria": "templates+tooling+tests on synthetic data; customer data stays gitignored",
+      "expected_commit_tag": "prompt057-real-customer-document-poc-evaluation-workflow",
+      "main_risks": [
+        "accidental customer-data commit"
+      ],
+      "priority": "P0",
+      "prompt": "prompts/claude/product/prompt057_real_customer_document_poc_evaluation_workflow.md",
+      "requires_real_customer_environment": false
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [
+        "prompt046",
+        "prompt047"
+      ],
+      "done_criteria": "checklist+evidence matrix; mock tests pass; real-tenant steps documented not asserted",
+      "expected_commit_tag": "prompt058-real-idp-sso-e2e-validation",
+      "main_risks": [
+        "mock-vs-real evidence confusion"
+      ],
+      "priority": "P0",
+      "prompt": "prompts/claude/product/prompt058_real_idp_sso_e2e_validation.md",
+      "requires_real_customer_environment": true
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [
+        "prompt049",
+        "prompt050",
+        "prompt051"
+      ],
+      "done_criteria": "acceptance checklist + synthetic-signal proof; existing monitoring tests pass",
+      "expected_commit_tag": "prompt059-customer-monitoring-wiring-and-ops-acceptance",
+      "main_risks": [
+        "secret/tenant leak in alerts"
+      ],
+      "priority": "P0",
+      "prompt": "prompts/claude/product/prompt059_customer_monitoring_wiring_and_ops_acceptance.md",
+      "requires_real_customer_environment": false
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [],
+      "done_criteria": "sales+SOW+onboarding pack; conservative claims; legal marked draft",
+      "expected_commit_tag": "prompt060-paid-pilot-sales-contract-and-onboarding-pack",
+      "main_risks": [
+        "overclaiming in sales docs",
+        "legal language not lawyer-reviewed"
+      ],
+      "priority": "P0",
+      "prompt": "prompts/claude/product/prompt060_paid_pilot_sales_contract_and_onboarding_pack.md",
+      "requires_real_customer_environment": false
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [],
+      "done_criteria": "install/upgrade/rollback guide + dependency-freeze check; deploy-ops tests pass",
+      "expected_commit_tag": "prompt061-onprem-install-upgrade-and-release-packaging",
+      "main_risks": [
+        "dependency drift"
+      ],
+      "priority": "P1",
+      "prompt": "prompts/claude/product/prompt061_onprem_install_upgrade_and_release_packaging.md",
+      "requires_real_customer_environment": false
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [],
+      "done_criteria": "security pack + safe audit-export + test; no certification claim",
+      "expected_commit_tag": "prompt062-security-audit-log-export-retention-and-compliance-pack",
+      "main_risks": [
+        "secret/raw-identity exposure in export",
+        "compliance overclaim"
+      ],
+      "priority": "P1",
+      "prompt": "prompts/claude/product/prompt062_security_audit_log_export_retention_and_compliance_pack.md",
+      "requires_real_customer_environment": false
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [
+        "prompt023"
+      ],
+      "done_criteria": "DR drill runbook + restore-test template + test; RPO/RTO as labelled assumptions",
+      "expected_commit_tag": "prompt063-backup-restore-dr-drill-and-recovery-objectives",
+      "main_risks": [
+        "RPO/RTO overpromise"
+      ],
+      "priority": "P1",
+      "prompt": "prompts/claude/product/prompt063_backup_restore_dr_drill_and_recovery_objectives.md",
+      "requires_real_customer_environment": false
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [
+        "prompt052"
+      ],
+      "done_criteria": "support pack; 24x7 only as future/optional; business-hours default",
+      "expected_commit_tag": "prompt064-customer-support-staffing-and-incident-operations-pack",
+      "main_risks": [
+        "24x7 overclaim"
+      ],
+      "priority": "P1",
+      "prompt": "prompts/claude/product/prompt064_customer_support_staffing_and_incident_operations_pack.md",
+      "requires_real_customer_environment": false
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [
+        "prompt057",
+        "prompt060"
+      ],
+      "done_criteria": "report templates with placeholders; real data filled later, not fabricated",
+      "expected_commit_tag": "prompt065-design-partner-poc-results-to-annual-contract-report",
+      "main_risks": [
+        "fabricated results"
+      ],
+      "priority": "P1",
+      "prompt": "prompts/claude/product/prompt065_design_partner_poc_results_to_annual_contract_report.md",
+      "requires_real_customer_environment": true
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [],
+      "done_criteria": "analysis/spike report; no deploy; recommendation + future scope",
+      "expected_commit_tag": "prompt066-ha-failover-and-capacity-planning-spike",
+      "main_risks": [
+        "overbuild/deploy"
+      ],
+      "priority": "P2",
+      "prompt": "prompts/claude/product/prompt066_ha_failover_and_capacity_planning_spike.md",
+      "requires_real_customer_environment": false
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [
+        "prompt035"
+      ],
+      "done_criteria": "decision report; no migration; done-criteria for any future spike",
+      "expected_commit_tag": "prompt067-vectorstore-production-backend-decision-pgvector-qdrant",
+      "main_risks": [
+        "unscoped migration"
+      ],
+      "priority": "P2",
+      "prompt": "prompts/claude/product/prompt067_vectorstore_production_backend_decision_pgvector_qdrant.md",
+      "requires_real_customer_environment": false
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [],
+      "done_criteria": "decision report; no threshold change; promotion-eval criteria if pursued",
+      "expected_commit_tag": "prompt068-cross-encoder-rerank-promotion-decision",
+      "main_risks": [
+        "threshold/setting change",
+        "model download"
+      ],
+      "priority": "P2",
+      "prompt": "prompts/claude/product/prompt068_cross_encoder_rerank_promotion_decision.md",
+      "requires_real_customer_environment": false
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [
+        "prompt056",
+        "prompt057",
+        "prompt058",
+        "prompt059",
+        "prompt060",
+        "prompt061",
+        "prompt062",
+        "prompt063",
+        "prompt064",
+        "prompt065",
+        "prompt066",
+        "prompt067",
+        "prompt068"
+      ],
+      "done_criteria": "strict per-dimension labels + remaining gaps",
+      "expected_commit_tag": "prompt069-general-production-readiness-gap-reassessment",
+      "main_risks": [
+        "overclaim"
+      ],
+      "priority": "P2",
+      "prompt": "prompts/claude/product/prompt069_general_production_readiness_gap_reassessment.md",
+      "requires_real_customer_environment": false
+    },
+    {
+      "allowed_to_auto_execute": true,
+      "depends_on": [
+        "prompt069"
+      ],
+      "done_criteria": "acceptance gate verifying all stages; recomputed readiness; claim boundary restated",
+      "expected_commit_tag": "prompt070-commercial-deployment-acceptance-gate",
+      "main_risks": [
+        "premature go decision"
+      ],
+      "priority": "final",
+      "prompt": "prompts/claude/product/prompt070_commercial_deployment_acceptance_gate.md",
+      "requires_real_customer_environment": false
+    }
+  ],
+  "head_commit": "3f480f4674938346a1d85a5adfcca91ed24c1485",
+  "immediate_next_prompt": "prompts/claude/product/prompt056_safe_collection_promotion_workflow.md",
+  "main_risks": [
+    "overclaiming production/accuracy",
+    "leaking secrets/customer data",
+    "unsafe vectorstore mutation",
+    "fabricated results"
+  ],
+  "orchestrator": "prompt055_commercial_deployment_prompt_split_and_save",
+  "require_real_customer_environment_for_completion": [
+    "prompt058",
+    "prompt065"
+  ]
+}
