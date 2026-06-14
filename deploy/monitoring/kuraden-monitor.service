@@ -1,0 +1,20 @@
+# systemd service for the KuraDen monitoring runner (Prompt050).
+# Install: copy to /etc/systemd/system/, edit WorkingDirectory/User, then
+#   systemctl daemon-reload && systemctl enable --now kuraden-monitor.timer
+[Unit]
+Description=KuraDen monitoring runner (metrics snapshot + alert check)
+After=network.target
+
+[Service]
+Type=oneshot
+User=kuraden
+WorkingDirectory=/opt/kuraden
+Environment=KURADEN_METRICS_URL=http://127.0.0.1:8000/metrics
+Environment=KURADEN_MONITOR_DIR=/var/lib/kuraden/monitoring
+Environment=KURADEN_MONITOR_RETENTION=288
+ExecStart=/opt/kuraden/scripts/monitoring_runner.sh
+# Do not fail the unit on WARN/CRITICAL exit codes; alerting is the signal.
+SuccessExitStatus=0 1 2
+
+[Install]
+WantedBy=multi-user.target

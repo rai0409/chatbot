@@ -1,0 +1,12 @@
+# systemd timer: run the monitoring runner every 5 minutes (Prompt050).
+[Unit]
+Description=Run KuraDen monitoring runner every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=kuraden-monitor.service
+
+[Install]
+WantedBy=timers.target
