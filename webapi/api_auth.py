@@ -124,6 +124,15 @@ def require_api_auth_headers(headers: Mapping[str, str] | None = None) -> ApiAut
     if enterprise_ctx is not None:
         return enterprise_ctx
 
+    # Optional default-off in-app OIDC session (Prompt046). Returns None when
+    # disabled or when no valid session cookie is present, so the API key path
+    # below stays exactly unchanged.
+    from webapi import oidc_auth
+
+    oidc_ctx = oidc_auth.resolve_oidc_session(headers)
+    if oidc_ctx is not None:
+        return oidc_ctx
+
     if not api_auth_enabled():
         return ApiAuthContext()
 

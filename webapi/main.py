@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 import config
@@ -55,6 +55,7 @@ from webapi import branding
 from webapi import conversation_store
 from webapi import ingestion_jobs
 from webapi import metrics_registry
+from webapi import oidc_auth
 from webapi.admin_auth import admin_auth_enabled, require_admin_auth
 from webapi.api_auth import (
     ApiAuthContext,
@@ -947,6 +948,49 @@ def chat_ui_page():
     except Exception:
         logging.exception("chat ui page unavailable")
         raise HTTPException(status_code=500, detail="chat ui page unavailable")
+
+
+def _require_oidc() -> None:
+    if not oidc_auth.oidc_enabled():
+        raise HTTPException(status_code=404, detail="not found")
+
+
+@app.get("/auth/oidc/login")
+def oidc_login():
+    # Default-off (404 when disabled). Builds the Authorization Code + PKCE
+    # redirect and binds state/nonce/verifier in a signed, httponly txn cookie.
+    _require_oidc()
+    auth_url, txn = oidc_auth.build_login()
+    resp = RedirectResponse(url=auth_url, status_code=302)
+    resp.set_cookie(
+        oidc_auth.TXN_COOKIE, txn, max_age=600, httponly=True,
+        samesite="lax", secure=oidc_auth.cookie_secure(), path="/auth/oidc",
+    )
+    return resp
+
+
+@app.get("/auth/oidc/callback")
+def oidc_callback(request: Request, code: Optional[str] = None, state: Optional[str] = None):
+    _require_oidc()
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="missing code/state")
+    txn_cookie = request.cookies.get(oidc_auth.TXN_COOKIE) or ""
+    session = oidc_auth.complete_login(code=code, state=state, txn_cookie=txn_cookie)
+    resp = RedirectResponse(url="/chat-ui", status_code=302)
+    resp.set_cookie(
+        oidc_auth.SESSION_COOKIE, session, max_age=3600, httponly=True,
+        samesite="lax", secure=oidc_auth.cookie_secure(), path="/",
+    )
+    resp.delete_cookie(oidc_auth.TXN_COOKIE, path="/auth/oidc")
+    return resp
+
+
+@app.get("/auth/oidc/logout")
+def oidc_logout():
+    _require_oidc()
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(oidc_auth.SESSION_COOKIE, path="/")
+    return resp
 
 
 @app.get("/branding")
