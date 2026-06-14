@@ -247,15 +247,27 @@ def complete_login(*, code: str, state: str, txn_cookie: str) -> str:
         _record_auth_rejection("oidc_token_invalid")
         raise HTTPException(status_code=401, detail="oidc authentication failed")
 
-    authz, allowed = _allowed_tenants_for_claim(claims)
+    # RBAC (Prompt047): when a group->tenant / group->role map is configured,
+    # derive allowed tenants + role from the IdP groups claim; otherwise fall
+    # back to the single tenant claim with the default role.
+    if _env("OIDC_GROUP_TENANT_MAP") or _env("OIDC_GROUP_ROLE_MAP"):
+        from webapi import rbac
+
+        groups = claims.get(_env("OIDC_GROUPS_CLAIM") or "groups")
+        authz, allowed, role = rbac.resolve_role_and_tenants(groups)
+    else:
+        authz, allowed = _allowed_tenants_for_claim(claims)
+        role = "user"
+
     if authz and not allowed:
         _record_auth_rejection("oidc_tenant_unmapped")
         raise HTTPException(status_code=403, detail="oidc identity not authorized for any tenant")
 
     fingerprint = _key_fingerprint(str(claims.get("sub")))
     metrics_registry.increment("api_oidc_auth_total", "accepted")
+    metrics_registry.increment("api_role_total", str(role))
     session = _sign(
-        {"fp": fingerprint, "authz": bool(authz), "tenants": "|".join(sorted(allowed))},
+        {"fp": fingerprint, "authz": bool(authz), "tenants": "|".join(sorted(allowed)), "role": str(role)},
         cfg["session_secret"], _SESSION_TTL,
     )
     return session
@@ -305,4 +317,5 @@ def resolve_oidc_session(headers: Mapping[str, str] | None) -> Optional[ApiAuthC
         tenant_authorization_enabled=authz,
         allowed_tenants=allowed,
         key_fingerprint=str(data["fp"]),
+        role=str(data.get("role") or "") or None,
     )
