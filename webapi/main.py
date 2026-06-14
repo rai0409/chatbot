@@ -1005,8 +1005,12 @@ def ui_context(request: Request):
     # Backend-authoritative UI context. Role is used by the UI only to show/hide
     # panels; privileged routes (/admin/review*) are independently enforced by
     # require_admin_auth. No secrets / raw keys are returned.
+    # Prefer an authenticated OIDC session role (Prompt047) when present;
+    # otherwise fall back to the admin-token-based role. Backend-authoritative.
+    oidc_ctx = oidc_auth.resolve_oidc_session(request.headers)
+    role = (oidc_ctx.role if (oidc_ctx and oidc_ctx.role) else None) or branding.resolve_role(request.headers)
     return {
-        "role": branding.resolve_role(request.headers),
+        "role": role,
         "admin_auth_enabled": admin_auth_enabled(),
         "api_auth_enabled": api_auth_enabled(),
     }

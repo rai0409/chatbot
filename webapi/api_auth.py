@@ -36,6 +36,9 @@ class ApiAuthContext:
     allowed_tenants: frozenset[str] = field(default_factory=frozenset)
     # sha256-derived identifier for audit purposes; never the raw key.
     key_fingerprint: str | None = None
+    # Optional RBAC role (Prompt047): admin / operator / user / viewer. None
+    # means "no role asserted" (API key path); defaults preserve prior behavior.
+    role: str | None = None
 
     def tenant_allowed(self, tenant_id) -> bool:
         if not self.tenant_authorization_enabled:
