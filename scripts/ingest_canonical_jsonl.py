@@ -98,25 +98,23 @@ def _reset_collection(collection) -> Any:
     return collection
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("canonical_jsonl_path")
-    parser.add_argument("--batch", type=int, default=64)
-    parser.add_argument("--collection", default=None)
-    parser.add_argument("--reset", action="store_true")
-    args = parser.parse_args()
-
-    client = None
-    if not embedder.is_local_provider():
+def ingest_canonical_rows(
+    rows: Iterable[Dict[str, Any]],
+    *,
+    collection_name: Optional[str] = None,
+    batch: int = 64,
+    reset: bool = False,
+    client=None,
+) -> Dict[str, Any]:
+    if client is None and not embedder.is_local_provider():
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
 
     collection = store.get_vectorstore(
-        collection_name=args.collection, verify_embedding_fingerprint=False
+        collection_name=collection_name, verify_embedding_fingerprint=False
     )
-    if args.reset:
+    if reset:
         collection = _reset_collection(collection)
     fingerprint = store.stamp_collection_fingerprint(collection)
-    print(f"embedding_fingerprint={json.dumps(fingerprint, ensure_ascii=False)}")
 
     batch_ids: List[str] = []
     batch_texts: List[str] = []
@@ -124,7 +122,7 @@ def main() -> int:
     ingested = 0
     skipped = 0
 
-    def flush_batch():
+    def flush_batch() -> None:
         nonlocal ingested
         if not batch_ids:
             return
@@ -151,9 +149,8 @@ def main() -> int:
         batch_ids.clear()
         batch_texts.clear()
         batch_metas.clear()
-        print(f"ingested={ingested} skipped={skipped}")
 
-    for row in _iter_jsonl(args.canonical_jsonl_path):
+    for row in rows:
         if row.get("__parse_error__"):
             skipped += 1
             continue
@@ -184,21 +181,41 @@ def main() -> int:
         batch_texts.append(str(text))
         batch_metas.append(meta)
 
-        if len(batch_ids) >= args.batch:
-            try:
-                flush_batch()
-            except Exception as exc:
-                print(f"error: failed to upsert batch: {exc}", file=sys.stderr)
-                return 1
+        if len(batch_ids) >= batch:
+            flush_batch()
 
     if batch_ids:
-        try:
-            flush_batch()
-        except Exception as exc:
-            print(f"error: failed to upsert batch: {exc}", file=sys.stderr)
-            return 1
+        flush_batch()
 
-    print(f"done ingested={ingested} skipped={skipped}")
+    return {
+        "collection": str(getattr(collection, "name", "") or collection_name or ""),
+        "embedding_fingerprint": fingerprint,
+        "ingested": ingested,
+        "skipped": skipped,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("canonical_jsonl_path")
+    parser.add_argument("--batch", type=int, default=64)
+    parser.add_argument("--collection", default=None)
+    parser.add_argument("--reset", action="store_true")
+    args = parser.parse_args()
+
+    try:
+        result = ingest_canonical_rows(
+            _iter_jsonl(args.canonical_jsonl_path),
+            collection_name=args.collection,
+            batch=args.batch,
+            reset=args.reset,
+        )
+    except Exception as exc:
+        print(f"error: failed to upsert batch: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"embedding_fingerprint={json.dumps(result['embedding_fingerprint'], ensure_ascii=False)}")
+    print(f"done ingested={result['ingested']} skipped={result['skipped']}")
     return 0
 
 
