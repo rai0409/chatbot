@@ -8,7 +8,7 @@
 <style>
   body { font-family: system-ui, "Noto Sans JP", Meiryo, sans-serif; color: #1f2933;
          background: #f3f5f8; margin: 0; padding: 24px; }
-  .card { max-width: 820px; margin: 0 auto; background: #fff; border: 1px solid #e2e7ee;
+  .card { max-width: 900px; margin: 0 auto 18px; background: #fff; border: 1px solid #e2e7ee;
           border-radius: 10px; padding: 18px 20px; }
   h1 { font-size: 17px; margin: 0 0 4px; }
   p.note { color: #6b7684; font-size: 13px; margin-top: 0; }
@@ -21,11 +21,15 @@
         font-size: 12px; margin-top: 14px; }
   .jobs { margin-top: 18px; font-size: 13px; }
   .jobs h2 { font-size: 14px; }
+  .split { border-top: 1px solid #e2e7ee; margin-top: 18px; padding-top: 16px; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; }
+  .check input { width: auto; }
+  .danger { color: #8a5a00; background: #fff8e6; border: 1px solid #f0d9a0; padding: 8px 10px; border-radius: 8px; }
 </style>
 </head>
 <body>
 <div class="card">
-  <h1>文書取込（ドライラン検証）</h1>
+  <h1>文書取込</h1>
   <p class="note">登録予定の正規化チャンク JSONL を検証します（重複ID・テナント不一致・衝突）。
     これは<strong>ドライランのみ</strong>で、ベクトルストアは一切変更しません。
     本番/既定コレクションは拒否されます。合成・サニタイズ済みデータのみを使用してください。</p>
@@ -42,6 +46,31 @@
   <button id="run" type="button">ドライラン検証を実行</button>
 
   <pre id="result" hidden></pre>
+
+  <div class="split">
+    <h1>Raw文書 → ステージング取込</h1>
+    <p class="note">PDF / DOCX / XLSX / CSV / PPTX のローカルパスを変換し、マニフェスト検証します。
+      実取込は明示した<strong>非本番ステージングコレクション</strong>だけに書き込みます。
+      既定/本番コレクションは拒否されます。ここではチャンク本文は表示しません。</p>
+
+    <label for="rawInputs">Raw文書パス（1行に1ファイル）</label>
+    <textarea id="rawInputs" placeholder="eval/cases/sample_docs/sample_manual.docx"></textarea>
+
+    <label for="rawTenant">対象テナントID（必須）</label>
+    <input id="rawTenant" type="text" placeholder="pilot_tenant_a" />
+
+    <label for="rawCollection">ステージングコレクション（必須・非本番のみ）</label>
+    <input id="rawCollection" type="text" placeholder="pilot_staging_v1" />
+
+    <label class="check">
+      <input id="rawExecute" type="checkbox" />
+      <span>検証が通った場合にステージングベクトルストアへ実取込する</span>
+    </label>
+    <p class="note danger">未チェック時は変換+検証のみで、vectorstore/index は変更しません。チェック時も本番/既定コレクションは拒否されます。</p>
+
+    <button id="runRaw" type="button">Raw文書の検証/ステージング取込を実行</button>
+    <pre id="rawResult" hidden></pre>
+  </div>
 
   <div class="jobs">
     <h2>ジョブ履歴</h2>
@@ -78,6 +107,21 @@
       .then(function (r) { return r.json(); })
       .then(function (res) { show(document.getElementById("result"), res); refreshJobs(); })
       .catch(function () { show(document.getElementById("result"), { error: "request failed" }); });
+  });
+
+  document.getElementById("runRaw").addEventListener("click", function () {
+    var inputs = (document.getElementById("rawInputs").value || "")
+      .split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
+    var body = {
+      inputs: inputs,
+      expected_tenant: (document.getElementById("rawTenant").value || "").trim(),
+      collection: (document.getElementById("rawCollection").value || "").trim(),
+      execute: !!document.getElementById("rawExecute").checked
+    };
+    fetch("/admin/ingestion/raw-documents", { method: "POST", headers: headers(), body: JSON.stringify(body) })
+      .then(function (r) { return r.json(); })
+      .then(function (res) { show(document.getElementById("rawResult"), res); refreshJobs(); })
+      .catch(function () { show(document.getElementById("rawResult"), { error: "request failed" }); });
   });
 
   function refreshJobs() {

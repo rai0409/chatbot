@@ -1086,6 +1086,13 @@ class IngestionDryRunRequest(BaseModel):
     collection: Optional[str] = None
 
 
+class RawDocumentIngestionRequest(BaseModel):
+    inputs: List[str]
+    expected_tenant: str
+    collection: str
+    execute: bool = False
+
+
 @app.get("/admin/ingestion", response_class=HTMLResponse)
 def ingestion_page(_admin_auth: None = Depends(require_admin_auth)):
     path = _STATIC_DIR / "ingestion.html"
@@ -1108,6 +1115,31 @@ def ingestion_dry_run(req: IngestionDryRunRequest, _admin_auth: None = Depends(r
     try:
         return ingestion_jobs.run_dry_run(
             inputs, expected_tenant=req.expected_tenant, collection=req.collection
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/admin/ingestion/raw-documents")
+def ingestion_raw_documents(
+    req: RawDocumentIngestionRequest,
+    _admin_auth: None = Depends(require_admin_auth),
+):
+    inputs = [str(p) for p in (req.inputs or []) if str(p).strip()]
+    if not inputs:
+        raise HTTPException(status_code=400, detail="inputs is required")
+    if not str(req.expected_tenant or "").strip():
+        raise HTTPException(status_code=400, detail="expected_tenant is required")
+    if not str(req.collection or "").strip():
+        raise HTTPException(status_code=400, detail="collection is required")
+    if ingestion_jobs.is_production_collection(req.collection):
+        raise HTTPException(status_code=400, detail="refusing production/default collection")
+    try:
+        return ingestion_jobs.run_raw_document_job(
+            inputs,
+            expected_tenant=req.expected_tenant,
+            collection=req.collection,
+            execute=bool(req.execute),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
