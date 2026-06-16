@@ -332,8 +332,13 @@ def vector_retrieve(
     allowed_qualities=None,
     query_embedding=None,
     tenant_id: str = DEFAULT_TENANT_ID,
+    collection_name: Optional[str] = None,
+    create_collection_if_missing: bool = True,
 ) -> List[RetrievedChunk]:
-    collection = store.get_vectorstore()
+    collection = store.get_vectorstore(
+        collection_name=collection_name,
+        create_if_missing=create_collection_if_missing,
+    )
     where = _build_base_where(allowed_types, allowed_qualities, tenant_id=tenant_id)
     embedding = _resolve_query_embedding(question, client, query_embedding)
     oversample = max(1, int(getattr(config, "CHILD_RETRIEVAL_OVERSAMPLE", 2)))
@@ -453,6 +458,8 @@ def hybrid_retrieve(
     rrf_k: Optional[int] = None,
     query_embedding=None,
     tenant_id: str = DEFAULT_TENANT_ID,
+    collection_name: Optional[str] = None,
+    create_collection_if_missing: bool = True,
 ) -> List[RetrievedChunk]:
     if not config.ENABLE_HYBRID_RETRIEVAL:
         return vector_retrieve(
@@ -463,6 +470,8 @@ def hybrid_retrieve(
             allowed_qualities=allowed_qualities,
             query_embedding=query_embedding,
             tenant_id=tenant_id,
+            collection_name=collection_name,
+            create_collection_if_missing=create_collection_if_missing,
         )
 
     v_top_k = vector_top_k or config.VECTOR_TOP_K or top_k
@@ -476,6 +485,8 @@ def hybrid_retrieve(
         allowed_qualities=allowed_qualities,
         query_embedding=query_embedding,
         tenant_id=tenant_id,
+        collection_name=collection_name,
+        create_collection_if_missing=create_collection_if_missing,
     )
     keyword_hits = keyword_retrieve(
         question,
@@ -634,8 +645,13 @@ def add_neighbor_chunks(
     seeds: Sequence[RetrievedChunk],
     window: int = 1,
     tenant_id: str = DEFAULT_TENANT_ID,
+    collection_name: Optional[str] = None,
+    create_collection_if_missing: bool = True,
 ) -> List[RetrievedChunk]:
-    collection = store.get_vectorstore()
+    collection = store.get_vectorstore(
+        collection_name=collection_name,
+        create_if_missing=create_collection_if_missing,
+    )
     out = list(seeds)
     for seed in seeds:
         doc_id = seed.metadata.get("doc_id")

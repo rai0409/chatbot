@@ -1,0 +1,94 @@
+{
+  "task": "prompt073_staging_collection_query_selection_for_chat_ui",
+  "date": "2026-06-17",
+  "final_judgment": "PASS",
+  "default_behavior_preserved": true,
+  "staging_query_field": "staging_collection",
+  "tenant_field": "tenant_id",
+  "supported_routes": [
+    "/chat",
+    "/chat/stream",
+    "/search",
+    "/search/debug",
+    "/chat-ui"
+  ],
+  "staging_allowlist": {
+    "source": "Prompt072 in-memory raw_document_execute job registry",
+    "requires_status_ok": true,
+    "requires_vectorstore_mutated": true,
+    "requires_same_tenant": true,
+    "production_default_collections_rejected": true,
+    "unknown_collection_status": 404,
+    "wrong_tenant_status": 403,
+    "not_ready_status": 409
+  },
+  "retrieval_behavior": {
+    "default_path": "configured served/default collection",
+    "staging_path": "existing selected Chroma collection only",
+    "creates_missing_collection_on_staging_query": false,
+    "uses_default_keyword_or_parent_index_in_staging": false,
+    "thresholds_changed": false,
+    "cross_encoder_settings_changed": false
+  },
+  "ui_behavior": {
+    "staging_selector_visible_for_roles": [
+      "admin",
+      "operator"
+    ],
+    "selected_tenant_visible": true,
+    "selected_collection_visible": true,
+    "default_collection_label": "served default",
+    "staging_collection_label": "staging <collection>"
+  },
+  "tests": [
+    {
+      "command": "python -m py_compile rag_core/store.py rag_core/retrieval.py rag_core/qa.py webapi/api_auth.py webapi/ingestion_jobs.py webapi/main.py tests/test_staging_collection_query_selection.py",
+      "result": "passed"
+    },
+    {
+      "command": "PYTHONPATH=. uv run pytest tests/test_staging_collection_query_selection.py -q",
+      "result": "8 passed"
+    },
+    {
+      "command": "PYTHONPATH=. uv run pytest tests/test_commercial_chat_workspace_ui.py tests/test_enduser_chat_ui.py tests/test_chat_stream.py tests/test_chat_tenant_product_profile_runtime.py tests/test_api_key_tenant_authorization.py -q",
+      "result": "54 passed"
+    },
+    {
+      "command": "PYTHONPATH=. uv run pytest tests/test_ingestion_ui_job_status.py tests/test_safe_collection_promotion.py tests/test_tenant_isolation.py -q",
+      "result": "27 passed"
+    },
+    {
+      "command": "PYTHONPATH=. uv run pytest tests/test_api_auth.py tests/test_rate_limit.py -q",
+      "result": "31 passed"
+    },
+    {
+      "command": "PYTHONPATH=. uv run pytest --collect-only -q",
+      "result": "874 tests collected"
+    },
+    {
+      "command": "PYTHONPATH=. uv run pytest -q",
+      "result": "874 passed"
+    }
+  ],
+  "files_changed": [
+    "rag_core/store.py",
+    "rag_core/retrieval.py",
+    "rag_core/qa.py",
+    "webapi/api_auth.py",
+    "webapi/ingestion_jobs.py",
+    "webapi/main.py",
+    "webapi/static/chat.html",
+    "tests/test_staging_collection_query_selection.py",
+    "docs/reports/prompt073_staging_collection_query_selection_for_chat_ui.md",
+    "artifacts/commercial_readiness/prompt073_staging_collection_query_selection_for_chat_ui.json"
+  ],
+  "remaining_for_prompt074_prompt075": [
+    "browser multipart upload",
+    "durable ingestion job and staging collection registry",
+    "larger operator UX"
+  ],
+  "remaining_blockers": [
+    "staging query allowlist is process-local because Prompt072 jobs are in-memory",
+    "staging keyword and parent indexes do not exist, so staging query uses vector retrieval only"
+  ]
+}
