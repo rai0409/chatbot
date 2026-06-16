@@ -17,7 +17,16 @@ from rag_grounded import Chunk, build_citation_payloads, build_evidence_blocks, 
 from schemas import AnswerResult, CitationOut, RetrievedChunkOut
 
 
-def retrieve_chunks(question: str, client, top_k: int, allowed_types=None, allowed_qualities=None) -> List[RetrievedChunk]:
+def retrieve_chunks(
+    question: str,
+    client,
+    top_k: int,
+    allowed_types=None,
+    allowed_qualities=None,
+    tenant_id: str = "default",
+    collection_name: Optional[str] = None,
+    create_collection_if_missing: bool = True,
+) -> List[RetrievedChunk]:
     # Vector-only helper kept for backward compatibility (/search endpoint).
     # The primary answer path in answer_query() uses hybrid_retrieve().
     return vector_retrieve(
@@ -26,6 +35,9 @@ def retrieve_chunks(question: str, client, top_k: int, allowed_types=None, allow
         top_k=top_k,
         allowed_types=allowed_types,
         allowed_qualities=allowed_qualities,
+        tenant_id=tenant_id,
+        collection_name=collection_name,
+        create_collection_if_missing=create_collection_if_missing,
     )
 
 
@@ -533,47 +545,86 @@ def _retrieve_and_rerank(
     intent: str,
     query_type: str,
     tenant_id: str = "default",
+    collection_name: Optional[str] = None,
 ) -> Tuple[List[RetrievedChunk], List[RetrievedChunk], List[RetrievedChunk]]:
+    staging_mode = bool(collection_name)
     if augmented_query == question:
         # Identical queries would produce identical passes; retrieve once.
-        base = hybrid_retrieve(
-            question,
-            client,
-            top_k=top_k,
-            vector_top_k=config.VECTOR_TOP_K,
-            bm25_top_k=config.BM25_TOP_K,
-            rrf_k=config.HYBRID_RRF_K,
-            tenant_id=tenant_id,
-        )
+        if staging_mode:
+            base = vector_retrieve(
+                question,
+                client,
+                top_k=top_k,
+                tenant_id=tenant_id,
+                collection_name=collection_name,
+                create_collection_if_missing=False,
+            )
+        else:
+            base = hybrid_retrieve(
+                question,
+                client,
+                top_k=top_k,
+                vector_top_k=config.VECTOR_TOP_K,
+                bm25_top_k=config.BM25_TOP_K,
+                rrf_k=config.HYBRID_RRF_K,
+                tenant_id=tenant_id,
+            )
         aug = base
     else:
         # Lazy batch: both queries are embedded in one embed_queries call the
         # first time vector retrieval asks for an embedding; stubbed or
         # keyword-only paths never trigger embedding.
         embedding_batch = QueryEmbeddingBatch([question, augmented_query], client=client)
-        base = hybrid_retrieve(
-            question,
-            client,
-            top_k=top_k,
-            vector_top_k=config.VECTOR_TOP_K,
-            bm25_top_k=config.BM25_TOP_K,
-            rrf_k=config.HYBRID_RRF_K,
-            query_embedding=lambda: embedding_batch.get(question),
-            tenant_id=tenant_id,
-        )
-        aug = hybrid_retrieve(
-            augmented_query,
-            client,
-            top_k=top_k,
-            vector_top_k=config.VECTOR_TOP_K,
-            bm25_top_k=config.BM25_TOP_K,
-            rrf_k=config.HYBRID_RRF_K,
-            query_embedding=lambda: embedding_batch.get(augmented_query),
-            tenant_id=tenant_id,
-        )
+        if staging_mode:
+            base = vector_retrieve(
+                question,
+                client,
+                top_k=top_k,
+                query_embedding=lambda: embedding_batch.get(question),
+                tenant_id=tenant_id,
+                collection_name=collection_name,
+                create_collection_if_missing=False,
+            )
+            aug = vector_retrieve(
+                augmented_query,
+                client,
+                top_k=top_k,
+                query_embedding=lambda: embedding_batch.get(augmented_query),
+                tenant_id=tenant_id,
+                collection_name=collection_name,
+                create_collection_if_missing=False,
+            )
+        else:
+            base = hybrid_retrieve(
+                question,
+                client,
+                top_k=top_k,
+                vector_top_k=config.VECTOR_TOP_K,
+                bm25_top_k=config.BM25_TOP_K,
+                rrf_k=config.HYBRID_RRF_K,
+                query_embedding=lambda: embedding_batch.get(question),
+                tenant_id=tenant_id,
+            )
+            aug = hybrid_retrieve(
+                augmented_query,
+                client,
+                top_k=top_k,
+                vector_top_k=config.VECTOR_TOP_K,
+                bm25_top_k=config.BM25_TOP_K,
+                rrf_k=config.HYBRID_RRF_K,
+                query_embedding=lambda: embedding_batch.get(augmented_query),
+                tenant_id=tenant_id,
+            )
     before_rerank = _unique_chunks(base + aug)
     if intent == "procedure":
-        before_rerank = _unique_chunks(add_neighbor_chunks(before_rerank, tenant_id=tenant_id))
+        before_rerank = _unique_chunks(
+            add_neighbor_chunks(
+                before_rerank,
+                tenant_id=tenant_id,
+                collection_name=collection_name,
+                create_collection_if_missing=not staging_mode,
+            )
+        )
     before_rerank = _decorate_score_details(scoring_query, before_rerank, query_type=query_type)
     child_ranked = rerank_chunks(question, before_rerank, intent=intent)
     if config.KEYWORD_BOOST_ENABLED and query_type in set(config.KEYWORD_BOOST_QUERY_TYPES):
@@ -586,12 +637,18 @@ def _retrieve_and_rerank(
         # Optional semantic stage over the already tenant-filtered, heuristic-
         # ranked candidates; reorders the fused top-N before parent expansion.
         child_ranked = cross_encoder_rerank(question, child_ranked)
-    context_ranked = expand_parent_chunks(
-        child_ranked,
-        max_parent_chunks=getattr(config, "MAX_PARENT_EXPANDED_CHUNKS", top_k),
-        max_parent_context_chars=getattr(config, "MAX_PARENT_CONTEXT_CHARS", max(1200, top_k * 400)),
-        tenant_id=tenant_id,
-    )
+    if staging_mode:
+        # Prompt072 staging collections are Chroma-only and have no matching
+        # JSONL keyword/parent index. Keep retrieval inside the selected
+        # collection instead of expanding from the default served JSONL corpus.
+        context_ranked = child_ranked
+    else:
+        context_ranked = expand_parent_chunks(
+            child_ranked,
+            max_parent_chunks=getattr(config, "MAX_PARENT_EXPANDED_CHUNKS", top_k),
+            max_parent_context_chars=getattr(config, "MAX_PARENT_CONTEXT_CHARS", max(1200, top_k * 400)),
+            tenant_id=tenant_id,
+        )
     context_ranked = _decorate_score_details(scoring_query, context_ranked, query_type=query_type)
     return before_rerank, child_ranked, context_ranked
 
@@ -629,6 +686,7 @@ def _build_retrieval_trace(
     started_at: Optional[float] = None,
     request_id: Optional[str] = None,
     tenant_id: str = "default",
+    collection_name: Optional[str] = None,
 ) -> Tuple[Dict[str, object], _RetrievalTraceState, float]:
     started_at = started_at if started_at is not None else time.perf_counter()
     request_id = request_id or uuid.uuid4().hex[:12]
@@ -656,6 +714,7 @@ def _build_retrieval_trace(
         intent=intent,
         query_type=query_type,
         tenant_id=normalize_tenant_id(tenant_id),
+        collection_name=collection_name,
     )
     retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
 
@@ -676,6 +735,9 @@ def _build_retrieval_trace(
         "retrieval_after_parent_expansion_count": len(context_candidates),
         "stage_latency_ms": {"retrieval_ms": retrieval_ms},
     }
+    if collection_name:
+        trace["query_collection"] = collection_name
+        trace["query_collection_mode"] = "staging"
 
     guard_grounded = _to_grounded(retrieved)
     guard_grounded = merge_by_page(guard_grounded)
@@ -736,6 +798,7 @@ def debug_retrieve_with_trace(
     max_context_chars: int = 8000,
     intent_override: Optional[str] = None,
     tenant_id: str = "default",
+    collection_name: Optional[str] = None,
 ) -> Dict[str, object]:
     trace, state, started_at = _build_retrieval_trace(
         question,
@@ -744,6 +807,7 @@ def debug_retrieve_with_trace(
         max_context_chars=max_context_chars,
         intent_override=intent_override,
         tenant_id=tenant_id,
+        collection_name=collection_name,
     )
     _set_final_trace(
         trace,
@@ -764,6 +828,7 @@ def _answer_query_impl(
     max_context_chars: int = 8000,
     intent_override: Optional[str] = None,
     tenant_id: str = "default",
+    collection_name: Optional[str] = None,
 ) -> Tuple[AnswerResult, Dict[str, object]]:
     started_at = time.perf_counter()
     request_id = uuid.uuid4().hex[:12]
@@ -776,6 +841,7 @@ def _answer_query_impl(
         started_at=started_at,
         request_id=request_id,
         tenant_id=tenant_id,
+        collection_name=collection_name,
     )
     q = state.normalized_query
     intent = state.intent
@@ -850,7 +916,7 @@ def _answer_query_impl(
     return result, trace
 
 
-def answer_query(question: str, client=None, top_k: int = 20, max_context_chars: int = 8000, intent_override: Optional[str] = None, tenant_id: str = "default") -> AnswerResult:
+def answer_query(question: str, client=None, top_k: int = 20, max_context_chars: int = 8000, intent_override: Optional[str] = None, tenant_id: str = "default", collection_name: Optional[str] = None) -> AnswerResult:
     result, _ = _answer_query_impl(
         question,
         client=client,
@@ -858,6 +924,7 @@ def answer_query(question: str, client=None, top_k: int = 20, max_context_chars:
         max_context_chars=max_context_chars,
         intent_override=intent_override,
         tenant_id=tenant_id,
+        collection_name=collection_name,
     )
     return result
 
@@ -869,6 +936,7 @@ def answer_query_with_trace(
     max_context_chars: int = 8000,
     intent_override: Optional[str] = None,
     tenant_id: str = "default",
+    collection_name: Optional[str] = None,
 ) -> Tuple[AnswerResult, Dict[str, object]]:
     return _answer_query_impl(
         question,
@@ -877,6 +945,7 @@ def answer_query_with_trace(
         max_context_chars=max_context_chars,
         intent_override=intent_override,
         tenant_id=tenant_id,
+        collection_name=collection_name,
     )
 
 
@@ -887,6 +956,7 @@ def answer_query_stream(
     max_context_chars: int = 8000,
     intent_override: Optional[str] = None,
     tenant_id: str = "default",
+    collection_name: Optional[str] = None,
 ):
     """Streaming variant of _answer_query_impl.
 
@@ -906,6 +976,7 @@ def answer_query_stream(
         started_at=started_at,
         request_id=request_id,
         tenant_id=tenant_id,
+        collection_name=collection_name,
     )
     yield "meta", {
         "request_id": request_id,

@@ -192,16 +192,17 @@ def enforce_tenant_authorization(auth: ApiAuthContext | None, tenant_id) -> None
         raise HTTPException(status_code=403, detail="tenant not authorized for this api key")
 
 
-def require_search_debug_access_headers(headers: Mapping[str, str] | None = None) -> None:
+def require_search_debug_access_headers(headers: Mapping[str, str] | None = None) -> ApiAuthContext:
     if not search_debug_enabled():
         raise HTTPException(status_code=404, detail="not found")
-    require_api_auth_headers(headers)
+    ctx = require_api_auth_headers(headers)
     if api_auth_enabled():
         # /search/debug exposes retrieval internals: when the API is
         # auth-protected, an API key alone is not enough — the admin token
         # is enforced even if admin auth is not globally enabled.
         enforce_admin_token(headers)
+    return ctx
 
 
-def require_search_debug_access(request: Request) -> None:
-    require_search_debug_access_headers(request.headers)
+def require_search_debug_access(request: Request) -> ApiAuthContext:
+    return require_search_debug_access_headers(request.headers)

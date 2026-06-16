@@ -295,3 +295,32 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
 def list_jobs() -> List[Dict[str, Any]]:
     with _LOCK:
         return sorted((dict(r) for r in _JOBS.values()), key=lambda r: r["created_at"], reverse=True)
+
+
+def staging_collection_status(collection: str, *, tenant_id: str) -> Dict[str, Any]:
+    # Prompt073 allowlist: only successful Prompt072 execute jobs may be queried
+    # as staging collections. This registry is in-memory by design today.
+    target = str(collection or "").strip()
+    tenant = str(tenant_id or "").strip()
+    found_collection = False
+    found_for_tenant = False
+    with _LOCK:
+        jobs = list(_JOBS.values())
+    for job in jobs:
+        if str(job.get("collection") or "").strip() != target:
+            continue
+        found_collection = True
+        if str(job.get("expected_tenant") or "").strip() != tenant:
+            continue
+        found_for_tenant = True
+        if (
+            str(job.get("mode") or "") == "raw_document_execute"
+            and str(job.get("status") or "") == "ok"
+            and bool(job.get("vectorstore_mutated"))
+        ):
+            return {"allowed": True, "reason": "prompt072_execute_job_found"}
+    if found_for_tenant:
+        return {"allowed": False, "reason": "staging_collection_not_executed"}
+    if found_collection:
+        return {"allowed": False, "reason": "staging_collection_forbidden_for_tenant"}
+    return {"allowed": False, "reason": "staging_collection_unknown"}

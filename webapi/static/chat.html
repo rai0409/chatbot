@@ -35,8 +35,11 @@
   .topbar .hint { font-size: 11px; color: var(--muted); }
   details.settings { font-size: 12px; color: var(--muted); }
   details.settings summary { cursor: pointer; }
-  details.settings .fields { display: flex; gap: 8px; margin-top: 8px; }
+  details.settings .fields { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
   details.settings input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+  .query-scope { margin-top: 8px; font-size: 11px; color: var(--muted); }
+  .scope-badge { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; background: var(--panel); margin-right: 4px; }
+  .scope-badge.staging { border-color: #d8b35d; color: #6f4d00; background: var(--warn-bg); }
   #log { flex: 1; overflow: auto; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
   .turn { max-width: 760px; width: 100%; align-self: center; }
   .q { font-weight: 600; background: var(--panel); border: 1px solid var(--line);
@@ -98,6 +101,11 @@
         <div class="fields">
           <input id="apiKey" type="password" autocomplete="off" placeholder="APIキー（認証有効時のみ・ページに保存しません）" />
           <input id="tenantId" type="text" autocomplete="off" placeholder="テナントID（既定 default）" />
+          <input id="stagingCollection" type="text" autocomplete="off" placeholder="ステージングコレクション（非本番）" hidden />
+        </div>
+        <div class="query-scope" id="queryScope">
+          <span class="scope-badge" id="tenantBadge">tenant: default</span>
+          <span class="scope-badge" id="collectionBadge">collection: served default</span>
         </div>
       </details>
     </header>
@@ -129,6 +137,9 @@
   var sendBtn = document.getElementById("send");
   var apiKeyEl = document.getElementById("apiKey");
   var tenantEl = document.getElementById("tenantId");
+  var stagingCollectionEl = document.getElementById("stagingCollection");
+  var tenantBadge = document.getElementById("tenantBadge");
+  var collectionBadge = document.getElementById("collectionBadge");
   var citationsEl = document.getElementById("citations");
   var newChatBtn = document.getElementById("newChat");
 
@@ -148,6 +159,16 @@
     return h;
   }
   function tenant() { return (tenantEl.value || "").trim() || "default"; }
+  function stagingCollection() { return (stagingCollectionEl && !stagingCollectionEl.hidden) ? (stagingCollectionEl.value || "").trim() : ""; }
+  function updateScope() {
+    var t = tenant();
+    var c = stagingCollection();
+    if (tenantBadge) tenantBadge.textContent = "tenant: " + t;
+    if (collectionBadge) {
+      collectionBadge.textContent = c ? "collection: staging " + c : "collection: served default";
+      collectionBadge.className = c ? "scope-badge staging" : "scope-badge";
+    }
+  }
 
   function renderCitations(citations) {
     if (!citations || !citations.length) {
@@ -210,16 +231,20 @@
     renderCitations(data && data.citations);
   }
 
-  function streamChat(question, turn, ansEl, token, tenantId) {
+  function streamChat(question, turn, ansEl, token, tenantId, collectionName) {
+    var body = { question: question, tenant_id: tenantId, trace_id: token };
+    if (collectionName) body.staging_collection = collectionName;
     return fetch("/chat/stream", {
       method: "POST", headers: headers(),
-      body: JSON.stringify({ question: question, tenant_id: tenantId, trace_id: token })
+      body: JSON.stringify(body)
     }).then(function (resp) {
       if (!resp.ok || !resp.body) {
         var e = document.createElement("div");
         e.className = "err";
         e.textContent = resp.status === 401 ? "認証が必要です。接続設定でキーを入力してください。"
           : resp.status === 403 ? "このテナントへのアクセス権がありません。"
+          : resp.status === 404 ? "指定したステージングコレクションは利用できません。"
+          : resp.status === 409 ? "指定したステージングコレクションはまだ検索できません。"
           : resp.status === 429 ? "アクセスが集中しています。少し待って再試行してください。"
           : "回答を取得できませんでした。";
         turn.appendChild(e);
@@ -272,15 +297,21 @@
     var question = (qEl.value || "").trim();
     if (!question) return;
     var tenantId = tenant();
+    var collectionName = stagingCollection();
     var token = uuid();
     var turn = document.createElement("div"); turn.className = "turn";
     var q = document.createElement("div"); q.className = "q"; q.textContent = question;
+    var scope = document.createElement("div");
+    scope.className = "query-scope";
+    scope.innerHTML = '<span class="scope-badge">tenant: ' + esc(tenantId) + '</span> ' +
+      '<span class="' + (collectionName ? 'scope-badge staging' : 'scope-badge') + '">collection: ' +
+      esc(collectionName ? "staging " + collectionName : "served default") + '</span>';
     var a = document.createElement("div"); a.className = "a"; a.textContent = "…";
-    turn.appendChild(q); turn.appendChild(a); log.appendChild(turn);
+    turn.appendChild(q); turn.appendChild(scope); turn.appendChild(a); log.appendChild(turn);
     log.scrollTop = log.scrollHeight;
     qEl.value = ""; sendBtn.disabled = true;
     citationsEl.innerHTML = '<div class="empty">回答を取得中…</div>';
-    streamChat(question, turn, a, token, tenantId).then(function () {
+    streamChat(question, turn, a, token, tenantId, collectionName).then(function () {
       sendBtn.disabled = false;
       if (a.textContent === "…") a.textContent = "";
       log.scrollTop = log.scrollHeight;
@@ -311,11 +342,18 @@
         var link = document.getElementById("adminLink");
         if (link) link.hidden = false;
       }
+      if (ctx && (ctx.role === "admin" || ctx.role === "operator") && stagingCollectionEl) {
+        stagingCollectionEl.hidden = false;
+      }
+      updateScope();
     }).catch(function () {});
   }
 
   sendBtn.addEventListener("click", ask);
   newChatBtn.addEventListener("click", newConversation);
+  tenantEl.addEventListener("input", updateScope);
+  if (stagingCollectionEl) stagingCollectionEl.addEventListener("input", updateScope);
+  updateScope();
   applyBranding();
   applyRole();
   qEl.addEventListener("keydown", function (e) {

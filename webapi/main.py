@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from contextlib import contextmanager
@@ -123,12 +124,15 @@ class ChatRequest(BaseModel):
     max_context_chars: Optional[int] = None
     trace_id: Optional[str] = None
     tenant_id: Optional[str] = None
+    staging_collection: Optional[str] = None
 
 
 class SearchRequest(BaseModel):
     query: str
     top_k: Optional[int] = None
     trace_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    staging_collection: Optional[str] = None
 
 
 class SearchDebugRequest(BaseModel):
@@ -140,6 +144,8 @@ class SearchDebugRequest(BaseModel):
     generate_answer: bool = True
     include_approved_similar_candidates: bool = False
     approved_similar_top_k: Optional[int] = None
+    tenant_id: Optional[str] = None
+    staging_collection: Optional[str] = None
 
 
 class ProductPreviewChatRequest(BaseModel):
@@ -1250,14 +1256,49 @@ def _annotate_chat_profile(event: Dict[str, Any], runtime_profile: Optional[Dict
     event["tenant_profile_decision"] = runtime_profile.get("decision")
 
 
+_STAGING_COLLECTION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def _resolve_staging_collection(collection: Optional[str], *, tenant_id: str) -> Optional[str]:
+    name = str(collection or "").strip()
+    if not name:
+        return None
+    if ingestion_jobs.is_production_collection(name):
+        raise HTTPException(status_code=400, detail="refusing production/default collection for staging query")
+    if not _STAGING_COLLECTION_RE.fullmatch(name):
+        raise HTTPException(status_code=400, detail="invalid staging collection name")
+    status = ingestion_jobs.staging_collection_status(name, tenant_id=tenant_id)
+    if status.get("allowed"):
+        return name
+    reason = str(status.get("reason") or "staging_collection_unavailable")
+    if reason == "staging_collection_forbidden_for_tenant":
+        raise HTTPException(status_code=403, detail="staging collection is not authorized for this tenant")
+    if reason == "staging_collection_unknown":
+        raise HTTPException(status_code=404, detail="staging collection is not available for query")
+    raise HTTPException(status_code=409, detail="staging collection is not ready for query")
+
+
+def _collection_meta(collection_name: Optional[str]) -> Dict[str, Any]:
+    if not collection_name:
+        return {"query_collection_mode": "served_default", "query_collection": None}
+    return {"query_collection_mode": "staging", "query_collection": collection_name}
+
+
+def _annotate_collection_event(event: Dict[str, Any], collection_name: Optional[str]) -> None:
+    if collection_name:
+        event["query_collection"] = collection_name
+        event["query_collection_mode"] = "staging"
+
+
 @app.post("/chat")
 def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited)):
     global _total_requests, _error_requests
     _total_requests += 1
     tenant_id = normalize_tenant_id(req.tenant_id)
     enforce_tenant_authorization(api_auth, tenant_id)
+    staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
     try:
-        approved = _approved_qa_lookup(req.question, tenant_id=tenant_id)
+        approved = None if staging_collection else _approved_qa_lookup(req.question, tenant_id=tenant_id)
         if approved is not None:
             payload = _approved_chat_payload(approved)
             append_audit_event(
@@ -1281,7 +1322,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         effective_max_context_chars = req.max_context_chars or config.MAX_CONTEXT_CHARS
         _record_chat_profile_metric(runtime_profile)
         cache_key = None
-        if answer_cache.enabled():
+        if answer_cache.enabled() and not staging_collection:
             cache_key = answer_cache.build_key(
                 req.question,
                 top_k=effective_top_k,
@@ -1308,13 +1349,15 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
                 return cached
 
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
-        ans, trace = answer_query_with_trace(
-            req.question,
-            client=client,
-            top_k=effective_top_k,
-            max_context_chars=effective_max_context_chars,
-            tenant_id=tenant_id,
-        )
+        answer_kwargs: Dict[str, Any] = {
+            "client": client,
+            "top_k": effective_top_k,
+            "max_context_chars": effective_max_context_chars,
+            "tenant_id": tenant_id,
+        }
+        if staging_collection:
+            answer_kwargs["collection_name"] = staging_collection
+        ans, trace = answer_query_with_trace(req.question, **answer_kwargs)
         chat_event = {
             "request_id": trace.get("request_id"),
             "trace_id": req.trace_id or trace.get("request_id"),
@@ -1329,6 +1372,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
             "latency_ms": trace.get("latency_ms"),
             "cache_hit": False,
         }
+        _annotate_collection_event(chat_event, staging_collection)
         _annotate_chat_profile(chat_event, runtime_profile)
         append_audit_event("chat", chat_event)
         _record_chat_outcome_metrics(
@@ -1338,6 +1382,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
             used_fallback=bool(trace.get("final_used_fallback", ans.used_fallback)),
         )
         payload = ans.to_dict()
+        payload.update(_collection_meta(staging_collection))
         if cache_key is not None and ans.guard_reason is None and not ans.used_fallback:
             # Only clean grounded answers are cacheable; guard/no-answer and
             # extractive-fallback responses are never cached.
@@ -1376,11 +1421,12 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
     # Raise before the StreamingResponse is constructed so an unauthorized
     # tenant gets a plain 403 and no stream ever starts.
     enforce_tenant_authorization(api_auth, tenant_id)
+    staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
 
     def _events():
         global _error_requests
         try:
-            approved = _approved_qa_lookup(req.question, tenant_id=tenant_id)
+            approved = None if staging_collection else _approved_qa_lookup(req.question, tenant_id=tenant_id)
             if approved is not None:
                 payload = _approved_chat_payload(approved)
                 append_audit_event(
@@ -1406,16 +1452,20 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
             client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
             result = None
             trace = None
-            for name, payload in answer_query_stream(
-                req.question,
-                client=client,
-                top_k=effective_top_k,
-                max_context_chars=req.max_context_chars or config.MAX_CONTEXT_CHARS,
-                tenant_id=tenant_id,
-            ):
+            stream_kwargs: Dict[str, Any] = {
+                "client": client,
+                "top_k": effective_top_k,
+                "max_context_chars": req.max_context_chars or config.MAX_CONTEXT_CHARS,
+                "tenant_id": tenant_id,
+            }
+            if staging_collection:
+                stream_kwargs["collection_name"] = staging_collection
+            for name, payload in answer_query_stream(req.question, **stream_kwargs):
                 if name == "final":
                     result, trace = payload
-                    yield _sse_event("final", result.to_dict())
+                    final_payload = result.to_dict()
+                    final_payload.update(_collection_meta(staging_collection))
+                    yield _sse_event("final", final_payload)
                 else:
                     yield _sse_event(name, payload)
             if result is not None and trace is not None:
@@ -1434,6 +1484,7 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                     "answer_mode": trace.get("answer_mode"),
                     "streamed": True,
                 }
+                _annotate_collection_event(stream_event, staging_collection)
                 _annotate_chat_profile(stream_event, runtime_profile)
                 append_audit_event("chat", stream_event)
                 _record_chat_outcome_metrics(
@@ -1895,15 +1946,25 @@ def delete_chat_thread(thread_id: str, api_auth: ApiAuthContext = Depends(requir
 
 
 @app.post("/search")
-def search(req: SearchRequest, _api_auth: None = Depends(require_api_auth_rate_limited)):
+def search(req: SearchRequest, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited)):
     global _total_requests, _error_requests
     _total_requests += 1
+    tenant_id = normalize_tenant_id(req.tenant_id)
+    enforce_tenant_authorization(api_auth, tenant_id)
+    staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
     try:
         client = _embedding_client()
         hits = retrieve_chunks(
-            req.query, client=client, top_k=req.top_k or config.TOP_K
+            req.query,
+            client=client,
+            top_k=req.top_k or config.TOP_K,
+            tenant_id=tenant_id,
+            collection_name=staging_collection,
+            create_collection_if_missing=not bool(staging_collection),
         )
         return {
+            **_collection_meta(staging_collection),
+            "tenant_id": tenant_id,
             "hits": [
                 {"text": h.text, "metadata": h.metadata, "score": h.score}
                 for h in hits
@@ -1916,9 +1977,12 @@ def search(req: SearchRequest, _api_auth: None = Depends(require_api_auth_rate_l
 
 
 @app.post("/search/debug")
-def search_debug(req: SearchDebugRequest, _access: None = Depends(require_search_debug_access)):
+def search_debug(req: SearchDebugRequest, api_auth: ApiAuthContext = Depends(require_search_debug_access)):
     global _total_requests, _error_requests
     _total_requests += 1
+    tenant_id = normalize_tenant_id(req.tenant_id)
+    enforce_tenant_authorization(api_auth, tenant_id)
+    staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
     try:
         client = _embedding_client()
         ans = None
@@ -1928,6 +1992,8 @@ def search_debug(req: SearchDebugRequest, _access: None = Depends(require_search
                 client=client,
                 top_k=req.top_k or config.TOP_K,
                 max_context_chars=req.max_context_chars or config.MAX_CONTEXT_CHARS,
+                tenant_id=tenant_id,
+                collection_name=staging_collection,
             )
         else:
             trace = debug_retrieve_with_trace(
@@ -1935,6 +2001,8 @@ def search_debug(req: SearchDebugRequest, _access: None = Depends(require_search
                 client=client,
                 top_k=req.top_k or config.TOP_K,
                 max_context_chars=req.max_context_chars or config.MAX_CONTEXT_CHARS,
+                tenant_id=tenant_id,
+                collection_name=staging_collection,
             )
         trace_id = req.trace_id or str(trace.get("request_id") or "")
         max_preview_chars = 1200 if req.include_context else 300
@@ -1995,6 +2063,8 @@ def search_debug(req: SearchDebugRequest, _access: None = Depends(require_search
             "approved_exact_match_found": approved_exact is not None if include_approved_similar else False,
             "approved_similar_candidates": approved_similar_candidates,
             "latency_ms": trace.get("latency_ms"),
+            **_collection_meta(staging_collection),
+            "tenant_id": tenant_id,
         }
         append_audit_event(
             "search_debug",
@@ -2013,6 +2083,7 @@ def search_debug(req: SearchDebugRequest, _access: None = Depends(require_search
                 "after_parent_expansion_count": len(after_parent_expansion),
                 "citations_count": response["citations_count"],
                 "approved_similar_candidate_count": len(approved_similar_candidates),
+                "tenant_id": tenant_id,
                 "top_approved_similar_qa_id": (
                     approved_similar_candidates[0].get("qa_id")
                     if approved_similar_candidates

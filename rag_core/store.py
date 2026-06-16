@@ -42,6 +42,7 @@ def get_vectorstore(
     collection_name: Optional[str] = None,
     *,
     verify_embedding_fingerprint: bool = True,
+    create_if_missing: bool = True,
 ):
     client = _get_persistent_client(config.VECTORSTORE_DIR)
     name = (
@@ -50,9 +51,12 @@ def get_vectorstore(
         or config.VECTORSTORE_COLLECTION_NAME
         or "rag_chunks"
     )
-    collection = client.get_or_create_collection(
-        name=name, metadata={"hnsw:space": "cosine"}
-    )
+    if create_if_missing:
+        collection = client.get_or_create_collection(
+            name=name, metadata={"hnsw:space": "cosine"}
+        )
+    else:
+        collection = client.get_collection(name=name)
     if verify_embedding_fingerprint:
         verify_collection_fingerprint(collection)
     return collection
