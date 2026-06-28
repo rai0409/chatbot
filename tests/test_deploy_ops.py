@@ -50,7 +50,7 @@ def test_env_generation_writes_placeholders_and_marker(tmp_path):
     assert result.returncode == 0, result.stderr
     content = env_file.read_text(encoding="utf-8")
     assert content.startswith("# generated-by=deploy_smoke.sh")
-    assert "OPENAI_API_KEY=sk-smoke-placeholder-not-a-real-key" in content
+    assert "OPENAI_API_KEY=OPENAI_KEY_PLACEHOLDER_NOT_REAL" in content
     assert "API_AUTH_ENABLED=true" in content
     assert "SEARCH_DEBUG_ENABLED=false" in content
 

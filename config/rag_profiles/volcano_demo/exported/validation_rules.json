@@ -1,0 +1,86 @@
+{
+  "rules": [
+    {
+      "rule_id": "carry_items_validation",
+      "applies_to_question_type": "list_items",
+      "when_question_contains_any": [
+        "防災用品",
+        "持っていく",
+        "持参",
+        "装備"
+      ],
+      "answer_must_contain_any": [
+        "ヘルメット",
+        "ゴーグル",
+        "マスク",
+        "ヘッドライト",
+        "懐中電灯"
+      ],
+      "answer_must_contain_all": [],
+      "answer_should_not_contain_any": [
+        "防災行政無線",
+        "山小屋の屋根",
+        "避難路",
+        "ロープ設置"
+      ],
+      "fallback_if_failed": true,
+      "enabled": true
+    },
+    {
+      "rule_id": "active_count_validation",
+      "applies_to_question_type": "count_fact",
+      "when_question_contains_any": [
+        "活火山",
+        "いくつ",
+        "数"
+      ],
+      "answer_must_contain_any": [
+        "111"
+      ],
+      "answer_must_contain_all": [],
+      "answer_should_not_contain_any": [],
+      "fallback_if_failed": true,
+      "enabled": true
+    },
+    {
+      "rule_id": "jma_monitoring_validation",
+      "applies_to_question_type": "measure",
+      "when_question_contains_any": [
+        "気象庁",
+        "監視",
+        "観測"
+      ],
+      "answer_must_contain_any": [
+        "50火山",
+        "24時間",
+        "常時観測火山",
+        "噴火警戒レベル"
+      ],
+      "answer_must_contain_all": [],
+      "answer_should_not_contain_any": [],
+      "fallback_if_failed": true,
+      "enabled": true
+    },
+    {
+      "rule_id": "local_measure_validation",
+      "applies_to_question_type": "measure",
+      "when_question_contains_any": [
+        "地方公共団体",
+        "自治体",
+        "整備",
+        "対策"
+      ],
+      "answer_must_contain_any": [
+        "退避壕",
+        "避難施設",
+        "避難促進施設",
+        "防災行政無線",
+        "ビジターセンター"
+      ],
+      "answer_must_contain_all": [],
+      "answer_should_not_contain_any": [],
+      "fallback_if_failed": true,
+      "enabled": true
+    }
+  ]
+}

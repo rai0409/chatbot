@@ -57,7 +57,7 @@ write_env_file() {
   cat > "$ENV_FILE" <<EOF
 $MARKER
 # Placeholder values only — written from scratch, never copied from .env.
-OPENAI_API_KEY=sk-smoke-placeholder-not-a-real-key
+OPENAI_API_KEY=OPENAI_KEY_PLACEHOLDER_NOT_REAL
 CHAT_MODEL=gpt-4o-mini
 EMBED_PROVIDER=local
 API_AUTH_ENABLED=true

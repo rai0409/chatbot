@@ -23,3 +23,35 @@ restore_staging_*/
 chatbot_src.zip
 output_app.zip
 output_ops.zip
+
+# Local vector DB / generated data
+.chroma/
+chroma/
+chroma_db/
+data/chroma/
+
+# Generated artifacts / evaluations
+artifacts/
+
+# Secrets / env
+.env
+.env.*
+*.pem
+*.key
+serviceAccount*.json
+*-firebase-adminsdk-*.json
+config/credentials.json
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Backups
+*.bak
+*.bak_*
