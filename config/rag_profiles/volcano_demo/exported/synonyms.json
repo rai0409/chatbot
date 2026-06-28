@@ -1,0 +1,45 @@
+{
+  "synonyms": [
+    {
+      "canonical": "防災用品",
+      "synonyms": [
+        "防災グッズ",
+        "携行品",
+        "装備",
+        "持参物",
+        "持っていくもの"
+      ],
+      "description": "同義語",
+      "enabled": true
+    },
+    {
+      "canonical": "登山届",
+      "synonyms": [
+        "登山計画書",
+        "届出",
+        "オンライン提出"
+      ],
+      "description": "同義語",
+      "enabled": true
+    },
+    {
+      "canonical": "活火山",
+      "synonyms": [
+        "活動火山",
+        "火山"
+      ],
+      "description": "表記揺れ",
+      "enabled": true
+    },
+    {
+      "canonical": "噴火警戒レベル",
+      "synonyms": [
+        "警戒レベル",
+        "噴火警報",
+        "噴火予報"
+      ],
+      "description": "関連語",
+      "enabled": true
+    }
+  ]
+}

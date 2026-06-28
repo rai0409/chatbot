@@ -10,6 +10,9 @@ from rag_core import embedding_provider
 from rag_core.cross_encoder_reranker import rerank as cross_encoder_rerank
 from rag_core.ja_text import normalize_japanese_text
 from rag_core.keyword_scorer import apply_keyword_boost, classify_query_type, score_keyword_match
+from rag_core.profile_loader import load_rag_profile
+from rag_core.profile_validation import validate_answer_with_profile
+from rag_core.question_types import detect_question_type
 from rag_core.reranker import rerank_chunks
 from rag_core.retrieval import QueryEmbeddingBatch, RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, hybrid_retrieve, normalize_tenant_id, vector_retrieve
 from rag_core.utils import ensure_openai_client
@@ -535,6 +538,90 @@ def _build_answer_result(
     )
 
 
+def _profile_validation_skipped(
+    rag_profile_id: str,
+    question_type: str,
+    warnings: Sequence[str],
+    reason: str,
+) -> Dict[str, object]:
+    return {
+        "passed": True,
+        "skipped": True,
+        "matched_rule_id": "",
+        "question_type": question_type or "other",
+        "missing_any": [],
+        "missing_all": [],
+        "forbidden_hits": [],
+        "fallback_if_failed": False,
+        "reason": reason,
+        "warnings": list(warnings),
+        "rag_profile_id": rag_profile_id,
+    }
+
+
+def _apply_profile_validation(
+    question: str,
+    result: AnswerResult,
+    trace: Dict[str, object],
+    state: "_RetrievalTraceState",
+    *,
+    rag_profile_id: Optional[str],
+    started_at: float,
+) -> AnswerResult:
+    profile_id = rag_profile_id or "default"
+    profile = load_rag_profile(profile_id)
+    warnings = profile.get("warnings") if isinstance(profile, dict) else []
+    if not isinstance(warnings, list):
+        warnings = []
+
+    question_type = detect_question_type(question, profile)
+    trace["rag_profile_id"] = profile_id
+    trace["question_type"] = question_type
+
+    if warnings:
+        trace["profile_validation"] = _profile_validation_skipped(
+            profile_id,
+            question_type,
+            [str(item) for item in warnings],
+            "profile load warning; validation skipped",
+        )
+        return result
+
+    validation_result = validate_answer_with_profile(question, result.answer_text, question_type, profile)
+    trace["profile_validation"] = validation_result
+    if validation_result.get("passed") or not validation_result.get("fallback_if_failed"):
+        return result
+
+    raw = extractive_fallback(question, state.selected_context)
+    fallback_result = _build_answer_result(
+        raw,
+        state.selected_context,
+        intent=result.intent,
+        guard_reason=result.guard_reason,
+        used_fallback=True,
+        retrieved=state.retrieved,
+        rewritten_query=state.rewritten_query,
+        augmented_query=state.augmented_query,
+    )
+    fallback_validation = validate_answer_with_profile(
+        question,
+        fallback_result.answer_text,
+        question_type,
+        profile,
+    )
+    trace["profile_validation_after_fallback"] = fallback_validation
+    _set_final_trace(
+        trace,
+        started_at,
+        state.selected_context,
+        guard_reason=fallback_result.guard_reason,
+        used_fallback=True,
+        answer_mode="fallback",
+        citations_count=len(fallback_result.citations),
+    )
+    return fallback_result
+
+
 def _retrieve_and_rerank(
     question: str,
     augmented_query: str,
@@ -766,6 +853,9 @@ def _build_retrieval_trace(
 
     if guard_reason is None:
         guard_reason = guard_merged_top(q, intent, guard_grounded, retrieved)
+        if collection_name and guard_reason in {"too_general", "soft_distance"} and grounded:
+            trace["staging_guard_bypass_reason"] = guard_reason
+            guard_reason = None
         used_fallback = guard_reason is not None
 
     if guard_reason == "missing_procedure_evidence":
@@ -829,6 +919,7 @@ def _answer_query_impl(
     intent_override: Optional[str] = None,
     tenant_id: str = "default",
     collection_name: Optional[str] = None,
+    rag_profile_id: Optional[str] = None,
 ) -> Tuple[AnswerResult, Dict[str, object]]:
     started_at = time.perf_counter()
     request_id = uuid.uuid4().hex[:12]
@@ -870,6 +961,14 @@ def _answer_query_impl(
             used_fallback=result.used_fallback,
             answer_mode="fallback",
             citations_count=len(result.citations),
+        )
+        result = _apply_profile_validation(
+            question,
+            result,
+            trace,
+            state,
+            rag_profile_id=rag_profile_id,
+            started_at=started_at,
         )
         return result, trace
 
@@ -913,10 +1012,18 @@ def _answer_query_impl(
         answer_mode="fallback" if used_fallback else "grounded",
         citations_count=len(result.citations),
     )
+    result = _apply_profile_validation(
+        question,
+        result,
+        trace,
+        state,
+        rag_profile_id=rag_profile_id,
+        started_at=started_at,
+    )
     return result, trace
 
 
-def answer_query(question: str, client=None, top_k: int = 20, max_context_chars: int = 8000, intent_override: Optional[str] = None, tenant_id: str = "default", collection_name: Optional[str] = None) -> AnswerResult:
+def answer_query(question: str, client=None, top_k: int = 20, max_context_chars: int = 8000, intent_override: Optional[str] = None, tenant_id: str = "default", collection_name: Optional[str] = None, rag_profile_id: Optional[str] = None) -> AnswerResult:
     result, _ = _answer_query_impl(
         question,
         client=client,
@@ -925,6 +1032,7 @@ def answer_query(question: str, client=None, top_k: int = 20, max_context_chars:
         intent_override=intent_override,
         tenant_id=tenant_id,
         collection_name=collection_name,
+        rag_profile_id=rag_profile_id,
     )
     return result
 
@@ -937,6 +1045,7 @@ def answer_query_with_trace(
     intent_override: Optional[str] = None,
     tenant_id: str = "default",
     collection_name: Optional[str] = None,
+    rag_profile_id: Optional[str] = None,
 ) -> Tuple[AnswerResult, Dict[str, object]]:
     return _answer_query_impl(
         question,
@@ -946,6 +1055,7 @@ def answer_query_with_trace(
         intent_override=intent_override,
         tenant_id=tenant_id,
         collection_name=collection_name,
+        rag_profile_id=rag_profile_id,
     )
 
 

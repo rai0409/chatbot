@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import chromadb
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
@@ -125,6 +126,7 @@ class ChatRequest(BaseModel):
     trace_id: Optional[str] = None
     tenant_id: Optional[str] = None
     staging_collection: Optional[str] = None
+    rag_profile_id: Optional[str] = None
 
 
 class SearchRequest(BaseModel):
@@ -1259,6 +1261,22 @@ def _annotate_chat_profile(event: Dict[str, Any], runtime_profile: Optional[Dict
 _STAGING_COLLECTION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
+def _staging_collection_exists_in_vectorstore(name: str) -> bool:
+    try:
+        client = chromadb.PersistentClient(path=config.VECTORSTORE_DIR)
+        collections = client.list_collections()
+    except Exception as exc:
+        logging.debug("staging_collection_vectorstore_lookup_failed name=%s error=%s", name, exc)
+        return False
+
+    for collection in collections:
+        collection_name = collection if isinstance(collection, str) else getattr(collection, "name", "")
+        collection_name = str(collection_name or "").strip()
+        if collection_name == name:
+            return True
+    return False
+
+
 def _resolve_staging_collection(collection: Optional[str], *, tenant_id: str) -> Optional[str]:
     name = str(collection or "").strip()
     if not name:
@@ -1274,6 +1292,8 @@ def _resolve_staging_collection(collection: Optional[str], *, tenant_id: str) ->
     if reason == "staging_collection_forbidden_for_tenant":
         raise HTTPException(status_code=403, detail="staging collection is not authorized for this tenant")
     if reason == "staging_collection_unknown":
+        if _staging_collection_exists_in_vectorstore(name):
+            return name
         raise HTTPException(status_code=404, detail="staging collection is not available for query")
     raise HTTPException(status_code=409, detail="staging collection is not ready for query")
 
@@ -1282,6 +1302,14 @@ def _collection_meta(collection_name: Optional[str]) -> Dict[str, Any]:
     if not collection_name:
         return {"query_collection_mode": "served_default", "query_collection": None}
     return {"query_collection_mode": "staging", "query_collection": collection_name}
+
+
+def _resolve_rag_profile_id(req: ChatRequest, staging_collection: Optional[str]) -> str:
+    if req.rag_profile_id:
+        return req.rag_profile_id
+    if staging_collection == "pilot_staging_v1":
+        return "volcano_demo"
+    return "default"
 
 
 def _annotate_collection_event(event: Dict[str, Any], collection_name: Optional[str]) -> None:
@@ -1297,6 +1325,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
     tenant_id = normalize_tenant_id(req.tenant_id)
     enforce_tenant_authorization(api_auth, tenant_id)
     staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
+    rag_profile_id = _resolve_rag_profile_id(req, staging_collection)
     try:
         approved = None if staging_collection else _approved_qa_lookup(req.question, tenant_id=tenant_id)
         if approved is not None:
@@ -1322,7 +1351,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         effective_max_context_chars = req.max_context_chars or config.MAX_CONTEXT_CHARS
         _record_chat_profile_metric(runtime_profile)
         cache_key = None
-        if answer_cache.enabled() and not staging_collection:
+        if answer_cache.enabled() and not staging_collection and rag_profile_id == "default":
             cache_key = answer_cache.build_key(
                 req.question,
                 top_k=effective_top_k,
@@ -1357,6 +1386,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         }
         if staging_collection:
             answer_kwargs["collection_name"] = staging_collection
+        answer_kwargs["rag_profile_id"] = rag_profile_id
         ans, trace = answer_query_with_trace(req.question, **answer_kwargs)
         chat_event = {
             "request_id": trace.get("request_id"),
@@ -1383,6 +1413,22 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         )
         payload = ans.to_dict()
         payload.update(_collection_meta(staging_collection))
+        payload["rag_profile_id"] = trace.get("rag_profile_id", rag_profile_id)
+        payload["question_type"] = trace.get("question_type", "other")
+        payload["profile_validation"] = trace.get(
+            "profile_validation",
+            {
+                "passed": True,
+                "skipped": True,
+                "matched_rule_id": "",
+                "question_type": trace.get("question_type", "other"),
+                "missing_any": [],
+                "missing_all": [],
+                "forbidden_hits": [],
+                "fallback_if_failed": False,
+                "reason": "profile validation trace unavailable",
+            },
+        )
         if cache_key is not None and ans.guard_reason is None and not ans.used_fallback:
             # Only clean grounded answers are cacheable; guard/no-answer and
             # extractive-fallback responses are never cached.

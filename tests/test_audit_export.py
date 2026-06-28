@@ -14,7 +14,7 @@ def _events():
     return [
         {"timestamp": "2026-06-14T01:00:00Z", "kind": "chat", "tenant_id": "tenant_a",
          "answer_mode": "grounded", "guard_reason": None, "used_fallback": False,
-         "citations_count": 2, "question": "機密の質問 sk-abcd1234efgh5678 alice@example.com",
+         "citations_count": 2, "question": "機密の質問 OPENAI_KEY_REDACTED_EXAMPLE alice@example.com",
          "top_source_docs": ["secret_doc.pdf"]},
         {"timestamp": "2026-06-14T01:05:00Z", "kind": "chat", "tenant_id": "tenant_a",
          "answer_mode": "fallback", "guard_reason": "too_general", "used_fallback": True,
@@ -28,7 +28,7 @@ def _events():
 def test_export_drops_raw_question_and_secrets():
     rows = safe_export(_events())
     blob = json.dumps(rows, ensure_ascii=False)
-    for forbidden in ("機密の質問", "sk-abcd1234efgh5678", "alice@example.com",
+    for forbidden in ("機密の質問", "OPENAI_KEY_REDACTED_EXAMPLE", "alice@example.com",
                       "another raw question", "secret_doc.pdf", "別テナントの質問"):
         assert forbidden not in blob
     # aggregate fields only
@@ -52,5 +52,5 @@ def test_cli_redacts(tmp_path):
     f.write_text("\n".join(json.dumps(e, ensure_ascii=False) for e in _events()) + "\n", encoding="utf-8")
     proc = subprocess.run([sys.executable, str(CLI), str(f)], capture_output=True, text=True)
     assert proc.returncode == 0
-    for forbidden in ("機密の質問", "sk-abcd1234efgh5678", "alice@example.com"):
+    for forbidden in ("機密の質問", "OPENAI_KEY_REDACTED_EXAMPLE", "alice@example.com"):
         assert forbidden not in proc.stdout

@@ -135,7 +135,7 @@ def test_openai_provider_creates_client_from_config_when_missing(monkeypatch):
             self._client = _FakeOpenAIClient([[0.5, 0.6]])
             self.embeddings = self._client.embeddings
 
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "OPENAI_KEY_TEST_PLACEHOLDER")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
     monkeypatch.setenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
     monkeypatch.setattr(embedding_provider, "_load_openai_class", lambda: FakeOpenAI)
@@ -144,7 +144,7 @@ def test_openai_provider_creates_client_from_config_when_missing(monkeypatch):
 
     assert embeddings == [[0.5, 0.6]]
     assert created["kwargs"] == {
-        "api_key": "sk-test",
+        "api_key": "OPENAI_KEY_TEST_PLACEHOLDER",
         "base_url": "https://example.test/v1",
     }
 
