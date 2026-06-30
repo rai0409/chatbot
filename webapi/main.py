@@ -20,6 +20,7 @@ from rag_core import answer_cache
 from rag_core import approved_similar
 from rag_core import approved_similar_feature_reranker
 from rag_core import embedding_provider
+from rag_core.approved_qa_exact_lookup import lookup_approved_qa_exact
 from rag_core.approved_similar import search_approved_similar_candidates
 from rag_core.approved_qa import ApprovedAnswer, ApprovedQAIndex, load_approved_qa, lookup_approved_answer
 from rag_core.audit_log import (
@@ -1999,11 +2000,25 @@ def search(req: SearchRequest, api_auth: ApiAuthContext = Depends(require_api_au
     enforce_tenant_authorization(api_auth, tenant_id)
     staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
     try:
+        top_k = req.top_k or config.TOP_K
+
+        # Approved QA exact lookup:
+        # 確定QAと質問が完全一致する場合は、vector検索より前に必ず返す。
+        # staging_collection指定時はステージング検証を優先するため exact bypass はしない。
+        if not staging_collection:
+            exact_hits = lookup_approved_qa_exact(req.query, limit=top_k)
+            if exact_hits:
+                return {
+                    **_collection_meta(staging_collection),
+                    "tenant_id": tenant_id,
+                    "hits": exact_hits[:top_k],
+                }
+
         client = _embedding_client()
         hits = retrieve_chunks(
             req.query,
             client=client,
-            top_k=req.top_k or config.TOP_K,
+            top_k=top_k,
             tenant_id=tenant_id,
             collection_name=staging_collection,
             create_collection_if_missing=not bool(staging_collection),
