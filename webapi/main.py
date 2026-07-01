@@ -403,6 +403,73 @@ def _approved_chat_payload(answer: ApprovedAnswer) -> Dict[str, Any]:
     }
 
 
+def _approved_exact_hit_to_chat_payload(hit: dict, question: str, tenant_id: str) -> Dict[str, Any]:
+    meta = dict(hit.get("metadata") or {})
+    approved_answer = str(
+        meta.get("approved_answer")
+        or meta.get("answer_text")
+        or hit.get("answer_text")
+        or ""
+    )
+    raw_citations = meta.get("approved_citations")
+    citations = []
+    if isinstance(raw_citations, list) and raw_citations:
+        for idx, citation in enumerate(raw_citations, start=1):
+            if not isinstance(citation, dict):
+                continue
+            payload = normalize_citation(citation)
+            payload["number"] = idx
+            citations.append(payload)
+    else:
+        source_pages = meta.get("source_pages")
+        if not source_pages:
+            page_start = meta.get("source_page_start")
+            page_end = meta.get("source_page_end")
+            if page_start and page_end and page_start != page_end:
+                source_pages = [page_start, page_end]
+            elif page_start:
+                source_pages = [page_start]
+        citation = normalize_citation(
+            {
+                "source_doc": meta.get("source_doc") or meta.get("doc_id") or "",
+                "source_pages": source_pages or [],
+                "chunk_id": meta.get("chunk_id") or meta.get("id") or hit.get("id"),
+                "title": meta.get("title"),
+                "tenant_id": tenant_id,
+            }
+        )
+        citation["number"] = 1
+        citations.append(citation)
+
+    qa_id = str(meta.get("qa_id") or meta.get("approved_qa_id") or meta.get("id") or hit.get("id") or "")
+    normalized_question = str(meta.get("normalized_question") or meta.get("question_text") or question)
+    return {
+        "answer": approved_answer,
+        "answer_text": approved_answer,
+        "answer_with_footnotes": approved_answer,
+        "intent": "approved_exact_match",
+        "guard_reason": None,
+        "used_fallback": False,
+        "abstained": False,
+        "citations": citations,
+        "retrieved": [],
+        "rewritten_query": "",
+        "augmented_query": "",
+        "answer_mode": "approved_exact_match",
+        "approved_qa_id": qa_id,
+        "normalized_question": normalized_question,
+        "retrieval_source": "approved_qa_exact",
+        "tenant_id": tenant_id,
+    }
+
+
+def _approved_exact_chat_lookup(question: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    hits = lookup_approved_qa_exact(question, limit=1)
+    if not hits:
+        return None
+    return _approved_exact_hit_to_chat_payload(hits[0], question, tenant_id)
+
+
 def _approved_product_citations(answer: ApprovedAnswer) -> List[Dict[str, Any]]:
     return _approved_chat_payload(answer)["citations"]
 
@@ -1347,6 +1414,26 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
             _record_chat_outcome_metrics(answer_mode="approved_exact_match")
             return payload
 
+        approved_exact_payload = None if staging_collection else _approved_exact_chat_lookup(req.question, tenant_id)
+        if approved_exact_payload is not None:
+            approved_exact_payload.update(_collection_meta(staging_collection))
+            append_audit_event(
+                "chat",
+                {
+                    "request_id": req.trace_id,
+                    "trace_id": req.trace_id,
+                    "tenant_id": tenant_id,
+                    "question": req.question,
+                    "normalized_question": approved_exact_payload.get("normalized_question"),
+                    "answer_mode": "approved_exact_match",
+                    "approved_qa_id": approved_exact_payload.get("approved_qa_id"),
+                    "retrieval_source": "approved_qa_exact",
+                    "citations_count": len(approved_exact_payload.get("citations") or []),
+                },
+            )
+            _record_chat_outcome_metrics(answer_mode="approved_exact_match")
+            return approved_exact_payload
+
         runtime_profile = resolve_chat_runtime_profile(tenant_id)
         effective_top_k = _apply_chat_profile_top_k(req.top_k or config.TOP_K, runtime_profile)
         effective_max_context_chars = req.max_context_chars or config.MAX_CONTEXT_CHARS
@@ -1491,6 +1578,28 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                 )
                 _record_chat_outcome_metrics(answer_mode="approved_exact_match")
                 yield _sse_event("approved", payload)
+                return
+
+            approved_exact_payload = None if staging_collection else _approved_exact_chat_lookup(req.question, tenant_id)
+            if approved_exact_payload is not None:
+                approved_exact_payload.update(_collection_meta(staging_collection))
+                append_audit_event(
+                    "chat",
+                    {
+                        "request_id": req.trace_id,
+                        "trace_id": req.trace_id,
+                        "tenant_id": tenant_id,
+                        "question": req.question,
+                        "normalized_question": approved_exact_payload.get("normalized_question"),
+                        "answer_mode": "approved_exact_match",
+                        "approved_qa_id": approved_exact_payload.get("approved_qa_id"),
+                        "retrieval_source": "approved_qa_exact",
+                        "citations_count": len(approved_exact_payload.get("citations") or []),
+                        "streamed": True,
+                    },
+                )
+                _record_chat_outcome_metrics(answer_mode="approved_exact_match")
+                yield _sse_event("approved", approved_exact_payload)
                 return
 
             runtime_profile = resolve_chat_runtime_profile(tenant_id)
