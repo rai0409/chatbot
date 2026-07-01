@@ -55,3 +55,6 @@ venv/
 # Backups
 *.bak
 *.bak_*
+
+# Generated BM25 keyword index
+index/chunks.canonical.bytype.dedup.jsonl
