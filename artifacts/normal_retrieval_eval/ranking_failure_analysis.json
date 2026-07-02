@@ -1,0 +1,1776 @@
+{
+  "summary": {
+    "total_cases": 32,
+    "hybrid_hit@1_before": 0.0,
+    "hybrid_hit@3_before": 0.9375,
+    "hybrid_hit@5_before": 1.0,
+    "hybrid_mrr_before": 0.484375,
+    "top1_retrieval_source_distribution": {
+      "vector": 32
+    },
+    "correct_candidate_retrieval_source_distribution": {
+      "keyword": 32
+    },
+    "correct_candidate_rank_distribution": {
+      "2": 30,
+      "4": 2
+    },
+    "same_rrf_top1_and_correct_candidate": 30,
+    "correct_has_bm25_top1_does_not": 32,
+    "correct_keyword_score_gt_top1": 31
+  },
+  "cases": [
+    {
+      "case_id": "normal_001",
+      "question": "Java Plug-in アプレットインストールの警告が出る原因を調べたい。",
+      "expected_source_doc": "040219e-biscfaq.pdf",
+      "expected_pages": [
+        2
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p2:b26:h14fdf78de5:parent:6:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          2
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "040219e-biscfaq.pdf:p2:c3",
+        "source_doc": "040219e-biscfaq.pdf",
+        "source_pages": [
+          2
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 58.33165069334518,
+        "keyword_score": 1.0,
+        "matched_terms": [
+          "java",
+          "plug-in",
+          "アプレットインストール",
+          "警告",
+          "原因"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_002",
+      "question": "接続確認でPIN入力後にデバイスが使用できないと出る場合の関連箇所はどこか。",
+      "expected_source_doc": "040219e-biscfaq.pdf",
+      "expected_pages": [
+        2
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p1:b0:h841ad8a67e:parent:5:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "040219e-biscfaq.pdf:p2:c3",
+        "source_doc": "040219e-biscfaq.pdf",
+        "source_pages": [
+          2
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 34.60755380625525,
+        "keyword_score": 0.9,
+        "matched_terms": [
+          "デバイス",
+          "接続確認",
+          "使用",
+          "場合"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_003",
+      "question": "企業IDの番号は認証局や地域ごとに変わるのか。",
+      "expected_source_doc": "040219e-biscfaq.pdf",
+      "expected_pages": [
+        1
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p3:b44:hb132274e0a:parent:7:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          3
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.51,
+        "matched_terms": [
+          "番号"
+        ],
+        "matched_fields": [
+          "text",
+          "section_path"
+        ],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "040219e-biscfaq.pdf:p1:c0",
+        "source_doc": "040219e-biscfaq.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 21.69486262558792,
+        "keyword_score": 1.0,
+        "matched_terms": [
+          "企業",
+          "番号",
+          "認証局",
+          "地域"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_004",
+      "question": "電子入札でICカードを何枚買うべきか検討するときの記載を探す。",
+      "expected_source_doc": "040219e-biscfaq.pdf",
+      "expected_pages": [
+        1
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p3:b44:hb132274e0a:parent:13:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          3
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "040219e-biscfaq.pdf:p5:c9",
+        "source_doc": "040219e-biscfaq.pdf",
+        "source_pages": [
+          5
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 18.378234756819072,
+        "keyword_score": 0.52,
+        "matched_terms": [
+          "カード",
+          "電子入札"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 0.25
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_005",
+      "question": "環境設定ツールの4つのアドレスは何のために設定するのか。",
+      "expected_source_doc": "040219e-biscfaq.pdf",
+      "expected_pages": [
+        1
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p1:b0:h841ad8a67e:parent:10:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "040219e-biscfaq.pdf:p2:c2",
+        "source_doc": "040219e-biscfaq.pdf",
+        "source_pages": [
+          2
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 35.063199621935766,
+        "keyword_score": 0.9,
+        "matched_terms": [
+          "ツール",
+          "アドレス",
+          "環境設定",
+          "設定"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 0.5
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_006",
+      "question": "旧バージョンJREアンインストール手順書の場所を確認したい。",
+      "expected_source_doc": "040219e-biscfaq.pdf",
+      "expected_pages": [
+        1
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p2:b26:h14fdf78de5:parent:6:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          2
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "040219e-biscfaq.pdf:p1:c1",
+        "source_doc": "040219e-biscfaq.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 74.54626938394888,
+        "keyword_score": 1.0,
+        "matched_terms": [
+          "アンインストール手順書",
+          "バージョン",
+          "アンインストール",
+          "手順書",
+          "確認"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_007",
+      "question": "利用者登録後に企業IDや登録内容を再確認する操作の説明を探す。",
+      "expected_source_doc": "040219e-biscfaq.pdf",
+      "expected_pages": [
+        3
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p1:b0:h841ad8a67e:parent:11:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "040219e-biscfaq.pdf:p3:c5",
+        "source_doc": "040219e-biscfaq.pdf",
+        "source_pages": [
+          3
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 29.475576648575977,
+        "keyword_score": 0.64,
+        "matched_terms": [
+          "企業",
+          "再確認",
+          "操作"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_008",
+      "question": "本番利用者登録完了メールが届かない原因の記載はどこか。",
+      "expected_source_doc": "040219e-biscfaq.pdf",
+      "expected_pages": [
+        4
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p4:b80:h289388d20f:parent:9:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          4
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "040219e-biscfaq.pdf:p4:c6",
+        "source_doc": "040219e-biscfaq.pdf",
+        "source_pages": [
+          4
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 22.325164046210336,
+        "keyword_score": 0.52,
+        "matched_terms": [
+          "メール",
+          "原因"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_009",
+      "question": "添付書類のファイル内容は何を見て作成するべきか。",
+      "expected_source_doc": "040219e-biscfaq.pdf",
+      "expected_pages": [
+        4
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p1:b0:h841ad8a67e:parent:3:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.51,
+        "matched_terms": [
+          "作成"
+        ],
+        "matched_fields": [
+          "text",
+          "section_path"
+        ],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "040219e-biscfaq.pdf:p4:c6",
+        "source_doc": "040219e-biscfaq.pdf",
+        "source_pages": [
+          4
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 22.055682107126632,
+        "keyword_score": 0.64,
+        "matched_terms": [
+          "ファイル",
+          "作成",
+          "内容"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_010",
+      "question": "落札結果はメールではなく何で確認するのか。",
+      "expected_source_doc": "040219e-biscfaq.pdf",
+      "expected_pages": [
+        4
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p1:b0:h841ad8a67e:parent:2:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "040219e-biscfaq.pdf:p4:c7",
+        "source_doc": "040219e-biscfaq.pdf",
+        "source_pages": [
+          4
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 24.37985853233156,
+        "keyword_score": 0.64,
+        "matched_terms": [
+          "メール",
+          "落札結果",
+          "確認"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_011",
+      "question": "インボイス制度はいつ開始されると書かれているか。",
+      "expected_source_doc": "0022009-090.pdf",
+      "expected_pages": [
+        3
+      ],
+      "matched_source_doc_rank": 4,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p1:b0:h841ad8a67e:parent:9:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.11,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 4,
+        "chunk_id": "0022009-090.pdf:p1:c0",
+        "source_doc": "0022009-090.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.016129032258064516,
+        "bm25_score": 23.154819522477794,
+        "keyword_score": 0.66,
+        "matched_terms": [
+          "インボイス制度",
+          "インボイス",
+          "制度"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 0.3333333333333333
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": false,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_012",
+      "question": "適格請求書とはどのような手段だと説明されているか。",
+      "expected_source_doc": "0022009-090.pdf",
+      "expected_pages": [
+        3
+      ],
+      "matched_source_doc_rank": 4,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p3:b44:hb132274e0a:parent:14:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          3
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 4,
+        "chunk_id": "0022009-090.pdf:p3:c2",
+        "source_doc": "0022009-090.pdf",
+        "source_pages": [
+          3
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.016129032258064516,
+        "bm25_score": 6.160113334352174,
+        "keyword_score": 0.52,
+        "matched_terms": [
+          "適格請求書",
+          "手段"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": false,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_013",
+      "question": "登録申請手続はe-Taxのどの版でできるか。",
+      "expected_source_doc": "0022009-090.pdf",
+      "expected_pages": [
+        5
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p2:b26:h14fdf78de5:parent:4:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          2
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "0022009-090.pdf:p4:c3",
+        "source_doc": "0022009-090.pdf",
+        "source_pages": [
+          4
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 27.162462866136163,
+        "keyword_score": 0.26,
+        "matched_terms": [
+          "登録申請手続"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 0.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_014",
+      "question": "新しく設立された法人が登録時期の特例を受ける条件は何か。",
+      "expected_source_doc": "0022009-090.pdf",
+      "expected_pages": [
+        10
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p4:b80:h289388d20f:parent:7:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          4
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "0022009-090.pdf:p10:c9",
+        "source_doc": "0022009-090.pdf",
+        "source_pages": [
+          10
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 35.55375261210906,
+        "keyword_score": 1.0,
+        "matched_terms": [
+          "設立",
+          "法人",
+          "登録時期",
+          "特例"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_015",
+      "question": "相続で事業を承継した人がインボイス登録を受けるには何を提出する必要があるか。",
+      "expected_source_doc": "0022009-090.pdf",
+      "expected_pages": [
+        11
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p4:b80:h289388d20f:parent:7:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          4
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.51,
+        "matched_terms": [
+          "事業"
+        ],
+        "matched_fields": [
+          "text",
+          "section_path"
+        ],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "0022009-090.pdf:p4:c3",
+        "source_doc": "0022009-090.pdf",
+        "source_pages": [
+          4
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 23.671872612718737,
+        "keyword_score": 1.0,
+        "matched_terms": [
+          "インボイス登録",
+          "インボイス",
+          "事業",
+          "提出",
+          "必要",
+          "登録"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 0.3333333333333333
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_016",
+      "question": "公表サイトで確認できる項目には登録番号や登録年月日が含まれるか。",
+      "expected_source_doc": "0022009-090.pdf",
+      "expected_pages": [
+        12
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p3:b44:hb132274e0a:parent:17:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          3
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "0022009-090.pdf:p12:c11",
+        "source_doc": "0022009-090.pdf",
+        "source_pages": [
+          12
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 36.18177058802578,
+        "keyword_score": 1.0,
+        "matched_terms": [
+          "サイト",
+          "公表",
+          "登録番号",
+          "登録年月日",
+          "確認"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_017",
+      "question": "適格請求書に偽りの記載をした場合の注意事項はどこにあるか。",
+      "expected_source_doc": "0022009-090.pdf",
+      "expected_pages": [
+        14
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p1:b0:h841ad8a67e:parent:2:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.11,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "0022009-090.pdf:p14:c13",
+        "source_doc": "0022009-090.pdf",
+        "source_pages": [
+          14
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 17.116254899664217,
+        "keyword_score": 0.64,
+        "matched_terms": [
+          "適格請求書",
+          "記載",
+          "場合"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_018",
+      "question": "適格簡易請求書の記載事項の一覧を探したい。",
+      "expected_source_doc": "0022009-090.pdf",
+      "expected_pages": [
+        16
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p3:b44:hb132274e0a:parent:10:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          3
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "0022009-090.pdf:p24:c23",
+        "source_doc": "0022009-090.pdf",
+        "source_pages": [
+          24
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 15.612309942048187,
+        "keyword_score": 0.52,
+        "matched_terms": [
+          "適格簡易請求書",
+          "記載事項"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_019",
+      "question": "個々の商品ごとに消費税額を計算して合計する例は認められるのか。",
+      "expected_source_doc": "0022009-090.pdf",
+      "expected_pages": [
+        17
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p3:b44:hb132274e0a:parent:13:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          3
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "0022009-090.pdf:p17:c16",
+        "source_doc": "0022009-090.pdf",
+        "source_pages": [
+          17
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 40.252090243783535,
+        "keyword_score": 1.0,
+        "matched_terms": [
+          "個々",
+          "商品",
+          "消費税額",
+          "計算",
+          "合計"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_020",
+      "question": "免税事業者の登録日から課税事業者となる経過措置に触れている箇所を探す。",
+      "expected_source_doc": "0022009-090.pdf",
+      "expected_pages": [
+        10
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p3:b44:hb132274e0a:parent:10:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          3
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "0022009-090.pdf:p8:c7",
+        "source_doc": "0022009-090.pdf",
+        "source_pages": [
+          8
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 36.36072939803262,
+        "keyword_score": 1.0,
+        "matched_terms": [
+          "免税事業者",
+          "登録日",
+          "課税事業者",
+          "経過措置"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_021",
+      "question": "日本には活火山がいくつあると書かれているか。",
+      "expected_source_doc": "r6_tokushu1_1.pdf",
+      "expected_pages": [
+        2
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p3:b44:hb132274e0a:parent:3:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          3
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.29,
+        "matched_terms": [
+          "日本"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "r6_tokushu1_1.pdf:p8:c8",
+        "source_doc": "r6_tokushu1_1.pdf",
+        "source_pages": [
+          8
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 13.216979987822162,
+        "keyword_score": 0.26,
+        "matched_terms": [
+          "活火山"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 0.6666666666666666
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": false,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_022",
+      "question": "御嶽山噴火は何時何分に発生したと整理されているか。",
+      "expected_source_doc": "r6_tokushu1_1.pdf",
+      "expected_pages": [
+        4
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p1:b0:h841ad8a67e:parent:9:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "r6_tokushu1_1.pdf:p1:c0",
+        "source_doc": "r6_tokushu1_1.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 17.85121689750581,
+        "keyword_score": 0.26,
+        "matched_terms": [
+          "御嶽山噴火"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 0.3333333333333333
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_023",
+      "question": "噴火警戒レベルはどのレベルに引き上げられたか。",
+      "expected_source_doc": "r6_tokushu1_1.pdf",
+      "expected_pages": [
+        4
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p3:b44:hb132274e0a:parent:16:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          3
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "r6_tokushu1_1.pdf:p9:c9",
+        "source_doc": "r6_tokushu1_1.pdf",
+        "source_pages": [
+          9
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 23.453593446238393,
+        "keyword_score": 0.52,
+        "matched_terms": [
+          "レベル",
+          "噴火警戒"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 0.3333333333333333
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_024",
+      "question": "御嶽山で死亡した47名の死因に関する記載を探す。",
+      "expected_source_doc": "r6_tokushu1_1.pdf",
+      "expected_pages": [
+        5
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p4:b80:h289388d20f:parent:3:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          4
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "r6_tokushu1_1.pdf:p5:c4",
+        "source_doc": "r6_tokushu1_1.pdf",
+        "source_pages": [
+          5
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 15.71152254931677,
+        "keyword_score": 0.97,
+        "matched_terms": [
+          "47",
+          "御嶽山",
+          "死亡"
+        ],
+        "matched_fields": [
+          "identifier",
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_025",
+      "question": "登山届を出すことは救助活動にどう関係すると説明されているか。",
+      "expected_source_doc": "r6_tokushu1_1.pdf",
+      "expected_pages": [
+        10
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p4:b80:h289388d20f:parent:12:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          4
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "r6_tokushu1_1.pdf:p10:c10",
+        "source_doc": "r6_tokushu1_1.pdf",
+        "source_pages": [
+          10
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 20.301853121903758,
+        "keyword_score": 0.26,
+        "matched_terms": [
+          "登山届"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_026",
+      "question": "火山登山でヘルメットを持つべき理由の記載を探す。",
+      "expected_source_doc": "r6_tokushu1_1.pdf",
+      "expected_pages": [
+        11
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p4:b80:h289388d20f:parent:1:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          4
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "r6_tokushu1_1.pdf:p11:c11",
+        "source_doc": "r6_tokushu1_1.pdf",
+        "source_pages": [
+          11
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 22.85214375534802,
+        "keyword_score": 0.26,
+        "matched_terms": [
+          "ヘルメット"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_027",
+      "question": "降灰への備えとして目や口を守る装備は何か。",
+      "expected_source_doc": "r6_tokushu1_1.pdf",
+      "expected_pages": [
+        11
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p1:b0:h841ad8a67e:parent:5:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "r6_tokushu1_1.pdf:p11:c11",
+        "source_doc": "r6_tokushu1_1.pdf",
+        "source_pages": [
+          11
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 12.784683983517281,
+        "keyword_score": 0.26,
+        "matched_terms": [
+          "降灰"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_028",
+      "question": "噴火速報が出たとき登山中に一時避難する場所の例は何か。",
+      "expected_source_doc": "r6_tokushu1_1.pdf",
+      "expected_pages": [
+        12
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p4:b80:h289388d20f:parent:12:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          4
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "r6_tokushu1_1.pdf:p12:c12",
+        "source_doc": "r6_tokushu1_1.pdf",
+        "source_pages": [
+          12
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 64.5710340442873,
+        "keyword_score": 1.0,
+        "matched_terms": [
+          "噴火速報",
+          "登山中",
+          "一時避難",
+          "場所"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_029",
+      "question": "マイナンバーカードの券面事項入力補助用パスワードは何桁か。",
+      "expected_source_doc": "20241105-benefits-individual-guide-manual.pdf",
+      "expected_pages": [
+        10
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p1:b0:h841ad8a67e:parent:5:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          1
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "20241105-benefits-individual-guide-manual.pdf:p10:c9",
+        "source_doc": "20241105-benefits-individual-guide-manual.pdf",
+        "source_pages": [
+          10
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 66.45245293421223,
+        "keyword_score": 0.78,
+        "matched_terms": [
+          "マイナンバーカード",
+          "パスワード",
+          "券面事項入力補助用"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_030",
+      "question": "申請者情報の確認画面でチェックして次へ進む操作はどのページにあるか。",
+      "expected_source_doc": "20241105-benefits-individual-guide-manual.pdf",
+      "expected_pages": [
+        14
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p2:b26:h14fdf78de5:parent:6:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          2
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "20241105-benefits-individual-guide-manual.pdf:p14:c13",
+        "source_doc": "20241105-benefits-individual-guide-manual.pdf",
+        "source_pages": [
+          14
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 44.54504656168408,
+        "keyword_score": 1.0,
+        "matched_terms": [
+          "チェック",
+          "ページ",
+          "申請者情報",
+          "確認画面",
+          "操作"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_031",
+      "question": "本人確認のために利用者証明用電子証明書のパスワードを入力する手順を探す。",
+      "expected_source_doc": "20241105-benefits-individual-guide-manual.pdf",
+      "expected_pages": [
+        15
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p2:b26:h14fdf78de5:parent:6:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          2
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "20241105-benefits-individual-guide-manual.pdf:p15:c14",
+        "source_doc": "20241105-benefits-individual-guide-manual.pdf",
+        "source_pages": [
+          15
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 70.90333146721925,
+        "keyword_score": 1.0,
+        "matched_terms": [
+          "パスワード",
+          "本人確認",
+          "利用者証明用電子証明書",
+          "入力",
+          "手順"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    },
+    {
+      "case_id": "normal_032",
+      "question": "申請できません画面が出る条件に関する記載を探したい。",
+      "expected_source_doc": "20241105-benefits-individual-guide-manual.pdf",
+      "expected_pages": [
+        17
+      ],
+      "matched_source_doc_rank": 2,
+      "top1": {
+        "rank": 1,
+        "chunk_id": "58887_95105_misc.pdf:ja:p2:b26:h14fdf78de5:parent:1:child:1",
+        "source_doc": "58887_95105_misc.pdf",
+        "source_pages": [
+          2
+        ],
+        "retrieval_source": "vector",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": "",
+        "keyword_score": 0.03,
+        "matched_terms": [],
+        "matched_fields": [],
+        "keyword_coverage": 0.0
+      },
+      "correct_candidate": {
+        "rank": 2,
+        "chunk_id": "20241105-benefits-individual-guide-manual.pdf:p17:c16",
+        "source_doc": "20241105-benefits-individual-guide-manual.pdf",
+        "source_pages": [
+          17
+        ],
+        "retrieval_source": "keyword",
+        "score": null,
+        "rrf_score": 0.01639344262295082,
+        "bm25_score": 22.703595148179247,
+        "keyword_score": 0.78,
+        "matched_terms": [
+          "申請",
+          "画面",
+          "条件"
+        ],
+        "matched_fields": [
+          "text"
+        ],
+        "keyword_coverage": 1.0
+      },
+      "diagnosis": {
+        "rrf_tie_with_top1": true,
+        "top1_has_bm25": false,
+        "correct_has_bm25": true,
+        "correct_keyword_score_gt_top1": true,
+        "reason": "RRF tie/near-tie plus vector insertion order; correct candidate has BM25/keyword evidence but no tie-break boost."
+      }
+    }
+  ]
+}
