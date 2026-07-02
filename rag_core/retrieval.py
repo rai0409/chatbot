@@ -447,6 +447,58 @@ def _bucket_child_priority(bucket: Dict[str, Any]) -> int:
     return 1 if _is_child_chunk(base.metadata) else 0
 
 
+def _hybrid_bucket_rank_adjustment(question: str, bucket: Dict[str, Any]) -> Dict[str, float]:
+    base = _bucket_base_chunk(bucket)
+    if base is None:
+        return {
+            "keyword_score": 0.0,
+            "keyword_evidence_boost": 0.0,
+            "vector_without_keyword_penalty": 0.0,
+            "hybrid_rank_score": float(bucket.get("rrf") or 0.0),
+        }
+
+    # Local import avoids a module import cycle: keyword_scorer imports
+    # RetrievedChunk from this module for its public boost helper.
+    from rag_core.keyword_scorer import classify_query_type, score_keyword_match
+
+    meta = dict(base.metadata or {})
+    keyword_hit = bucket.get("keyword")
+    if isinstance(keyword_hit, RetrievedChunk):
+        meta.update(keyword_hit.metadata or {})
+
+    details = score_keyword_match(
+        question,
+        str(meta.get("searchable_text") or base.text or ""),
+        meta,
+        query_type=classify_query_type(question),
+    )
+    keyword_score = float(details.get("keyword_score") or 0.0)
+    bm25_score = float(meta.get("bm25_score") or 0.0)
+    has_keyword_evidence = bool(bucket.get("keyword") is not None or bm25_score > 0.0 or keyword_score > 0.0)
+
+    # RRF deltas around rank 1-5 are tiny (~0.00025 with k=60). Keep this
+    # adjustment lightweight but large enough to break vector/keyword ties by
+    # observed lexical evidence instead of insertion order.
+    keyword_evidence_boost = 0.0
+    if has_keyword_evidence:
+        keyword_evidence_boost += min(0.006, keyword_score * 0.006)
+        if bm25_score > 0.0:
+            keyword_evidence_boost += min(0.006, bm25_score / 10000.0)
+            keyword_evidence_boost += 0.002
+
+    vector_without_keyword_penalty = 0.0
+    if bucket.get("vector") is not None and bucket.get("keyword") is None and keyword_score <= 0.0:
+        vector_without_keyword_penalty = 0.002
+
+    rrf_score = float(bucket.get("rrf") or 0.0)
+    return {
+        "keyword_score": keyword_score,
+        "keyword_evidence_boost": round(keyword_evidence_boost, 8),
+        "vector_without_keyword_penalty": round(vector_without_keyword_penalty, 8),
+        "hybrid_rank_score": rrf_score + keyword_evidence_boost - vector_without_keyword_penalty,
+    }
+
+
 def hybrid_retrieve(
     question: str,
     client,
@@ -508,16 +560,27 @@ def hybrid_retrieve(
         bucket["keyword"] = ch
         bucket["rrf"] += 1.0 / (k_rrf + rank)
 
+    for item in merged.values():
+        item["rank_adjustment"] = _hybrid_bucket_rank_adjustment(question, item)
+
     ranked_items = sorted(
         merged.values(),
         key=lambda x: (
             _bucket_child_priority(x),
+            float(x["rank_adjustment"]["hybrid_rank_score"]),
             float(x["rrf"]),
+            1 if x.get("keyword") is not None else 0,
         ),
         reverse=True,
     )
+    selected_items = ranked_items[:top_k]
+    if top_k > 1 and vector_hits and not any(item.get("vector") is not None for item in selected_items):
+        best_vector_item = next((item for item in ranked_items if item.get("vector") is not None), None)
+        if best_vector_item is not None:
+            selected_items = selected_items[: top_k - 1] + [best_vector_item]
+
     out: List[RetrievedChunk] = []
-    for rank, item in enumerate(ranked_items[:top_k], start=1):
+    for rank, item in enumerate(selected_items, start=1):
         v = item["vector"]
         k = item["keyword"]
         base = v or k
@@ -531,6 +594,19 @@ def hybrid_retrieve(
         else:
             m["retrieval_source"] = "keyword"
         m["rrf_score"] = float(item["rrf"])
+        if k is not None and k.metadata.get("bm25_score") is not None:
+            m["bm25_score"] = k.metadata.get("bm25_score")
+        rank_adjustment = item.get("rank_adjustment") or {}
+        keyword_score = float(rank_adjustment.get("keyword_score") or 0.0)
+        if keyword_score > 0.0:
+            m["keyword_score"] = round(keyword_score, 4)
+        m["hybrid_rank_score"] = float(rank_adjustment.get("hybrid_rank_score") or item["rrf"])
+        m["keyword_evidence_boost"] = float(rank_adjustment.get("keyword_evidence_boost") or 0.0)
+        m["vector_without_keyword_penalty"] = float(
+            rank_adjustment.get("vector_without_keyword_penalty") or 0.0
+        )
+        m["score_before_hybrid_rank_adjust"] = float(item["rrf"])
+        m["score_after_hybrid_rank_adjust"] = float(m["hybrid_rank_score"])
         # Common lower-is-better scale for downstream guard/order.
         pseudo_distance = min(0.25 + (rank - 1) * 0.02, 0.95)
         if v is not None:
