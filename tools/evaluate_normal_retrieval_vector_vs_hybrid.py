@@ -125,9 +125,16 @@ def evaluate_case(case: dict[str, Any], mode: str, chunks: list[RetrievedChunk],
                 "source_pages": sorted(chunk_pages(chunk)),
                 "retrieval_source": str(meta.get("retrieval_source") or ""),
                 "bm25_score": score_value(meta, "bm25_score"),
+                "vector_distance": score_value(meta, "vector_distance"),
                 "rrf_score": score_value(meta, "rrf_score"),
                 "keyword_score": score_value(meta, "keyword_score"),
+                "hybrid_rank_score": score_value(meta, "hybrid_rank_score"),
                 "rerank_score": score_value(meta, "rerank_score"),
+                "page_evidence_boost": score_value(meta, "page_evidence_boost"),
+                "page_anchor_boost": score_value(meta, "page_anchor_boost"),
+                "page_cluster_boost": score_value(meta, "page_cluster_boost"),
+                "score_before_page_adjust": score_value(meta, "score_before_page_adjust"),
+                "score_after_page_adjust": score_value(meta, "score_after_page_adjust"),
                 "keyword_coverage": keyword_coverage(chunk.text, expected_keywords),
                 "chunk_id": str(meta.get("id") or ""),
             }
@@ -241,7 +248,13 @@ def evaluate_mode(
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8") as f:
         for row in rows:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.write(json.dumps(row, ensure_ascii=False, default=_json_default) + "\n")
+
+
+def _json_default(value: Any) -> Any:
+    if isinstance(value, set):
+        return sorted(value)
+    return str(value)
 
 
 def summarize(rows: list[dict[str, Any]], prefix: str) -> dict[str, Any]:
