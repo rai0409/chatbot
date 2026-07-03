@@ -499,6 +499,55 @@ def _hybrid_bucket_rank_adjustment(question: str, bucket: Dict[str, Any]) -> Dic
     }
 
 
+def _apply_page_sensitive_adjustments(items: Sequence[Dict[str, Any]]) -> None:
+    keyword_items = [item for item in items if isinstance(item.get("keyword"), RetrievedChunk)]
+    max_bm25 = max(
+        (float((item["keyword"].metadata or {}).get("bm25_score") or 0.0) for item in keyword_items),
+        default=0.0,
+    )
+    max_keyword_score = max(
+        (float((item.get("rank_adjustment") or {}).get("keyword_score") or 0.0) for item in keyword_items),
+        default=0.0,
+    )
+    anchor_bm25_scores = [
+        float((item["keyword"].metadata or {}).get("bm25_score") or 0.0)
+        for item in keyword_items
+        if max_keyword_score > 0.0
+        and float((item.get("rank_adjustment") or {}).get("keyword_score") or 0.0) >= max_keyword_score * 0.98
+    ]
+    anchor_max_bm25 = max(anchor_bm25_scores, default=max_bm25)
+
+    for item in items:
+        adj = item.get("rank_adjustment") or {}
+        before = float(adj.get("hybrid_rank_score") or item.get("rrf") or 0.0)
+        page_anchor_boost = 0.0
+        page_evidence_boost = 0.0
+        page_cluster_boost = 0.0
+        keyword_hit = item.get("keyword")
+        keyword_score = float(adj.get("keyword_score") or 0.0)
+        bm25_score = 0.0
+        if isinstance(keyword_hit, RetrievedChunk):
+            bm25_score = float((keyword_hit.metadata or {}).get("bm25_score") or 0.0)
+
+        # If BM25 has a near-best page-level lexical anchor, keep that chunk
+        # competitive against vector-fused near-page hits. The threshold is
+        # intentionally conservative: it only affects chunks already found by
+        # BM25 with meaningful keyword evidence.
+        if anchor_max_bm25 > 0.0 and bm25_score >= anchor_max_bm25 * 0.95 and keyword_score >= 0.5:
+            page_anchor_boost = 0.006
+        if max_keyword_score > 0.0 and keyword_score >= max_keyword_score * 0.98 and keyword_score >= 0.8:
+            page_evidence_boost = 0.004
+
+        after = before + page_anchor_boost + page_evidence_boost + page_cluster_boost
+        adj["page_anchor_boost"] = round(page_anchor_boost, 8)
+        adj["page_evidence_boost"] = round(page_evidence_boost, 8)
+        adj["page_cluster_boost"] = round(page_cluster_boost, 8)
+        adj["score_before_page_adjust"] = before
+        adj["score_after_page_adjust"] = after
+        adj["hybrid_rank_score"] = after
+        item["rank_adjustment"] = adj
+
+
 def hybrid_retrieve(
     question: str,
     client,
@@ -562,6 +611,7 @@ def hybrid_retrieve(
 
     for item in merged.values():
         item["rank_adjustment"] = _hybrid_bucket_rank_adjustment(question, item)
+    _apply_page_sensitive_adjustments(list(merged.values()))
 
     ranked_items = sorted(
         merged.values(),
@@ -605,6 +655,11 @@ def hybrid_retrieve(
         m["vector_without_keyword_penalty"] = float(
             rank_adjustment.get("vector_without_keyword_penalty") or 0.0
         )
+        m["page_evidence_boost"] = float(rank_adjustment.get("page_evidence_boost") or 0.0)
+        m["page_anchor_boost"] = float(rank_adjustment.get("page_anchor_boost") or 0.0)
+        m["page_cluster_boost"] = float(rank_adjustment.get("page_cluster_boost") or 0.0)
+        m["score_before_page_adjust"] = float(rank_adjustment.get("score_before_page_adjust") or item["rrf"])
+        m["score_after_page_adjust"] = float(rank_adjustment.get("score_after_page_adjust") or m["hybrid_rank_score"])
         m["score_before_hybrid_rank_adjust"] = float(item["rrf"])
         m["score_after_hybrid_rank_adjust"] = float(m["hybrid_rank_score"])
         # Common lower-is-better scale for downstream guard/order.
