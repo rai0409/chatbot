@@ -1,0 +1,9 @@
+{
+  "status": "ok",
+  "keyword_index_loaded": true,
+  "keyword_index_records": 116,
+  "keyword_index_path": "/home/rai/chatbot/index/chunks.canonical.bytype.dedup.jsonl",
+  "embed_provider": "local",
+  "embed_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "capture_note": "Observed via direct curl during page-sensitive rerank regression check."
+}
