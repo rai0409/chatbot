@@ -365,6 +365,20 @@ pip install -r requirements.txt
 uvicorn webapi.main:app --reload
 ```
 
+### Local development port
+
+To avoid conflicts with other local projects using port `8000`, this project can be run on port `8010` during local development.
+
+```bash
+uvicorn webapi.main:app --host 127.0.0.1 --port 8010
+```
+
+Health check:
+
+```bash
+curl -s http://127.0.0.1:8010/health | python -m json.tool
+```
+
 For production-style approved Q&A testing:
 
 ```bash
@@ -372,7 +386,7 @@ APPROVED_QA_ENABLED=true \
 APPROVED_QA_PATH=data/approved_qa/default.jsonl \
 PYTHONPATH=. .venv/bin/uvicorn webapi.main:app \
   --host 127.0.0.1 \
-  --port 8001
+  --port 8010
 ```
 
 ### Run with Docker
@@ -446,6 +460,79 @@ Then ingest:
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/ingest_canonical_jsonl.py index/your_doc.jsonl --reset
 ```
+
+### Chroma collection rebuild / alignment
+
+When rebuilding the vectorstore, the Chroma collection should be built from the same canonical JSONL corpus used by the BM25 index.
+
+Do not overwrite the current production collection directly. Create a candidate collection first, audit it, and promote it only after regression checks pass.
+
+Build the normalized canonical JSONL:
+
+```bash
+PYTHONPATH=. .venv/bin/python tools/build_normalized_canonical_chunks.py \
+  --input index/chunks.canonical.bytype.dedup.jsonl \
+  --output index/chunks.canonical.normalized.jsonl \
+  --report artifacts/corpus_alignment/metadata_normalization_report.md
+```
+
+For the current verified PDF corpus, the expected line count is:
+
+```bash
+wc -l index/chunks.canonical.normalized.jsonl
+```
+
+Expected:
+
+```text
+116
+```
+
+Create a new candidate Chroma collection:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/ingest_canonical_jsonl.py \
+  --input index/chunks.canonical.normalized.jsonl \
+  --collection chatbot_chunks_v1_aligned_candidate
+```
+
+If the CLI options differ, check:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/ingest_canonical_jsonl.py --help
+```
+
+Stamp the embedding fingerprint:
+
+```bash
+mkdir -p artifacts/manual_collection_rebuild
+
+PYTHONPATH=. .venv/bin/python tools/stamp_chroma_collection_fingerprint.py \
+  --collection chatbot_chunks_v1_aligned_candidate \
+  --source-jsonl index/chunks.canonical.normalized.jsonl \
+  --output artifacts/manual_collection_rebuild/embedding_fingerprint.json
+```
+
+Audit BM25 / Chroma corpus alignment:
+
+```bash
+PYTHONPATH=. .venv/bin/python tools/audit_corpus_alignment.py \
+  --bm25-jsonl index/chunks.canonical.normalized.jsonl \
+  --collection chatbot_chunks_v1_aligned_candidate \
+  --output-dir artifacts/manual_collection_rebuild/alignment_audit
+```
+
+Evaluate the candidate collection:
+
+```bash
+PYTHONPATH=. .venv/bin/python tools/evaluate_normal_retrieval_vector_vs_hybrid.py \
+  --cases artifacts/normal_retrieval_eval/normal_retrieval_cases.jsonl \
+  --collection chatbot_chunks_v1_aligned_candidate \
+  --output-dir artifacts/manual_collection_rebuild/normal_retrieval_candidate \
+  --top-k 5
+```
+
+Promotion requires corpus alignment, fingerprint validation, live regression, and a rollback path.
 
 ### Table-style Q&A PDF ingestion
 
