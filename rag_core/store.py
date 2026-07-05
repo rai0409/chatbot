@@ -45,12 +45,7 @@ def get_vectorstore(
     create_if_missing: bool = True,
 ):
     client = _get_persistent_client(config.VECTORSTORE_DIR)
-    name = (
-        collection_name
-        or config.getenv_first("CHROMA_COLLECTION")
-        or config.VECTORSTORE_COLLECTION_NAME
-        or "rag_chunks"
-    )
+    name = config.resolve_chroma_collection_name(collection_name)
     if create_if_missing:
         collection = client.get_or_create_collection(
             name=name, metadata={"hnsw:space": "cosine"}

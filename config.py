@@ -8,7 +8,7 @@ from typing import Iterable, List, Optional
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env", override=True)
+load_dotenv(BASE_DIR / ".env", override=False)
 
 
 def getenv_first(*keys: str, default: Optional[str] = None) -> Optional[str]:
@@ -59,9 +59,26 @@ def _get_bool(name: str, default: bool = False) -> bool:
 
 _VECTORSTORE_DIR_RAW = getenv_first("VECTORSTORE_DIR", default="vectorstore/")
 VECTORSTORE_DIR = str((BASE_DIR / _VECTORSTORE_DIR_RAW).resolve())
+DEFAULT_CHROMA_COLLECTION = "chatbot_chunks_v1_aligned_candidate"
 VECTORSTORE_COLLECTION_NAME = getenv_first(
-    "VECTORSTORE_COLLECTION_NAME", default="chatbot_chunks_v1"
+    "VECTORSTORE_COLLECTION_NAME", default=DEFAULT_CHROMA_COLLECTION
 )
+
+
+def resolve_chroma_collection_name(explicit: Optional[str] = None) -> str:
+    name = str(explicit or "").strip()
+    if name:
+        return name
+    return str(
+        getenv_first(
+            "CHROMA_COLLECTION",
+            "VECTORSTORE_COLLECTION_NAME",
+            default=DEFAULT_CHROMA_COLLECTION,
+        )
+        or DEFAULT_CHROMA_COLLECTION
+    )
+
+
 _CHUNKS_JSONL_PATH_RAW = getenv_first(
     "CHUNKS_JSONL_PATH", default="index/chunks.canonical.bytype.dedup.jsonl"
 )
@@ -78,8 +95,16 @@ CHAT_COMPLETION_RETRY_BACKOFF_SECONDS = _get_float(
     "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", default=1.0
 )
 CHAT_COMPLETION_MAX_TOKENS = int(getenv_first("CHAT_COMPLETION_MAX_TOKENS", default="1024"))
+CHAT_GENERATION_MODE = getenv_first("CHAT_GENERATION_MODE", default="extractive")
 EMBED_MODEL = getenv_first("EMBED_MODEL", default="text-embedding-3-small")
 OPENAI_EMBED_MODEL = getenv_first("OPENAI_EMBED_MODEL", default=EMBED_MODEL)
+
+
+def resolve_chat_generation_mode(explicit: Optional[str] = None) -> str:
+    mode = str(explicit or CHAT_GENERATION_MODE or "").strip().lower()
+    if mode in {"extractive", "llm"}:
+        return mode
+    return "extractive"
 
 TOP_K = int(getenv_first("TOP_K", default="20"))
 ENABLE_HYBRID_RETRIEVAL = _get_bool("ENABLE_HYBRID_RETRIEVAL", default=True)

@@ -448,6 +448,125 @@ def _finalize_generated_answer(raw: str, q: str, grounded: Sequence[Chunk], inte
     return raw, used_fallback
 
 
+_EXTRACTIVE_TERM_RE = re.compile(r"[a-z0-9][a-z0-9._:/-]{1,}|[ァ-ヴー]{2,}|[一-龥々〆〤]{2,}")
+_EXTRACTIVE_STOP_TERMS = {
+    "です",
+    "ます",
+    "ください",
+    "何で",
+    "何です",
+    "原因",
+    "概要",
+    "説明",
+}
+
+
+def _extractive_terms(question: str) -> List[str]:
+    norm = normalize_japanese_text(question or "").lower()
+    terms = []
+    for term in _EXTRACTIVE_TERM_RE.findall(norm):
+        term = term.strip()
+        if len(term) < 2 or term in _EXTRACTIVE_STOP_TERMS:
+            continue
+        terms.append(term)
+    return list(dict.fromkeys(terms))
+
+
+def _extractive_sentences(question: str, grounded: Sequence[Chunk]) -> Tuple[List[Tuple[int, str]], int]:
+    terms = _extractive_terms(question)
+    scored: List[Tuple[int, int, str]] = []
+    seen: set[str] = set()
+    for idx, ch in enumerate(grounded, start=1):
+        for sent in re.split(r"[。！？\n]+", ch.text or ""):
+            sent = re.sub(r"\s+", " ", sent).strip()
+            norm_sent = normalize_japanese_text(sent).lower()
+            compact = re.sub(r"\s+", "", norm_sent)
+            if not compact or compact in seen:
+                continue
+            seen.add(compact)
+            hits = sum(1 for term in terms if term in compact)
+            if hits <= 0:
+                continue
+            score = hits * 10
+            if any(term in compact for term in ("java", "plug-in", "plug")):
+                score += 8
+            if re.search(r"\d", sent):
+                score += 2
+            if len(sent) > 320:
+                score -= 4
+            scored.append((score, idx, sent))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    selected: List[Tuple[int, str]] = []
+    for score, idx, sent in scored:
+        selected.append((idx, sent))
+        if len(selected) >= 3:
+            break
+    best_score = scored[0][0] if scored else 0
+    return selected, best_score
+
+
+def _extractive_required_terms(question: str) -> List[str]:
+    norm = normalize_japanese_text(question or "").lower()
+    required: List[str] = []
+    required.extend(re.findall(r"[一-龥]{2,}(?:都|道|府|県|市|区|町|村)", norm))
+    for alpha, number in re.findall(r"([a-z][a-z0-9._:/-]*)\s+(\d{2,})", norm):
+        required.append(f"{alpha}{number}")
+    for token in re.findall(r"[a-z0-9][a-z0-9._:/-]{1,}", norm):
+        if re.search(r"\d", token):
+            required.append(token)
+    if "平均" in norm:
+        required.append("平均")
+    return list(dict.fromkeys(required))
+
+
+def _has_sufficient_extractive_evidence(question: str, grounded: Sequence[Chunk]) -> bool:
+    terms = _extractive_terms(question)
+    selected, best_score = _extractive_sentences(question, grounded)
+    if not selected:
+        return False
+    evidence = normalize_japanese_text("\n".join(ch.text for ch in grounded)).lower()
+    evidence_compact = re.sub(r"\s+", "", evidence)
+    for term in _extractive_required_terms(question):
+        if re.sub(r"\s+", "", term.lower()) not in evidence_compact:
+            return False
+    required_hits = 2 if len(terms) <= 3 else 3
+    return best_score >= required_hits * 10
+
+
+def _extractive_answer_raw(question: str, grounded: Sequence[Chunk]) -> str:
+    if not grounded:
+        return "文書内に十分な根拠が見つからないため、回答できません。\n不明: 根拠不足\n不足: 関連記載なし"
+    selected, _ = _extractive_sentences(question, grounded)
+    if selected:
+        raw = "\n".join(f"- {sent} [S{idx}]" for idx, sent in selected)
+    else:
+        raw = extractive_fallback(question, grounded).strip()
+    if not raw:
+        raw = "- 文書内に十分な根拠が見つからないため、回答できません [S1]"
+    return "文書内では、以下の記載が確認できます。\n" + raw
+
+
+def _build_extractive_answer_result(
+    question: str,
+    state: "_RetrievalTraceState",
+    *,
+    guard_reason: Optional[str],
+    used_fallback: bool,
+    retrieved: Sequence[RetrievedChunk],
+) -> AnswerResult:
+    raw = _extractive_answer_raw(question, state.selected_context)
+    return _build_answer_result(
+        raw,
+        state.selected_context,
+        intent=state.intent,
+        guard_reason=guard_reason,
+        used_fallback=used_fallback,
+        retrieved=retrieved,
+        rewritten_query=state.rewritten_query,
+        augmented_query=state.augmented_query,
+    )
+
+
 class _RetrievalTraceState(NamedTuple):
     normalized_query: str
     intent: str
@@ -974,21 +1093,98 @@ def _answer_query_impl(
 
     grounded = state.selected_context
 
+    if config.resolve_chat_generation_mode() == "extractive":
+        if _has_sufficient_extractive_evidence(q, grounded):
+            result = _build_extractive_answer_result(
+                q,
+                state,
+                guard_reason=None,
+                used_fallback=True,
+                retrieved=retrieved,
+            )
+            answer_mode = "grounded_extractive"
+        else:
+            result = _build_answer_result(
+                _guard_fallback_raw("insufficient_evidence"),
+                grounded,
+                intent=intent,
+                guard_reason="insufficient_evidence",
+                used_fallback=True,
+                retrieved=retrieved,
+                rewritten_query=rewritten,
+                augmented_query=augmented,
+            )
+            answer_mode = "fallback"
+        trace.setdefault("stage_latency_ms", {})["generation_ms"] = 0
+        trace["chat_generation_mode"] = "extractive"
+        _set_final_trace(
+            trace,
+            started_at,
+            grounded,
+            guard_reason=result.guard_reason,
+            used_fallback=result.used_fallback,
+            answer_mode=answer_mode,
+            citations_count=len(result.citations),
+        )
+        result = _apply_profile_validation(
+            question,
+            result,
+            trace,
+            state,
+            rag_profile_id=rag_profile_id,
+            started_at=started_at,
+        )
+        return result, trace
+
     evidence_blocks = build_evidence_blocks(grounded)
     prompt = build_prompt(q, evidence_blocks)
-    if client is None:
-        client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
     generation_started = time.perf_counter()
-    resp = _create_chat_completion(
-        client,
-        [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt},
-        ],
-    )
+    try:
+        if client is None:
+            client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
+        resp = _create_chat_completion(
+            client,
+            [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt},
+            ],
+        )
+    except Exception as exc:
+        trace.setdefault("stage_latency_ms", {})["generation_ms"] = int(
+            (time.perf_counter() - generation_started) * 1000
+        )
+        trace["chat_generation_mode"] = "llm"
+        trace["generation_error_type"] = type(exc).__name__
+        trace["generation_error"] = str(exc)[:500]
+        result = _build_extractive_answer_result(
+            q,
+            state,
+            guard_reason="llm_unavailable",
+            used_fallback=True,
+            retrieved=retrieved,
+        )
+        _set_final_trace(
+            trace,
+            started_at,
+            grounded,
+            guard_reason=result.guard_reason,
+            used_fallback=True,
+            answer_mode="fallback",
+            citations_count=len(result.citations),
+        )
+        result = _apply_profile_validation(
+            question,
+            result,
+            trace,
+            state,
+            rag_profile_id=rag_profile_id,
+            started_at=started_at,
+        )
+        return result, trace
     trace.setdefault("stage_latency_ms", {})["generation_ms"] = int(
         (time.perf_counter() - generation_started) * 1000
     )
+    trace["chat_generation_mode"] = "llm"
     raw, used_fallback = _finalize_generated_answer(
         resp.choices[0].message.content or "", q, grounded, intent
     )
@@ -1123,24 +1319,87 @@ def answer_query_stream(
 
     q = state.normalized_query
     grounded = state.selected_context
+    if config.resolve_chat_generation_mode() == "extractive":
+        if _has_sufficient_extractive_evidence(q, grounded):
+            result = _build_extractive_answer_result(
+                q,
+                state,
+                guard_reason=None,
+                used_fallback=True,
+                retrieved=state.retrieved,
+            )
+            answer_mode = "grounded_extractive"
+        else:
+            result = _build_answer_result(
+                _guard_fallback_raw("insufficient_evidence"),
+                grounded,
+                intent=state.intent,
+                guard_reason="insufficient_evidence",
+                used_fallback=True,
+                retrieved=state.retrieved,
+                rewritten_query=state.rewritten_query,
+                augmented_query=state.augmented_query,
+            )
+            answer_mode = "fallback"
+        trace.setdefault("stage_latency_ms", {})["generation_ms"] = 0
+        trace["chat_generation_mode"] = "extractive"
+        _set_final_trace(
+            trace,
+            started_at,
+            grounded,
+            guard_reason=result.guard_reason,
+            used_fallback=result.used_fallback,
+            answer_mode=answer_mode,
+            citations_count=len(result.citations),
+        )
+        yield "final", (result, trace)
+        return
+
     evidence_blocks = build_evidence_blocks(grounded)
     prompt = build_prompt(q, evidence_blocks)
-    if client is None:
-        client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
     pieces: List[str] = []
     generation_started = time.perf_counter()
-    for delta_text in _stream_chat_completion(
-        client,
-        [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt},
-        ],
-    ):
-        pieces.append(delta_text)
-        yield "delta", {"text": delta_text}
+    try:
+        if client is None:
+            client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
+        for delta_text in _stream_chat_completion(
+            client,
+            [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt},
+            ],
+        ):
+            pieces.append(delta_text)
+            yield "delta", {"text": delta_text}
+    except Exception as exc:
+        trace.setdefault("stage_latency_ms", {})["generation_ms"] = int(
+            (time.perf_counter() - generation_started) * 1000
+        )
+        trace["chat_generation_mode"] = "llm"
+        trace["generation_error_type"] = type(exc).__name__
+        trace["generation_error"] = str(exc)[:500]
+        result = _build_extractive_answer_result(
+            q,
+            state,
+            guard_reason="llm_unavailable",
+            used_fallback=True,
+            retrieved=state.retrieved,
+        )
+        _set_final_trace(
+            trace,
+            started_at,
+            grounded,
+            guard_reason=result.guard_reason,
+            used_fallback=True,
+            answer_mode="fallback",
+            citations_count=len(result.citations),
+        )
+        yield "final", (result, trace)
+        return
     trace.setdefault("stage_latency_ms", {})["generation_ms"] = int(
         (time.perf_counter() - generation_started) * 1000
     )
+    trace["chat_generation_mode"] = "llm"
 
     raw, used_fallback = _finalize_generated_answer("".join(pieces), q, grounded, state.intent)
     result = _build_answer_result(

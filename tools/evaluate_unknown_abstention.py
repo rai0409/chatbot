@@ -62,6 +62,8 @@ def post_chat(chat_url: str, question: str, timeout: int) -> tuple[int, dict[str
             "Content-Type: application/json",
             "-d",
             payload,
+            "-w",
+            "\n%{http_code}",
         ],
         text=True,
         capture_output=True,
@@ -70,6 +72,16 @@ def post_chat(chat_url: str, question: str, timeout: int) -> tuple[int, dict[str
     raw = proc.stdout.strip()
     if proc.returncode != 0:
         return proc.returncode, None, proc.stderr.strip() or raw
+    status_code = 0
+    if "\n" in raw:
+        body, status_text = raw.rsplit("\n", 1)
+        try:
+            status_code = int(status_text.strip())
+            raw = body.strip()
+        except ValueError:
+            status_code = 0
+    if status_code and status_code != 200:
+        return status_code, None, f"http_status_{status_code}: {raw}"
     try:
         return 0, json.loads(raw), raw
     except json.JSONDecodeError:
