@@ -358,6 +358,26 @@ Use this endpoint when you want to inspect:
 
 ## Setup
 
+### Free / local-only chat mode
+
+Set `CHAT_GENERATION_MODE=extractive` to run `/chat` without OpenAI chat completion. With `EMBED_PROVIDER=local`, the service can be tested without an OpenAI API key while preserving the normal retrieval path.
+
+In this mode, `/chat` still returns approved exact matches deterministically, otherwise it returns grounded extractive answers when retrieved evidence is sufficient, or an explicit abstain/fallback answer when evidence is weak.
+
+```bash
+bash scripts/run_free_extractive_chat_mode_check.sh
+```
+
+Expected gates:
+
+- exact QA: `118/118`
+- unknown abstention: `32/32`
+- normal retrieval: `hybrid_hit@5=1.0`
+
+The candidate collection `chatbot_chunks_v1_aligned_candidate` has been evaluated for this mode. Promotion is not automatic; use `artifacts/free_extractive_chat_mode/promotion_gate.md` for the candidate collection promotion gate.
+
+### Local environment
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
