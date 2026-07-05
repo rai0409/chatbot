@@ -374,7 +374,7 @@ Expected gates:
 - unknown abstention: `32/32`
 - normal retrieval: `hybrid_hit@5=1.0`
 
-The candidate collection `chatbot_chunks_v1_aligned_candidate` has been evaluated for this mode. Promotion is not automatic; use `artifacts/free_extractive_chat_mode/promotion_gate.md` for the candidate collection promotion gate.
+The candidate collection `chatbot_chunks_v1_aligned_candidate` has been evaluated for this mode. Promotion is not automatic; use `artifacts/free_extractive_chat_mode/promotion_gate.md` for the gate and `artifacts/free_extractive_chat_mode/controlled_production_switch_plan.md` for the config-only switch plan.
 
 ### Local environment
 
