@@ -400,6 +400,7 @@ def _approved_chat_payload(answer: ApprovedAnswer) -> Dict[str, Any]:
         "answer_mode": "approved_exact_match",
         "approved_qa_id": answer.qa_id,
         "normalized_question": answer.normalized_question,
+        "retrieval_source": "approved_qa_exact",
     }
 
 
@@ -941,7 +942,13 @@ def _load_review_items(
 
 @app.get("/health")
 def health():
-    payload: Dict[str, Any] = {"status": "ok"}
+    payload: Dict[str, Any] = {
+        "status": "ok",
+        "chroma_collection": config.resolve_chroma_collection_name(),
+        "vectorstore_collection_name": config.VECTORSTORE_COLLECTION_NAME,
+        "vectorstore_dir": config.VECTORSTORE_DIR,
+        "chat_generation_mode": config.resolve_chat_generation_mode(),
+    }
     try:
         payload.update(keyword_index_status())
     except Exception:
@@ -1465,7 +1472,11 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
                 _record_chat_outcome_metrics(answer_mode="grounded")
                 return cached
 
-        client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
+        client = (
+            ensure_openai_client(base_url=config.OPENAI_BASE_URL)
+            if config.resolve_chat_generation_mode() == "llm"
+            else None
+        )
         answer_kwargs: Dict[str, Any] = {
             "client": client,
             "top_k": effective_top_k,
@@ -1501,6 +1512,12 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         )
         payload = ans.to_dict()
         payload.update(_collection_meta(staging_collection))
+        payload["answer_mode"] = trace.get("answer_mode") or (
+            "fallback" if (ans.guard_reason or ans.used_fallback) else "grounded"
+        )
+        payload["chat_generation_mode"] = trace.get(
+            "chat_generation_mode", config.resolve_chat_generation_mode()
+        )
         payload["rag_profile_id"] = trace.get("rag_profile_id", rag_profile_id)
         payload["question_type"] = trace.get("question_type", "other")
         payload["profile_validation"] = trace.get(
@@ -1605,7 +1622,11 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
             runtime_profile = resolve_chat_runtime_profile(tenant_id)
             effective_top_k = _apply_chat_profile_top_k(req.top_k or config.TOP_K, runtime_profile)
             _record_chat_profile_metric(runtime_profile)
-            client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
+            client = (
+                ensure_openai_client(base_url=config.OPENAI_BASE_URL)
+                if config.resolve_chat_generation_mode() == "llm"
+                else None
+            )
             result = None
             trace = None
             stream_kwargs: Dict[str, Any] = {
@@ -1621,6 +1642,10 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                     result, trace = payload
                     final_payload = result.to_dict()
                     final_payload.update(_collection_meta(staging_collection))
+                    final_payload["answer_mode"] = trace.get("answer_mode")
+                    final_payload["chat_generation_mode"] = trace.get(
+                        "chat_generation_mode", config.resolve_chat_generation_mode()
+                    )
                     yield _sse_event("final", final_payload)
                 else:
                     yield _sse_event(name, payload)

@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import config
 from rag_core import embedder, store
+from rag_core.embedding_fingerprint import stamp_collection_metadata
 from rag_core.utils import ensure_openai_client
 
 
@@ -104,6 +105,7 @@ def ingest_canonical_rows(
     collection_name: Optional[str] = None,
     batch: int = 64,
     reset: bool = False,
+    source_jsonl_path: Optional[str] = None,
     client=None,
 ) -> Dict[str, Any]:
     if client is None and not embedder.is_local_provider():
@@ -187,6 +189,13 @@ def ingest_canonical_rows(
     if batch_ids:
         flush_batch()
 
+    if source_jsonl_path:
+        fingerprint = stamp_collection_metadata(
+            collection,
+            source_jsonl_path=source_jsonl_path,
+            chunk_count=ingested,
+        )
+
     return {
         "collection": str(getattr(collection, "name", "") or collection_name or ""),
         "embedding_fingerprint": fingerprint,
@@ -209,6 +218,7 @@ def main() -> int:
             collection_name=args.collection,
             batch=args.batch,
             reset=args.reset,
+            source_jsonl_path=args.canonical_jsonl_path,
         )
     except Exception as exc:
         print(f"error: failed to upsert batch: {exc}", file=sys.stderr)
