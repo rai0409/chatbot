@@ -1,0 +1,100 @@
+{
+  "rules": [
+    {
+      "rule_id": "carry_items_rule",
+      "applies_to_question_type": "list_items",
+      "when_question_contains_any": [
+        "防災用品",
+        "持っていく",
+        "持参",
+        "装備"
+      ],
+      "positive_categories": [
+        "carry_items"
+      ],
+      "positive_terms": [
+        "噴石",
+        "外傷性ショック",
+        "頭や体"
+      ],
+      "positive_weight": 35,
+      "negative_categories": [
+        "wrong_for_carry"
+      ],
+      "negative_terms": [
+        "避難路",
+        "ロープ設置",
+        "標識",
+        "パトロール員"
+      ],
+      "negative_weight": -25,
+      "enabled": true
+    },
+    {
+      "rule_id": "active_count_rule",
+      "applies_to_question_type": "count_fact",
+      "when_question_contains_any": [
+        "活火山",
+        "いくつ",
+        "数"
+      ],
+      "positive_categories": [
+        "active_volcano_count"
+      ],
+      "positive_terms": [],
+      "positive_weight": 40,
+      "negative_categories": [],
+      "negative_terms": [],
+      "negative_weight": -10,
+      "enabled": true
+    },
+    {
+      "rule_id": "jma_monitoring_rule",
+      "applies_to_question_type": "measure",
+      "when_question_contains_any": [
+        "気象庁",
+        "監視",
+        "観測"
+      ],
+      "positive_categories": [
+        "jma_monitoring"
+      ],
+      "positive_terms": [
+        "24時間",
+        "地震計",
+        "監視カメラ",
+        "噴火警戒レベル"
+      ],
+      "positive_weight": 30,
+      "negative_categories": [],
+      "negative_terms": [],
+      "negative_weight": -10,
+      "enabled": true
+    },
+    {
+      "rule_id": "local_measure_rule",
+      "applies_to_question_type": "measure",
+      "when_question_contains_any": [
+        "地方公共団体",
+        "自治体",
+        "整備",
+        "対策"
+      ],
+      "positive_categories": [
+        "local_measures"
+      ],
+      "positive_terms": [
+        "退避壕",
+        "避難施設",
+        "避難促進施設",
+        "防災行政無線",
+        "ビジターセンター"
+      ],
+      "positive_weight": 30,
+      "negative_categories": [],
+      "negative_terms": [],
+      "negative_weight": -10,
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+# Prometheus alert rules for 蔵伝 / KuraDen (Prompt049).
+# Thresholds mirror webapi/alerting.py DEFAULT_THRESHOLDS and docs/operations.md
+# "Alert thresholds". Rates are computed in PromQL from the safe aggregate
+# counters; tune per deployment. Counters are per-process — aggregate across
+# instances with sum() as shown.
+groups:
+  - name: kuraden.rates
+    rules:
+      # chat request volume (denominator) = sum of answer-mode buckets
+      - alert: KuradenHighErrorRate
+        expr: |
+          sum(rate(chat_provider_error_total[5m]))
+            / clamp_min(sum(rate(chat_answer_mode_total[5m])), 0.001) > 0.10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "chat provider error rate > 10% (critical)"
+      - alert: KuradenElevatedErrorRate
+        expr: |
+          sum(rate(chat_provider_error_total[5m]))
+            / clamp_min(sum(rate(chat_answer_mode_total[5m])), 0.001) > 0.02
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "chat provider error rate > 2% (warning)"
+      - alert: KuradenHighFallbackRate
+        expr: |
+          sum(rate(chat_used_fallback_total[15m]))
+            / clamp_min(sum(rate(chat_answer_mode_total[15m])), 0.001) > 0.60
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "abstain/no-answer (fallback) rate > 60% (critical)"
+      - alert: KuradenElevatedFallbackRate
+        expr: |
+          sum(rate(chat_used_fallback_total[15m]))
+            / clamp_min(sum(rate(chat_answer_mode_total[15m])), 0.001) > 0.30
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "abstain/no-answer (fallback) rate > 30% (warning)"
+      - alert: KuradenHighGuardTripRate
+        expr: |
+          sum(rate(chat_guard_reason_total[15m]))
+            / clamp_min(sum(rate(chat_answer_mode_total[15m])), 0.001) > 0.40
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "guard-trip rate > 40% (warning)"
+  - name: kuraden.counts
+    rules:
+      - alert: KuradenRateLimited
+        expr: sum(increase(api_rate_limited_total[15m])) >= 25
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "sustained 429 rate-limited requests (>= 25 / 15m)"
+      - alert: KuradenAuthRejections
+        expr: sum(increase(api_auth_rejection_total[15m])) >= 50
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "auth-rejection burst (>= 50 / 15m)"
+      - alert: KuradenTargetDown
+        expr: up{service="kuraden"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kuraden /metrics target is down (health/liveness)"

@@ -1,0 +1,114 @@
+{
+  "rules": [
+    {
+      "type_id": "count_fact",
+      "description": "数値を聞く質問",
+      "question_contains_any": [
+        "いくつ",
+        "何個",
+        "何件",
+        "何名",
+        "何年",
+        "何円",
+        "数"
+      ],
+      "question_contains_all": [],
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "type_id": "definition",
+      "description": "定義を聞く質問",
+      "question_contains_any": [
+        "とは",
+        "定義",
+        "意味",
+        "指す"
+      ],
+      "question_contains_all": [],
+      "priority": 90,
+      "enabled": true
+    },
+    {
+      "type_id": "list_items",
+      "description": "必要物や項目を聞く質問",
+      "question_contains_any": [
+        "何を",
+        "必要なもの",
+        "持っていく",
+        "持参",
+        "携行品",
+        "装備",
+        "一覧"
+      ],
+      "question_contains_all": [],
+      "priority": 90,
+      "enabled": true
+    },
+    {
+      "type_id": "procedure",
+      "description": "手順や方法を聞く質問",
+      "question_contains_any": [
+        "方法",
+        "手順",
+        "どうする",
+        "流れ",
+        "進め方"
+      ],
+      "question_contains_all": [],
+      "priority": 80,
+      "enabled": true
+    },
+    {
+      "type_id": "summary",
+      "description": "概要や要約を聞く質問",
+      "question_contains_any": [
+        "概要",
+        "要約",
+        "まとめ",
+        "全体像",
+        "何について"
+      ],
+      "question_contains_all": [],
+      "priority": 70,
+      "enabled": true
+    },
+    {
+      "type_id": "measure",
+      "description": "対策や施策を聞く質問",
+      "question_contains_any": [
+        "対策",
+        "整備",
+        "取り組み",
+        "施策",
+        "実施",
+        "支援"
+      ],
+      "question_contains_all": [],
+      "priority": 80,
+      "enabled": true
+    },
+    {
+      "type_id": "lesson",
+      "description": "教訓や示唆を聞く質問",
+      "question_contains_any": [
+        "教訓",
+        "学び",
+        "示唆",
+        "反省",
+        "重要"
+      ],
+      "question_contains_all": [],
+      "priority": 80,
+      "enabled": true
+    },
+    {
+      "type_id": "other",
+      "description": "その他",
+      "question_contains_any": [],
+      "question_contains_all": [],
+      "priority": 0,
+      "enabled": true
+    }
+  ]
+}

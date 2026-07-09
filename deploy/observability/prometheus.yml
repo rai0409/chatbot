@@ -1,0 +1,25 @@
+# Prometheus scrape config for 蔵伝 / KuraDen (Prompt049).
+# Scrapes the app's safe aggregate counters via the existing Prometheus text
+# exposition at /metrics?format=prometheus. No secrets, prompts, document text,
+# or tenant-private data are exposed by that endpoint (labels are stable enums).
+#
+# NOTE: app counters are PER-PROCESS. With multiple uvicorn workers/instances,
+# aggregate across them in queries (e.g. sum without (instance)).
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - alert_rules.yml
+
+scrape_configs:
+  - job_name: kuraden
+    metrics_path: /metrics
+    params:
+      format: ["prometheus"]
+    static_configs:
+      - targets: ["127.0.0.1:8000"]
+        labels:
+          service: kuraden
+    # /metrics is unauthenticated by design and carries no secrets; restrict
+    # network access to the scraper at the proxy/firewall layer.

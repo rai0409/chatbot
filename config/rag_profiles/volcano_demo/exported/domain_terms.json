@@ -1,0 +1,121 @@
+{
+  "terms": [
+    {
+      "term_id": "carry_helmet",
+      "category": "carry_items",
+      "term": "ヘルメット",
+      "aliases": [],
+      "weight": 35,
+      "negative_weight": 0,
+      "description": "登山者の個人防災用品",
+      "enabled": true
+    },
+    {
+      "term_id": "carry_goggles",
+      "category": "carry_items",
+      "term": "ゴーグル",
+      "aliases": [],
+      "weight": 35,
+      "negative_weight": 0,
+      "description": "登山者の個人防災用品",
+      "enabled": true
+    },
+    {
+      "term_id": "carry_mask",
+      "category": "carry_items",
+      "term": "マスク",
+      "aliases": [],
+      "weight": 35,
+      "negative_weight": 0,
+      "description": "登山者の個人防災用品",
+      "enabled": true
+    },
+    {
+      "term_id": "carry_headlight",
+      "category": "carry_items",
+      "term": "ヘッドライト",
+      "aliases": [
+        "懐中電灯",
+        "ライト"
+      ],
+      "weight": 30,
+      "negative_weight": 0,
+      "description": "登山者の個人防災用品",
+      "enabled": true
+    },
+    {
+      "term_id": "wrong_speaker",
+      "category": "wrong_for_carry",
+      "term": "防災行政無線",
+      "aliases": [
+        "防災行政無線スピーカー"
+      ],
+      "weight": 0,
+      "negative_weight": -25,
+      "description": "自治体設備であり個人の持ち物ではない",
+      "enabled": true
+    },
+    {
+      "term_id": "wrong_roof",
+      "category": "wrong_for_carry",
+      "term": "山小屋の屋根",
+      "aliases": [
+        "屋根補強",
+        "山小屋補強"
+      ],
+      "weight": 0,
+      "negative_weight": -25,
+      "description": "施設整備であり個人の持ち物ではない",
+      "enabled": true
+    },
+    {
+      "term_id": "active_count",
+      "category": "active_volcano_count",
+      "term": "111",
+      "aliases": [
+        "111の活火山"
+      ],
+      "weight": 40,
+      "negative_weight": 0,
+      "description": "活火山数",
+      "enabled": true
+    },
+    {
+      "term_id": "jma_50",
+      "category": "jma_monitoring",
+      "term": "50火山",
+      "aliases": [
+        "常時観測火山"
+      ],
+      "weight": 30,
+      "negative_weight": 0,
+      "description": "気象庁監視対象",
+      "enabled": true
+    },
+    {
+      "term_id": "jma_24h",
+      "category": "jma_monitoring",
+      "term": "24時間",
+      "aliases": [
+        "24時間体制"
+      ],
+      "weight": 25,
+      "negative_weight": 0,
+      "description": "気象庁監視体制",
+      "enabled": true
+    },
+    {
+      "term_id": "local_shelter",
+      "category": "local_measures",
+      "term": "退避壕",
+      "aliases": [
+        "避難施設",
+        "シェルター"
+      ],
+      "weight": 30,
+      "negative_weight": 0,
+      "description": "地方公共団体の火山防災対策",
+      "enabled": true
+    }
+  ]
+}

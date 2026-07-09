@@ -35,8 +35,10 @@ def test_answer_query_uses_reranker_in_chat_path(monkeypatch):
     res = qa.answer_query("PR2 を教えて", client=object(), top_k=5)
     assert [it.metadata["id"] for it in res.retrieved] == ["B", "A"]
     assert all("retrieval_source" in it.metadata for it in res.retrieved)
-    assert "参考資料:" in res.answer_with_footnotes
-    assert "[1]" in res.answer_with_footnotes
+    # Guard fired (soft_distance): no-answer responses carry no citations.
+    assert res.citations == []
+    assert "参考資料:" not in res.answer_with_footnotes
+    assert "[S" not in res.answer_text
     if res.citations:
         assert set(res.citations[0].__dict__.keys()) == {"number", "source_doc", "source_pages", "chunk_id"}
     assert set(res.to_dict().keys()) == {
@@ -81,7 +83,7 @@ def test_answer_query_procedure_neighbor_context_keeps_stable_order_under_weak_e
         return base_hits if calls["count"] == 1 else aug_hits
 
     monkeypatch.setattr(qa, "hybrid_retrieve", _fake_hybrid)
-    monkeypatch.setattr(qa, "add_neighbor_chunks", lambda seeds: neighbor_hits)
+    monkeypatch.setattr(qa, "add_neighbor_chunks", lambda seeds, **kwargs: neighbor_hits)
     monkeypatch.setattr(qa, "guard_merged_top", lambda *args, **kwargs: "soft_distance")
 
     res = qa.answer_query(
@@ -160,6 +162,46 @@ def test_answer_query_with_trace_matches_answer_query_and_exposes_core_trace(mon
     assert trace["selected_context_chars"] == len("PR2 の説明です。")
     assert isinstance(trace["citations_count"], int)
     assert isinstance(trace["latency_ms"], int)
+
+
+def test_debug_retrieve_with_trace_does_not_call_chat_completion(monkeypatch):
+    base_hits = [
+        _mk_chunk("A", "パスワード再設定の手順です。", 0.25, page=1),
+    ]
+    calls = {"count": 0}
+
+    def _fake_hybrid(*args, **kwargs):
+        calls["count"] += 1
+        return base_hits if calls["count"] == 1 else []
+
+    class _ChatCompletions:
+        def create(self, *args, **kwargs):
+            raise AssertionError("chat completion must not be called")
+
+    class _Client:
+        chat = type("Chat", (), {"completions": _ChatCompletions()})()
+
+    monkeypatch.setattr(qa, "hybrid_retrieve", _fake_hybrid)
+
+    trace = qa.debug_retrieve_with_trace("パスワード再設定の方法は？", client=_Client(), top_k=5)
+
+    assert calls["count"] == 2
+    assert trace["answer_mode"] == "debug_retrieval_only"
+    assert trace["citations_count"] == 0
+    assert trace["query_type"] == "procedure"
+    assert trace["final_guard_reason"] is None
+    assert trace["final_used_fallback"] is False
+    assert trace["selected_context_chunk_ids"] == ["A"]
+    for list_name in ["before_rerank", "after_rerank", "after_parent_expansion"]:
+        details = trace[list_name][0].metadata["score_details"]
+        assert set(details) >= {
+            "query_type",
+            "keyword_score",
+            "matched_terms",
+            "matched_fields",
+            "signals",
+        }
+        assert details["query_type"] == "procedure"
 
 
 def test_guard_too_general_keeps_vague_short_query():

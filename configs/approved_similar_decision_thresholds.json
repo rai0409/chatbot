@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "profile_name": "conservative_seed",
+  "description": "Conservative debug-only approved_similar_candidate decision policy. Human review and eval comparison are expected before production use.",
+  "high_confidence_min_hybrid": 0.82,
+  "high_confidence_min_semantic": 0.0,
+  "high_confidence_min_keyword": 0.0,
+  "high_confidence_min_weighted_keyword": 0.0,
+  "high_confidence_min_margin": 0.08,
+  "low_confidence_max_hybrid": 0.45,
+  "numeric_conflict_route": "numeric_conflict_blocked",
+  "negation_conflict_route": "negation_conflict_review",
+  "ambiguous_route": "ambiguous_multi_topic",
+  "require_specific_terms_for_high_confidence": false,
+  "min_specific_terms_for_high_confidence": 0,
+  "allow_high_confidence_when_margin_missing": false
+}
