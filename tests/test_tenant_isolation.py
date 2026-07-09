@@ -164,7 +164,7 @@ def test_chat_threads_tenant_to_pipeline_and_cache(monkeypatch, tmp_path):
 
     seen_tenants = []
 
-    def fake(question, client=None, top_k=20, max_context_chars=8000, intent_override=None, tenant_id="default"):
+    def fake(question, client=None, top_k=20, max_context_chars=8000, intent_override=None, tenant_id="default", **kwargs):
         seen_tenants.append(tenant_id)
         from schemas import AnswerResult
 
