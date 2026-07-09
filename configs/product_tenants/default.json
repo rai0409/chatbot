@@ -1,0 +1,19 @@
+{
+  "mapping_version": "1",
+  "default_profile": "production_safe",
+  "unknown_tenant_policy": "default_profile",
+  "tenants": {
+    "default": {
+      "tenant_id": "default",
+      "customer_id": "default",
+      "profile": "production_safe",
+      "allowed_profiles": [
+        "production_safe",
+        "production_low_cost",
+        "pilot_high_accuracy"
+      ],
+      "status": "active",
+      "notes": "Default tenant mapping"
+    }
+  }
+}

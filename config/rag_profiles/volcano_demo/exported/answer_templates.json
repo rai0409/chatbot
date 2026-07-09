@@ -1,0 +1,44 @@
+{
+  "templates": [
+    {
+      "template_id": "list_items_template",
+      "applies_to_question_type": "list_items",
+      "format": "bullet",
+      "instruction": "必要なものを箇条書きで答える。施策や設備整備ではなく、質問者が準備する物を優先する。",
+      "max_bullets": 5,
+      "enabled": true
+    },
+    {
+      "template_id": "count_fact_template",
+      "applies_to_question_type": "count_fact",
+      "format": "direct_then_reason",
+      "instruction": "最初に数値で直接答え、その後に根拠を1〜2点示す。",
+      "max_bullets": 3,
+      "enabled": true
+    },
+    {
+      "template_id": "definition_template",
+      "applies_to_question_type": "definition",
+      "format": "bullet",
+      "instruction": "定義を最初に述べ、補足を続ける。",
+      "max_bullets": 5,
+      "enabled": true
+    },
+    {
+      "template_id": "measure_template",
+      "applies_to_question_type": "measure",
+      "format": "bullet",
+      "instruction": "実施主体と取り組み内容が分かるように答える。",
+      "max_bullets": 5,
+      "enabled": true
+    },
+    {
+      "template_id": "summary_template",
+      "applies_to_question_type": "summary",
+      "format": "bullet",
+      "instruction": "重要論点を3〜5点に整理する。",
+      "max_bullets": 5,
+      "enabled": true
+    }
+  ]
+}

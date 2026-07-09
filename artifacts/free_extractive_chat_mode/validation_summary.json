@@ -1,0 +1,40 @@
+{
+  "health": {
+    "status": "ok",
+    "chroma_collection": "chatbot_chunks_v1_aligned_candidate",
+    "vectorstore_collection_name": "chatbot_chunks_v1_aligned_candidate",
+    "vectorstore_dir": "/home/rai/chatbot/vectorstore",
+    "chat_generation_mode": "extractive",
+    "keyword_index_loaded": true,
+    "keyword_index_records": 116,
+    "keyword_index_path": "/home/rai/chatbot/index/chunks.canonical.bytype.dedup.jsonl",
+    "embed_provider": "local",
+    "embed_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  },
+  "manual_unknown_006": {
+    "http_status": 200,
+    "answer_text_nonempty": true,
+    "used_fallback": true,
+    "answer_mode": "fallback",
+    "guard_reason": "insufficient_evidence"
+  },
+  "exact_qa": {
+    "total_cases": 118,
+    "errors": 0,
+    "answer_match_rate": 1.0,
+    "approved_exact_rate": 1.0,
+    "llm_fallback_count": 0
+  },
+  "unknown_abstention": {
+    "total_cases": 32,
+    "errors": 0,
+    "abstained_count": 32,
+    "unsupported_answer_count": 0,
+    "approved_exact_false_positive_count": 0
+  },
+  "normal_retrieval": {
+    "hybrid_hit@5": 1.0,
+    "still_failed": []
+  },
+  "failed_checks": []
+}

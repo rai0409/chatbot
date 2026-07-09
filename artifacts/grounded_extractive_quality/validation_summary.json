@@ -1,0 +1,58 @@
+{
+  "gate": "grounded_extractive_quality_after_unknown_regression_fix",
+  "status": "passed",
+  "grounded_extractive_quality": {
+    "total_cases": 14,
+    "passed_cases": 14,
+    "failed_cases": 0,
+    "pass_rate": 1.0,
+    "http_errors": 0,
+    "empty_answers": 0,
+    "answer_mode_mismatches": 0,
+    "missing_citations": 0,
+    "source_doc_misses": 0,
+    "page_misses": 0,
+    "required_term_misses": 0,
+    "abstained_count": 0,
+    "fallback_count": 0,
+    "category_distribution": {
+      "手順系質問": 5,
+      "条件確認系質問": 3,
+      "根拠ページ確認系質問": 3,
+      "通常質問": 3
+    },
+    "failed_case_ids": []
+  },
+  "cross_gate_regression_check": {
+    "exact_qa": {
+      "total_cases": 118,
+      "errors": 0,
+      "answer_match_rate": 1.0,
+      "approved_exact_rate": 1.0,
+      "llm_fallback_count": 0
+    },
+    "unknown_abstention": {
+      "total_cases": 32,
+      "errors": 0,
+      "abstained_count": 32,
+      "unsupported_answer_count": 0,
+      "approved_exact_false_positive_count": 0
+    },
+    "normal_retrieval": {
+      "hybrid_hit@5": 1.0,
+      "still_failed": []
+    },
+    "failed_checks": []
+  },
+  "commands": [
+    "python -m compileall rag_core webapi tools",
+    "bash scripts/run_grounded_extractive_quality_check.sh",
+    "bash scripts/run_free_extractive_chat_mode_check.sh"
+  ],
+  "notes": [
+    "No production promote performed.",
+    "No vectorstore deletion, collection reset, or ingestion reset performed.",
+    "No evaluator pass condition was relaxed.",
+    "This validation covers grounded extractive and free extractive local gates; it does not validate LLM mode quality."
+  ]
+}

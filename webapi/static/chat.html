@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex,nofollow" />
+<title>蔵伝 / KuraDen — 社内ナレッジ アシスタント</title>
+<style>
+  :root {
+    --fg:#1f2933; --muted:#6b7684; --line:#e2e7ee; --accent:#0b6b5b;
+    --accent-weak:#e7f3f0; --warn:#8a5a00; --warn-bg:#fff8e6; --err:#a12a2a;
+    --bg:#f3f5f8; --panel:#ffffff; --sidebar:#10231f;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif;
+         color: var(--fg); background: var(--bg); }
+  .app { display: grid; grid-template-columns: 260px 1fr 320px; height: 100vh; }
+  /* sidebar */
+  .sidebar { background: var(--sidebar); color: #e7efec; display: flex; flex-direction: column; }
+  .brand { padding: 16px; border-bottom: 1px solid rgba(255,255,255,.1); }
+  .brand .name { font-weight: 700; font-size: 15px; }
+  .brand .sub { font-size: 11px; color: #9fb4ad; margin-top: 2px; }
+  .new-chat { margin: 12px; padding: 9px 12px; border: 1px solid rgba(255,255,255,.18);
+              background: transparent; color: #e7efec; border-radius: 8px; cursor: pointer; font-size: 13px; }
+  .conv-list { flex: 1; overflow: auto; padding: 4px 8px; }
+  .conv-list .placeholder { color: #7f948d; font-size: 12px; padding: 8px 6px; }
+  .conv-item { padding: 8px 10px; border-radius: 6px; font-size: 13px; color: #cfe0db; cursor: default; }
+  .sidebar-foot { padding: 10px 12px; border-top: 1px solid rgba(255,255,255,.1); font-size: 11px; color: #7f948d; }
+  /* main */
+  .main { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+  .topbar { display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .topbar h1 { font-size: 14px; margin: 0; }
+  .topbar .hint { font-size: 11px; color: var(--muted); }
+  details.settings { font-size: 12px; color: var(--muted); }
+  details.settings summary { cursor: pointer; }
+  details.settings .fields { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  details.settings input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+  .query-scope { margin-top: 8px; font-size: 11px; color: var(--muted); }
+  .scope-badge { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; background: var(--panel); margin-right: 4px; }
+  .scope-badge.staging { border-color: #d8b35d; color: #6f4d00; background: var(--warn-bg); }
+  #log { flex: 1; overflow: auto; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+  .turn { max-width: 760px; width: 100%; align-self: center; }
+  .q { font-weight: 600; background: var(--panel); border: 1px solid var(--line);
+       border-radius: 10px; padding: 10px 12px; }
+  .a { white-space: pre-wrap; background: var(--accent-weak); border: 1px solid #cfe6df;
+       border-radius: 10px; padding: 10px 12px; margin-top: 8px; }
+  .abstain { background: var(--warn-bg); border: 1px solid #f0d9a0; color: var(--warn);
+             padding: 8px 10px; border-radius: 8px; margin-top: 8px; font-size: 13px; }
+  .err { color: var(--err); font-size: 13px; margin-top: 8px; }
+  .feedback { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .feedback span.label { font-size: 12px; color: var(--muted); }
+  .feedback button { font-size: 12px; padding: 5px 9px; border: 1px solid var(--line);
+                     background: var(--panel); border-radius: 6px; cursor: pointer; }
+  .feedback .done { color: var(--accent); font-size: 12px; }
+  .composer { border-top: 1px solid var(--line); background: var(--panel); padding: 12px 16px;
+              display: flex; gap: 10px; }
+  .composer textarea { flex: 1; min-height: 48px; max-height: 180px; padding: 11px;
+                       border: 1px solid var(--line); border-radius: 10px; font-size: 15px; resize: vertical; }
+  .composer button { padding: 0 20px; border: 0; background: var(--accent); color: #fff;
+                     border-radius: 10px; font-size: 15px; cursor: pointer; }
+  .composer button[disabled] { opacity: .5; cursor: default; }
+  /* citations panel */
+  .citations { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+  .citations h2 { font-size: 13px; margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .citations .body { flex: 1; overflow: auto; padding: 12px 16px; font-size: 13px; color: var(--fg); }
+  .citations .empty { color: var(--muted); font-size: 12px; }
+  .citations ol { margin: 0; padding-left: 18px; }
+  .citations li { margin-bottom: 8px; }
+  .citations .src { font-weight: 600; }
+  .citations .pg { color: var(--muted); }
+  @media (max-width: 1000px) { .app { grid-template-columns: 1fr; } .sidebar, .citations { display: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar: conversation history shell (history wiring lands in a later stage). -->
+  <aside class="sidebar" aria-label="サイドバー">
+    <div class="brand">
+      <div class="name" id="brandName">蔵伝 / KuraDen</div>
+      <div class="sub" id="brandSub">社内ナレッジ アシスタント（オンプレ版）</div>
+    </div>
+    <button class="new-chat" id="newChat" type="button">+ 新しい会話</button>
+    <nav class="conv-list" id="convList" aria-label="会話履歴">
+      <div class="placeholder">会話履歴はこの端末のセッション内のみ表示されます。</div>
+    </nav>
+    <a class="new-chat" id="adminLink" href="/admin/review" hidden>管理コンソール</a>
+    <div class="sidebar-foot">データは社外に送信されません（オンプレ運用）。</div>
+  </aside>
+
+  <!-- Main chat workspace -->
+  <section class="main">
+    <header class="topbar">
+      <div>
+        <h1>社内文書アシスタント</h1>
+        <div class="hint">出典付きで回答します。確実な根拠が無い場合は「分かりません」と答えます。</div>
+      </div>
+      <details class="settings">
+        <summary>接続設定</summary>
+        <div class="fields">
+          <input id="apiKey" type="password" autocomplete="off" placeholder="APIキー（認証有効時のみ・ページに保存しません）" />
+          <input id="tenantId" type="text" autocomplete="off" placeholder="テナントID（既定 default）" />
+          <input id="stagingCollection" type="text" autocomplete="off" placeholder="ステージングコレクション（非本番）" hidden />
+        </div>
+        <div class="query-scope" id="queryScope">
+          <span class="scope-badge" id="tenantBadge">tenant: default</span>
+          <span class="scope-badge" id="collectionBadge">collection: served default</span>
+        </div>
+      </details>
+    </header>
+
+    <div id="log" aria-live="polite"></div>
+
+    <div class="composer">
+      <textarea id="q" placeholder="質問を入力（例：装置Xの起動手順は？）  Ctrl/Cmd+Enter で送信" aria-label="質問"></textarea>
+      <button id="send" type="button">送信</button>
+    </div>
+  </section>
+
+  <!-- Citations / sources panel -->
+  <aside class="citations" aria-label="出典">
+    <h2>出典 / Sources</h2>
+    <div class="body" id="citations"><div class="empty">回答すると、ここに出典が表示されます。</div></div>
+  </aside>
+</div>
+
+<script>
+"use strict";
+// Commercial chat workspace client. Reuses POST /chat/stream (SSE) and
+// POST /chat/feedback only. No API key is hardcoded: when API auth is on, the
+// operator enters the pilot key at runtime; it is held in memory only and sent
+// as the X-Api-Key header. Default (auth disabled) works with no key.
+(function () {
+  var log = document.getElementById("log");
+  var qEl = document.getElementById("q");
+  var sendBtn = document.getElementById("send");
+  var apiKeyEl = document.getElementById("apiKey");
+  var tenantEl = document.getElementById("tenantId");
+  var stagingCollectionEl = document.getElementById("stagingCollection");
+  var tenantBadge = document.getElementById("tenantBadge");
+  var collectionBadge = document.getElementById("collectionBadge");
+  var citationsEl = document.getElementById("citations");
+  var newChatBtn = document.getElementById("newChat");
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function uuid() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return "q-" + Date.now() + "-" + Math.floor(Math.random() * 1e9);
+  }
+  function headers() {
+    var h = { "Content-Type": "application/json" };
+    var key = (apiKeyEl.value || "").trim();
+    if (key) h["X-Api-Key"] = key; // runtime only; never persisted to the page
+    return h;
+  }
+  function tenant() { return (tenantEl.value || "").trim() || "default"; }
+  function stagingCollection() { return (stagingCollectionEl && !stagingCollectionEl.hidden) ? (stagingCollectionEl.value || "").trim() : ""; }
+  function updateScope() {
+    var t = tenant();
+    var c = stagingCollection();
+    if (tenantBadge) tenantBadge.textContent = "tenant: " + t;
+    if (collectionBadge) {
+      collectionBadge.textContent = c ? "collection: staging " + c : "collection: served default";
+      collectionBadge.className = c ? "scope-badge staging" : "scope-badge";
+    }
+  }
+
+  function renderCitations(citations) {
+    if (!citations || !citations.length) {
+      citationsEl.innerHTML = '<div class="empty">この回答に出典はありません。</div>';
+      return;
+    }
+    var items = citations.map(function (c) {
+      var doc = c.source_doc || c.title || c.source_title || "出典";
+      var pages = Array.isArray(c.source_pages) && c.source_pages.length ? "p." + c.source_pages.join(",") : "";
+      return '<li><span class="src">' + esc(doc) + '</span> <span class="pg">' + esc(pages) + '</span></li>';
+    }).join("");
+    citationsEl.innerHTML = "<ol>" + items + "</ol>";
+  }
+
+  function renderAbstain(container) {
+    var b = document.createElement("div");
+    b.className = "abstain";
+    b.textContent = "確実な根拠が登録文書内に見つからなかったため、回答できません。";
+    container.appendChild(b);
+  }
+
+  function attachFeedback(container, token, tenantId) {
+    var box = document.createElement("div");
+    box.className = "feedback";
+    var label = document.createElement("span");
+    label.className = "label";
+    label.textContent = "この回答は役に立ちましたか？";
+    box.appendChild(label);
+    [
+      { t: "good", txt: "役に立った" },
+      { t: "bad", txt: "役に立たなかった" },
+      { t: "human_review_requested", txt: "人に確認したい" }
+    ].forEach(function (o) {
+      var btn = document.createElement("button");
+      btn.type = "button"; btn.textContent = o.txt;
+      btn.addEventListener("click", function () { sendFeedback(token, o.t, tenantId, box); });
+      box.appendChild(btn);
+    });
+    container.appendChild(box);
+  }
+
+  function sendFeedback(token, type, tenantId, box) {
+    fetch("/chat/feedback", {
+      method: "POST", headers: headers(),
+      body: JSON.stringify({ feedback_token: token, trace_id: token, feedback_type: type, tenant_id: tenantId })
+    }).then(function (r) {
+      box.innerHTML = r.ok
+        ? '<span class="done">フィードバックを受け付けました。ありがとうございます。</span>'
+        : '<span class="err">フィードバックを送信できませんでした。</span>';
+    }).catch(function () {
+      box.innerHTML = '<span class="err">フィードバックを送信できませんでした。</span>';
+    });
+  }
+
+  function applyAnswer(turn, ansEl, data) {
+    var txt = (data && (data.answer_text || data.answer_with_footnotes)) || "";
+    var abstained = !!(data && (data.guard_reason || data.used_fallback)) || !txt;
+    if (txt) ansEl.textContent = txt;
+    if (abstained) renderAbstain(turn);
+    renderCitations(data && data.citations);
+  }
+
+  function streamChat(question, turn, ansEl, token, tenantId, collectionName) {
+    var body = { question: question, tenant_id: tenantId, trace_id: token };
+    if (collectionName) body.staging_collection = collectionName;
+    return fetch("/chat/stream", {
+      method: "POST", headers: headers(),
+      body: JSON.stringify(body)
+    }).then(function (resp) {
+      if (!resp.ok || !resp.body) {
+        var e = document.createElement("div");
+        e.className = "err";
+        e.textContent = resp.status === 401 ? "認証が必要です。接続設定でキーを入力してください。"
+          : resp.status === 403 ? "このテナントへのアクセス権がありません。"
+          : resp.status === 404 ? "指定したステージングコレクションは利用できません。"
+          : resp.status === 409 ? "指定したステージングコレクションはまだ検索できません。"
+          : resp.status === 429 ? "アクセスが集中しています。少し待って再試行してください。"
+          : "回答を取得できませんでした。";
+        turn.appendChild(e);
+        return;
+      }
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder("utf-8");
+      var buf = "", streamed = "", settled = false;
+      function handleEvent(name, dataStr) {
+        var data = null;
+        try { data = dataStr ? JSON.parse(dataStr) : null; } catch (_) { data = null; }
+        if (name === "delta" && data && typeof data.text === "string") {
+          streamed += data.text; ansEl.textContent = streamed;
+        } else if (name === "final" || name === "approved") {
+          settled = true; applyAnswer(turn, ansEl, data); attachFeedback(turn, token, tenantId);
+        } else if (name === "error") {
+          settled = true;
+          var e = document.createElement("div"); e.className = "err";
+          e.textContent = "回答を取得できませんでした。"; turn.appendChild(e);
+        }
+      }
+      function parseFrames() {
+        var idx;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          var frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          var name = "message", dataLines = [];
+          frame.split("\n").forEach(function (line) {
+            if (line.indexOf("event:") === 0) name = line.slice(6).trim();
+            else if (line.indexOf("data:") === 0) dataLines.push(line.slice(5).trim());
+          });
+          handleEvent(name, dataLines.join("\n"));
+        }
+      }
+      function pump() {
+        return reader.read().then(function (res) {
+          if (res.done) { if (!settled && streamed) attachFeedback(turn, token, tenantId); return; }
+          buf += decoder.decode(res.value, { stream: true });
+          parseFrames();
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(function () {
+      var e = document.createElement("div"); e.className = "err";
+      e.textContent = "回答を取得できませんでした。"; turn.appendChild(e);
+    });
+  }
+
+  function ask() {
+    var question = (qEl.value || "").trim();
+    if (!question) return;
+    var tenantId = tenant();
+    var collectionName = stagingCollection();
+    var token = uuid();
+    var turn = document.createElement("div"); turn.className = "turn";
+    var q = document.createElement("div"); q.className = "q"; q.textContent = question;
+    var scope = document.createElement("div");
+    scope.className = "query-scope";
+    scope.innerHTML = '<span class="scope-badge">tenant: ' + esc(tenantId) + '</span> ' +
+      '<span class="' + (collectionName ? 'scope-badge staging' : 'scope-badge') + '">collection: ' +
+      esc(collectionName ? "staging " + collectionName : "served default") + '</span>';
+    var a = document.createElement("div"); a.className = "a"; a.textContent = "…";
+    turn.appendChild(q); turn.appendChild(scope); turn.appendChild(a); log.appendChild(turn);
+    log.scrollTop = log.scrollHeight;
+    qEl.value = ""; sendBtn.disabled = true;
+    citationsEl.innerHTML = '<div class="empty">回答を取得中…</div>';
+    streamChat(question, turn, a, token, tenantId, collectionName).then(function () {
+      sendBtn.disabled = false;
+      if (a.textContent === "…") a.textContent = "";
+      log.scrollTop = log.scrollHeight;
+    });
+  }
+
+  function newConversation() {
+    log.innerHTML = "";
+    citationsEl.innerHTML = '<div class="empty">回答すると、ここに出典が表示されます。</div>';
+    qEl.focus();
+  }
+
+  // Apply safe branding + backend-authoritative role gating (cosmetic only;
+  // privileged routes are enforced server-side regardless of this UI).
+  function applyBranding() {
+    fetch("/branding").then(function (r) { return r.ok ? r.json() : null; }).then(function (b) {
+      if (!b) return;
+      var name = document.getElementById("brandName");
+      var sub = document.getElementById("brandSub");
+      if (b.product_name && name) name.textContent = b.product_name;
+      if (b.subtitle && sub) sub.textContent = b.subtitle;
+      if (b.theme_color) document.documentElement.style.setProperty("--accent", b.theme_color);
+    }).catch(function () {});
+  }
+  function applyRole() {
+    fetch("/ui/context").then(function (r) { return r.ok ? r.json() : null; }).then(function (ctx) {
+      if (ctx && ctx.role === "admin") {
+        var link = document.getElementById("adminLink");
+        if (link) link.hidden = false;
+      }
+      if (ctx && (ctx.role === "admin" || ctx.role === "operator") && stagingCollectionEl) {
+        stagingCollectionEl.hidden = false;
+      }
+      updateScope();
+    }).catch(function () {});
+  }
+
+  sendBtn.addEventListener("click", ask);
+  newChatBtn.addEventListener("click", newConversation);
+  tenantEl.addEventListener("input", updateScope);
+  if (stagingCollectionEl) stagingCollectionEl.addEventListener("input", updateScope);
+  updateScope();
+  applyBranding();
+  applyRole();
+  qEl.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ask(); }
+  });
+})();
+</script>
+</body>
+</html>

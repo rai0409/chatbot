@@ -1,0 +1,38 @@
+{
+  "profile_name": "default",
+  "operation_mode": "default_safe",
+  "runtime_serving": true,
+  "features": {
+    "audit": true,
+    "feedback": true,
+    "review_queue": false,
+    "metrics": true,
+    "feature_rerank": false,
+    "feedback_preview_rerank": false,
+    "combined_rerank": false,
+    "debug_comparison": false,
+    "llm_answer": false,
+    "llm_rerank": false
+  },
+  "answer_policy": {
+    "allow_exact_answer": true,
+    "allow_similar_auto_answer": false,
+    "force_candidate_only_for_similar": true,
+    "fallback_to_no_answer": true,
+    "human_review_on_low_confidence": true
+  },
+  "limits": {
+    "max_candidates_internal": 5,
+    "max_candidates_display": 3,
+    "max_latency_ms_target": 1500
+  },
+  "cost_policy": {
+    "budget_tier": "standard",
+    "allow_llm_calls": false,
+    "allow_batch_eval_only": false
+  },
+  "override_policy": {
+    "allow_request_overrides": true,
+    "safe_narrowing_only": true
+  }
+}

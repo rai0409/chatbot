@@ -8,7 +8,7 @@ from typing import Iterable, List, Optional
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env", override=True)
+load_dotenv(BASE_DIR / ".env", override=False)
 
 
 def getenv_first(*keys: str, default: Optional[str] = None) -> Optional[str]:
@@ -59,9 +59,26 @@ def _get_bool(name: str, default: bool = False) -> bool:
 
 _VECTORSTORE_DIR_RAW = getenv_first("VECTORSTORE_DIR", default="vectorstore/")
 VECTORSTORE_DIR = str((BASE_DIR / _VECTORSTORE_DIR_RAW).resolve())
+DEFAULT_CHROMA_COLLECTION = "chatbot_chunks_v1_aligned_candidate"
 VECTORSTORE_COLLECTION_NAME = getenv_first(
-    "VECTORSTORE_COLLECTION_NAME", default="chatbot_chunks_v1"
+    "VECTORSTORE_COLLECTION_NAME", default=DEFAULT_CHROMA_COLLECTION
 )
+
+
+def resolve_chroma_collection_name(explicit: Optional[str] = None) -> str:
+    name = str(explicit or "").strip()
+    if name:
+        return name
+    return str(
+        getenv_first(
+            "CHROMA_COLLECTION",
+            "VECTORSTORE_COLLECTION_NAME",
+            default=DEFAULT_CHROMA_COLLECTION,
+        )
+        or DEFAULT_CHROMA_COLLECTION
+    )
+
+
 _CHUNKS_JSONL_PATH_RAW = getenv_first(
     "CHUNKS_JSONL_PATH", default="index/chunks.canonical.bytype.dedup.jsonl"
 )
@@ -72,8 +89,22 @@ INDEX_DIR = str((BASE_DIR / "index").resolve())
 OPENAI_API_KEY = getenv_first("OPENAI_API_KEY", default="")
 OPENAI_BASE_URL = getenv_first("OPENAI_BASE_URL", default=None)
 CHAT_MODEL = getenv_first("CHAT_MODEL", default="gpt-4o-mini")
+CHAT_COMPLETION_TIMEOUT_SECONDS = _get_float("CHAT_COMPLETION_TIMEOUT_SECONDS", default=30.0)
+CHAT_COMPLETION_MAX_RETRIES = int(getenv_first("CHAT_COMPLETION_MAX_RETRIES", default="1"))
+CHAT_COMPLETION_RETRY_BACKOFF_SECONDS = _get_float(
+    "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", default=1.0
+)
+CHAT_COMPLETION_MAX_TOKENS = int(getenv_first("CHAT_COMPLETION_MAX_TOKENS", default="1024"))
+CHAT_GENERATION_MODE = getenv_first("CHAT_GENERATION_MODE", default="extractive")
 EMBED_MODEL = getenv_first("EMBED_MODEL", default="text-embedding-3-small")
 OPENAI_EMBED_MODEL = getenv_first("OPENAI_EMBED_MODEL", default=EMBED_MODEL)
+
+
+def resolve_chat_generation_mode(explicit: Optional[str] = None) -> str:
+    mode = str(explicit or CHAT_GENERATION_MODE or "").strip().lower()
+    if mode in {"extractive", "llm"}:
+        return mode
+    return "extractive"
 
 TOP_K = int(getenv_first("TOP_K", default="20"))
 ENABLE_HYBRID_RETRIEVAL = _get_bool("ENABLE_HYBRID_RETRIEVAL", default=True)
@@ -106,6 +137,11 @@ RAG_HARD_MAX_DIST = _get_float("RAG_MAX_DISTANCE", default=RAG_HARD_MAX_DIST)
 RAG_HARD_MAX_DIST_PROCEDURE_DELTA = _get_float(
     "RAG_HARD_MAX_DIST_PROCEDURE_DELTA", default=0.03
 )
+
+# Keyword-only minimum evidence: when no vector evidence exists, the guard
+# requires best BM25 above this (or any lexical match). 0.0 = abstain only
+# when there is literally zero term overlap.
+RAG_MIN_KEYWORD_EVIDENCE_BM25 = _get_float("RAG_MIN_KEYWORD_EVIDENCE_BM25", default=0.0)
 
 RAG_SOFT_DIST_OTHER = _get_float("RAG_SOFT_DIST_OTHER", default=0.65)
 RAG_SOFT_DIST_RESET = _get_float("RAG_SOFT_DIST_RESET", default=0.80)
@@ -181,6 +217,32 @@ RERANK_MAX_LIFT_STRONG = int(getenv_first("RERANK_MAX_LIFT_STRONG", default="3")
 RERANK_MAX_LIFT_WEAK = int(getenv_first("RERANK_MAX_LIFT_WEAK", default="2"))
 RERANK_MAX_LIFT_OTHER_WEAK = int(getenv_first("RERANK_MAX_LIFT_OTHER_WEAK", default="2"))
 
+KEYWORD_BOOST_ENABLED = _get_bool("KEYWORD_BOOST_ENABLED", default=True)
+KEYWORD_BOOST_QUERY_TYPES = _get_list("KEYWORD_BOOST_QUERY_TYPES", ["exact_lookup", "identifier"])
+KEYWORD_BOOST_MAX_DELTA = _get_float("KEYWORD_BOOST_MAX_DELTA", default=0.05)
+
+# Optional semantic rerank stage (off by default; needs the optional
+# sentence-transformers dependency only when enabled).
+CROSS_ENCODER_RERANK_ENABLED = _get_bool("CROSS_ENCODER_RERANK_ENABLED", default=False)
+CROSS_ENCODER_MODEL = getenv_first("CROSS_ENCODER_MODEL", default="BAAI/bge-reranker-v2-m3")
+CROSS_ENCODER_TOP_N = int(getenv_first("CROSS_ENCODER_TOP_N", default="20"))
+
+APPROVED_QA_ENABLED = _get_bool("APPROVED_QA_ENABLED", default=False)
+_APPROVED_QA_PATH_RAW = getenv_first("APPROVED_QA_PATH", default="eval/cases/approved_qa_sample.jsonl")
+APPROVED_QA_PATH = str((BASE_DIR / _APPROVED_QA_PATH_RAW).resolve())
+APPROVED_SIMILAR_CANDIDATES_ENABLED = _get_bool("APPROVED_SIMILAR_CANDIDATES_ENABLED", default=False)
+APPROVED_SIMILAR_CANDIDATES_TOP_K = int(getenv_first("APPROVED_SIMILAR_CANDIDATES_TOP_K", default="5"))
+
+ANSWER_CACHE_ENABLED = _get_bool("ANSWER_CACHE_ENABLED", default=False)
+ANSWER_CACHE_MAX_ENTRIES = int(getenv_first("ANSWER_CACHE_MAX_ENTRIES", default="256"))
+
+# Default OFF. When true, /chat and /chat/stream resolve the per-tenant product
+# profile at runtime (safest-profile fallback) instead of running the unprofiled
+# default pipeline. Behavior is byte-for-byte unchanged while false.
+CHAT_USE_TENANT_PROFILE = _get_bool("CHAT_USE_TENANT_PROFILE", default=False)
+
 DISABLE_GUARD = _get_bool("DISABLE_GUARD", default=False)
 IGNORE_SEARCHABLE = _get_bool("IGNORE_SEARCHABLE", default=False)
 LOG_WHERE = _get_bool("LOG_WHERE", default=False)
+AUDIT_CHAT_ENABLED = _get_bool("AUDIT_CHAT_ENABLED", default=True)
+AUDIT_SEARCH_DEBUG_ENABLED = _get_bool("AUDIT_SEARCH_DEBUG_ENABLED", default=True)

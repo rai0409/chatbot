@@ -1,0 +1,702 @@
+{
+  "generated_at": "2026-07-03T02:35:59.469469+00:00",
+  "hypothesis": "Aligned vector evidence raised near-page chunks above a BM25-anchored expected page chunk; the fix preserves strong BM25/page lexical anchors during hybrid fusion.",
+  "cases": {
+    "normal_011": {
+      "query": "インボイス制度はいつ開始されると書かれているか。",
+      "expected_source_doc": "0022009-090.pdf",
+      "expected_pages": [
+        3
+      ],
+      "expected_keywords": [
+        "令和5年10 月1日",
+        "適格請求書等保存方式",
+        "開始"
+      ],
+      "production": {
+        "doc_rank": 2,
+        "expected_page_rank": 2,
+        "page_match_at_5": true,
+        "top5": [
+          {
+            "rank": 1,
+            "chunk_id": "pure_scan_test_144dpi.pdf:p3:c2",
+            "source_doc": "pure_scan_test_144dpi.pdf",
+            "source_pages": [
+              3
+            ],
+            "retrieval_source": "keyword",
+            "bm25_score": 18.738459748649106,
+            "vector_distance": null,
+            "rrf_score": 0.015873015873015872,
+            "keyword_score": 0.92,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "令和5年 1 月 1 日から、 複数税率に対庫した仕入税額控除の方式として、「適格請求書等保存方式」(インボイス制度) が開始されます。 適格請求書等保存万式においては、買手は、仕入税額控除の要件として、原則、適格請求書発行事業者 (インボイス発行事業者) から交付を受けた適格請求書 (インボイス) 等の保存が必要になります。 適格請求書とは、「売手が買手に対し正確な適用税率や消費税額等を伝えるための手段」であり、一定の事項が記載された請求書や納品書その他これらに類するものをいいます。 適格請求書を交付しようとする"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "0022009-090.pdf:p3:c2",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              3
+            ],
+            "retrieval_source": "keyword",
+            "bm25_score": 18.258548259391763,
+            "vector_distance": null,
+            "rrf_score": 0.015625,
+            "keyword_score": 0.92,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 1.0,
+            "snippet": "1 売 手買 手適格請求書発行事業者課税事業者適格請求書売手から買手へ正確な消費税率や消費税額等を伝える 【適格請求書等保存方式の概要】買手の求めに応じ適格請求書を交付 ※ 事前に適格請求書発行事業者の登録申請手続が必要 ※ 課税事業者のみ登録が可能適格請求書を保存して仕入税額控除を適用1 適格請求書等保存方式の概要令和5年10 月1日から、複数税率に対応した仕入税額控除の方式として、「適格請求書等保存方式」(インボイス制度)が開始されます。 (1) 適格請求書発行事業者の登録制度適格請求書等保存方式においては、買"
+          },
+          {
+            "rank": 3,
+            "chunk_id": "pure_scan_test_144dpi.pdf:p1:c0",
+            "source_doc": "pure_scan_test_144dpi.pdf",
+            "source_pages": [
+              1
+            ],
+            "retrieval_source": "keyword",
+            "bm25_score": 24.074524157175237,
+            "vector_distance": null,
+            "rrf_score": 0.01639344262295082,
+            "keyword_score": 0.66,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.0,
+            "snippet": "適格請求書等保存万式 (インボイス制度) の手引き ooo い。 に3@ のい"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "0022009-090.pdf:p1:c0",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              1
+            ],
+            "retrieval_source": "keyword",
+            "bm25_score": 23.154819522477794,
+            "vector_distance": null,
+            "rrf_score": 0.016129032258064516,
+            "keyword_score": 0.66,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.3333333333333333,
+            "snippet": "適格請求書等保存方式(インボイス制度)の手引き2022令和4年9月版国 税 庁この社会あなたの税がいきている"
+          },
+          {
+            "rank": 5,
+            "chunk_id": "58887_95105_misc.pdf:ja:p1:b0:h841ad8a67e:parent:9:child:1",
+            "source_doc": "58887_95105_misc.pdf",
+            "source_pages": [
+              1
+            ],
+            "retrieval_source": "vector",
+            "bm25_score": "",
+            "vector_distance": null,
+            "rrf_score": 0.01639344262295082,
+            "keyword_score": 0.11,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.0,
+            "snippet": ""
+          }
+        ]
+      },
+      "aligned_before_page_rerank": {
+        "doc_rank": 2,
+        "expected_page_rank": 0,
+        "page_match_at_5": false,
+        "top5": [
+          {
+            "rank": 1,
+            "chunk_id": "pure_scan_test_144dpi.pdf:p3:c2",
+            "source_doc": "pure_scan_test_144dpi.pdf",
+            "source_pages": [
+              3
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 18.738459748649106,
+            "vector_distance": null,
+            "rrf_score": 0.03149801587301587,
+            "keyword_score": 0.92,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "令和5年 1 月 1 日から、 複数税率に対庫した仕入税額控除の方式として、「適格請求書等保存方式」(インボイス制度) が開始されます。 適格請求書等保存万式においては、買手は、仕入税額控除の要件として、原則、適格請求書発行事業者 (インボイス発行事業者) から交付を受けた適格請求書 (インボイス) 等の保存が必要になります。 適格請求書とは、「売手が買手に対し正確な適用税率や消費税額等を伝えるための手段」であり、一定の事項が記載された請求書や納品書その他これらに類するものをいいます。 適格請求書を交付しようとする"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "0022009-090.pdf:p2:c1",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              2
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 12.03460073388751,
+            "vector_distance": null,
+            "rrf_score": 0.028404512489927477,
+            "keyword_score": 0.66,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "インボイス制度の手引き目次■ この「適格請求書等保存方式の手引き」は、令和4年4月1日現在成立している法律に基づいて作成しています。 1 適格請求書等保存方式の概要(1)適格請求書発行事業者の登録制度・・・1(2)適格請求書の交付義務(売手の留意点)・・・・・・・・・・・1(3)仕入税額控除の要件(買手の留意点)・・・・・・・・・・・1(6)修正した適格請求書の交付又は修正した適格請求書に係る電磁的記録を提供する義務・・22(7)適格請求書等の写し又は適格請求書等に係る電磁的記録を保存する義務・・・・・・・・23("
+          },
+          {
+            "rank": 3,
+            "chunk_id": "pure_scan_test_144dpi.pdf:p2:c1",
+            "source_doc": "pure_scan_test_144dpi.pdf",
+            "source_pages": [
+              2
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 11.37135993894892,
+            "vector_distance": null,
+            "rrf_score": 0.027799227799227798,
+            "keyword_score": 0.66,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.3333333333333333,
+            "snippet": "還還ーー 」 目次1 適格請求書等保存方式の概要 (1 ) 適格請求書発行事業者の登録制度・・・ 1 (2) 適格請求書の交付義務(売手の留意点)・・・・・・・・・・・ 1(3) 仕入税額控除の要件(買手の留意点)・・・・・・・・・・・ 12 適格請求書発行事業者の登録制度(1 ) 登録手続の概要・・・・・・・・・・・ 2(2) 登録手続のスケジュール・・・・・・・ 3(3) 適格請求書発行事業者の登録を受けた後の留意点\"“で・・・・・・・・・・・・・・ 4(4) 適格請求書発行事業者の取りやめ及び失効ドドドドドド"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "0022009-090.pdf:p5:c4",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              5
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 3.8805120373980646,
+            "vector_distance": null,
+            "rrf_score": 0.029906956136464335,
+            "keyword_score": 0.26,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 1.0,
+            "snippet": "3 【登録申請手続のスケジュール】 令和3年10 月1日令和5年10 月1日令和5年3月31 日登録申請書提出受付開始令和5年10 月1日登録の登録申請書提出期限《原則》適格請求書等保存方式開始≪登録申請手続は、e-Tax で!!≫e-Tax ソフトのほか、「e-Tax ソフト(WEB版)」(パソコンで利用可能)又は「e-Tax ソフト(SP版)」(スマートフォンで利用可能)を利用して登録申請手続を行うことができます。 「e-Tax ソフト(WEB版)」又は「e-Tax ソフト(SP版)」を利用すると、画面案内に従"
+          },
+          {
+            "rank": 5,
+            "chunk_id": "20241105-benefits-individual-guide-manual.pdf:p2:c1",
+            "source_doc": "20241105-benefits-individual-guide-manual.pdf",
+            "source_pages": [
+              2
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 3.8018489886543145,
+            "vector_distance": null,
+            "rrf_score": 0.02803921568627451,
+            "keyword_score": 0.52,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.3333333333333333,
+            "snippet": "目次1 1. はじめに •用意するもの 2. 申請完了までの流れ •全体の流れ 3. 画面操作(基本フロー) •給付制度についての確認・申請開始 •手続きの流れの確認 •給付制申請情報を取得するためのマイナンバーカード情報の読取1 •申請者情報の確認 •本人確認ためのマイナンバーカード情報の読取2 •電話番号の入力 •申請内容の確認 •申請完了 4. 画面操作(公金受取口座情報の取得) •公金受取口座情報取得の流れ •公金受取口座情報の取得 •本人確認 •公金受取口座情報取得のためのマイナンバーカードの読取 •公金"
+          }
+        ]
+      },
+      "aligned_after_page_rerank": {
+        "doc_rank": 2,
+        "expected_page_rank": 3,
+        "page_match_at_5": true,
+        "top5": [
+          {
+            "rank": 1,
+            "chunk_id": "pure_scan_test_144dpi.pdf:p3:c2",
+            "source_doc": "pure_scan_test_144dpi.pdf",
+            "source_pages": [
+              3
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 18.738459748649106,
+            "vector_distance": 0.6080793738365173,
+            "rrf_score": 0.03149801587301587,
+            "keyword_score": 0.92,
+            "hybrid_rank_score": 0.050891861847880776,
+            "page_evidence_boost": 0.004,
+            "page_anchor_boost": 0.006,
+            "page_cluster_boost": 0.0,
+            "score_before_page_adjust": 0.04089186184788078,
+            "score_after_page_adjust": 0.050891861847880776,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "令和5年 1 月 1 日から、 複数税率に対庫した仕入税額控除の方式として、「適格請求書等保存方式」(インボイス制度) が開始されます。 適格請求書等保存万式においては、買手は、仕入税額控除の要件として、原則、適格請求書発行事業者 (インボイス発行事業者) から交付を受けた適格請求書 (インボイス) 等の保存が必要になります。 適格請求書とは、「売手が買手に対し正確な適用税率や消費税額等を伝えるための手段」であり、一定の事項が記載された請求書や納品書その他これらに類するものをいいます。 適格請求書を交付しようとする"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "0022009-090.pdf:p2:c1",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              2
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 12.03460073388751,
+            "vector_distance": 0.6861624717712402,
+            "rrf_score": 0.028404512489927477,
+            "keyword_score": 0.66,
+            "hybrid_rank_score": 0.03556797256331623,
+            "page_evidence_boost": 0.0,
+            "page_anchor_boost": 0.0,
+            "page_cluster_boost": 0.0,
+            "score_before_page_adjust": 0.03556797256331623,
+            "score_after_page_adjust": 0.03556797256331623,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "インボイス制度の手引き目次■ この「適格請求書等保存方式の手引き」は、令和4年4月1日現在成立している法律に基づいて作成しています。 1 適格請求書等保存方式の概要(1)適格請求書発行事業者の登録制度・・・1(2)適格請求書の交付義務(売手の留意点)・・・・・・・・・・・1(3)仕入税額控除の要件(買手の留意点)・・・・・・・・・・・1(6)修正した適格請求書の交付又は修正した適格請求書に係る電磁的記録を提供する義務・・22(7)適格請求書等の写し又は適格請求書等に係る電磁的記録を保存する義務・・・・・・・・23("
+          },
+          {
+            "rank": 3,
+            "chunk_id": "0022009-090.pdf:p3:c2",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              3
+            ],
+            "retrieval_source": "keyword",
+            "bm25_score": 18.258548259391763,
+            "vector_distance": "",
+            "rrf_score": 0.015625,
+            "keyword_score": 0.92,
+            "hybrid_rank_score": 0.034970854825939174,
+            "page_evidence_boost": 0.004,
+            "page_anchor_boost": 0.006,
+            "page_cluster_boost": 0.0,
+            "score_before_page_adjust": 0.02497085482593918,
+            "score_after_page_adjust": 0.034970854825939174,
+            "keyword_coverage": 1.0,
+            "snippet": "1 売 手買 手適格請求書発行事業者課税事業者適格請求書売手から買手へ正確な消費税率や消費税額等を伝える 【適格請求書等保存方式の概要】買手の求めに応じ適格請求書を交付 ※ 事前に適格請求書発行事業者の登録申請手続が必要 ※ 課税事業者のみ登録が可能適格請求書を保存して仕入税額控除を適用1 適格請求書等保存方式の概要令和5年10 月1日から、複数税率に対応した仕入税額控除の方式として、「適格請求書等保存方式」(インボイス制度)が開始されます。 (1) 適格請求書発行事業者の登録制度適格請求書等保存方式においては、買"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "pure_scan_test_144dpi.pdf:p2:c1",
+            "source_doc": "pure_scan_test_144dpi.pdf",
+            "source_pages": [
+              2
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 11.37135993894892,
+            "vector_distance": 0.6865395307540894,
+            "rrf_score": 0.027799227799227798,
+            "keyword_score": 0.66,
+            "hybrid_rank_score": 0.03489636379312269,
+            "page_evidence_boost": 0.0,
+            "page_anchor_boost": 0.0,
+            "page_cluster_boost": 0.0,
+            "score_before_page_adjust": 0.03489636379312269,
+            "score_after_page_adjust": 0.03489636379312269,
+            "keyword_coverage": 0.3333333333333333,
+            "snippet": "還還ーー 」 目次1 適格請求書等保存方式の概要 (1 ) 適格請求書発行事業者の登録制度・・・ 1 (2) 適格請求書の交付義務(売手の留意点)・・・・・・・・・・・ 1(3) 仕入税額控除の要件(買手の留意点)・・・・・・・・・・・ 12 適格請求書発行事業者の登録制度(1 ) 登録手続の概要・・・・・・・・・・・ 2(2) 登録手続のスケジュール・・・・・・・ 3(3) 適格請求書発行事業者の登録を受けた後の留意点\"“で・・・・・・・・・・・・・・ 4(4) 適格請求書発行事業者の取りやめ及び失効ドドドドドド"
+          },
+          {
+            "rank": 5,
+            "chunk_id": "0022009-090.pdf:p5:c4",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              5
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 3.8805120373980646,
+            "vector_distance": 0.5132737159729004,
+            "rrf_score": 0.029906956136464335,
+            "keyword_score": 0.26,
+            "hybrid_rank_score": 0.03385500734020414,
+            "page_evidence_boost": 0.0,
+            "page_anchor_boost": 0.0,
+            "page_cluster_boost": 0.0,
+            "score_before_page_adjust": 0.03385500734020414,
+            "score_after_page_adjust": 0.03385500734020414,
+            "keyword_coverage": 1.0,
+            "snippet": "3 【登録申請手続のスケジュール】 令和3年10 月1日令和5年10 月1日令和5年3月31 日登録申請書提出受付開始令和5年10 月1日登録の登録申請書提出期限《原則》適格請求書等保存方式開始≪登録申請手続は、e-Tax で!!≫e-Tax ソフトのほか、「e-Tax ソフト(WEB版)」(パソコンで利用可能)又は「e-Tax ソフト(SP版)」(スマートフォンで利用可能)を利用して登録申請手続を行うことができます。 「e-Tax ソフト(WEB版)」又は「e-Tax ソフト(SP版)」を利用すると、画面案内に従"
+          }
+        ]
+      }
+    },
+    "normal_012": {
+      "query": "適格請求書とはどのような手段だと説明されているか。",
+      "expected_source_doc": "0022009-090.pdf",
+      "expected_pages": [
+        3
+      ],
+      "expected_keywords": [
+        "適格請求書",
+        "正確な消費税率",
+        "消費税額"
+      ],
+      "production": {
+        "doc_rank": 2,
+        "expected_page_rank": 2,
+        "page_match_at_5": true,
+        "top5": [
+          {
+            "rank": 1,
+            "chunk_id": "pure_scan_test_144dpi.pdf:p3:c2",
+            "source_doc": "pure_scan_test_144dpi.pdf",
+            "source_pages": [
+              3
+            ],
+            "retrieval_source": "keyword",
+            "bm25_score": 6.322027037582238,
+            "vector_distance": null,
+            "rrf_score": 0.01639344262295082,
+            "keyword_score": 0.52,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "令和5年 1 月 1 日から、 複数税率に対庫した仕入税額控除の方式として、「適格請求書等保存方式」(インボイス制度) が開始されます。 適格請求書等保存万式においては、買手は、仕入税額控除の要件として、原則、適格請求書発行事業者 (インボイス発行事業者) から交付を受けた適格請求書 (インボイス) 等の保存が必要になります。 適格請求書とは、「売手が買手に対し正確な適用税率や消費税額等を伝えるための手段」であり、一定の事項が記載された請求書や納品書その他これらに類するものをいいます。 適格請求書を交付しようとする"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "0022009-090.pdf:p3:c2",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              3
+            ],
+            "retrieval_source": "keyword",
+            "bm25_score": 6.160113334352174,
+            "vector_distance": null,
+            "rrf_score": 0.016129032258064516,
+            "keyword_score": 0.52,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 1.0,
+            "snippet": "1 売 手買 手適格請求書発行事業者課税事業者適格請求書売手から買手へ正確な消費税率や消費税額等を伝える 【適格請求書等保存方式の概要】買手の求めに応じ適格請求書を交付 ※ 事前に適格請求書発行事業者の登録申請手続が必要 ※ 課税事業者のみ登録が可能適格請求書を保存して仕入税額控除を適用1 適格請求書等保存方式の概要令和5年10 月1日から、複数税率に対応した仕入税額控除の方式として、「適格請求書等保存方式」(インボイス制度)が開始されます。 (1) 適格請求書発行事業者の登録制度適格請求書等保存方式においては、買"
+          },
+          {
+            "rank": 3,
+            "chunk_id": "0022009-090.pdf:p15:c14",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              15
+            ],
+            "retrieval_source": "keyword",
+            "bm25_score": 5.660746021320132,
+            "vector_distance": null,
+            "rrf_score": 0.015873015873015872,
+            "keyword_score": 0.52,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "(2) 適格請求書を交付又は適格請求書に係る電磁的記録を提供する義務適格請求書発行事業者には、国内において課税資産の譲渡等を行った場合に、相手方(課税事業者に限ります。)からの適格請求書の交付の求めに応じて適格請求書を交付する義務が課されています(適格請求書発行事業者が行う事業の性質上、適格請求書を交付することが困難な一定の課税資産の譲渡等(P18)については、適格請求書の交付義務が免除されます。)。 また、適格請求書の交付に代えて、適格請求書に係る電磁的記録を提供することができます。 なお、免税取引、非課税取引及"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "0022009-090.pdf:p24:c23",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              24
+            ],
+            "retrieval_source": "keyword",
+            "bm25_score": 3.5756790129886618,
+            "vector_distance": null,
+            "rrf_score": 0.015625,
+            "keyword_score": 0.26,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "22(6) 修正した適格請求書の交付又は修正した適格請求書に係る電磁的記録を提供する義務適格請求書発行事業者は、交付した適格請求書の記載事項(提供した適格請求書に係る電磁的記録の記録事項)に誤りがあったときは、買手である課税事業者に対して、修正した適格請求書を交付する(修正した適格請求書に係る電磁的記録を提供する)義務があります。 これらの交付方法は、例えば、1 誤りがあった事項を修正し、改めて記載事項の全てを記載したものを交付する方法2 当初に交付したものとの関連性を明らかにし、修正した事項を明示したものを交付す"
+          },
+          {
+            "rank": 5,
+            "chunk_id": "58887_95105_misc.pdf:ja:p3:b44:hb132274e0a:parent:14:child:1",
+            "source_doc": "58887_95105_misc.pdf",
+            "source_pages": [
+              3
+            ],
+            "retrieval_source": "vector",
+            "bm25_score": "",
+            "vector_distance": null,
+            "rrf_score": 0.01639344262295082,
+            "keyword_score": 0.03,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.0,
+            "snippet": ""
+          }
+        ]
+      },
+      "aligned_before_page_rerank": {
+        "doc_rank": 2,
+        "expected_page_rank": 3,
+        "page_match_at_5": true,
+        "top5": [
+          {
+            "rank": 1,
+            "chunk_id": "pure_scan_test_144dpi.pdf:p3:c2",
+            "source_doc": "pure_scan_test_144dpi.pdf",
+            "source_pages": [
+              3
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 6.322027037582238,
+            "vector_distance": null,
+            "rrf_score": 0.032018442622950824,
+            "keyword_score": 0.52,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "令和5年 1 月 1 日から、 複数税率に対庫した仕入税額控除の方式として、「適格請求書等保存方式」(インボイス制度) が開始されます。 適格請求書等保存万式においては、買手は、仕入税額控除の要件として、原則、適格請求書発行事業者 (インボイス発行事業者) から交付を受けた適格請求書 (インボイス) 等の保存が必要になります。 適格請求書とは、「売手が買手に対し正確な適用税率や消費税額等を伝えるための手段」であり、一定の事項が記載された請求書や納品書その他これらに類するものをいいます。 適格請求書を交付しようとする"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "0022009-090.pdf:p15:c14",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              15
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 5.660746021320132,
+            "vector_distance": null,
+            "rrf_score": 0.031024531024531024,
+            "keyword_score": 0.52,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "(2) 適格請求書を交付又は適格請求書に係る電磁的記録を提供する義務適格請求書発行事業者には、国内において課税資産の譲渡等を行った場合に、相手方(課税事業者に限ります。)からの適格請求書の交付の求めに応じて適格請求書を交付する義務が課されています(適格請求書発行事業者が行う事業の性質上、適格請求書を交付することが困難な一定の課税資産の譲渡等(P18)については、適格請求書の交付義務が免除されます。)。 また、適格請求書の交付に代えて、適格請求書に係る電磁的記録を提供することができます。 なお、免税取引、非課税取引及"
+          },
+          {
+            "rank": 3,
+            "chunk_id": "0022009-090.pdf:p3:c2",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              3
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 6.160113334352174,
+            "vector_distance": null,
+            "rrf_score": 0.02946236559139785,
+            "keyword_score": 0.52,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 1.0,
+            "snippet": "1 売 手買 手適格請求書発行事業者課税事業者適格請求書売手から買手へ正確な消費税率や消費税額等を伝える 【適格請求書等保存方式の概要】買手の求めに応じ適格請求書を交付 ※ 事前に適格請求書発行事業者の登録申請手続が必要 ※ 課税事業者のみ登録が可能適格請求書を保存して仕入税額控除を適用1 適格請求書等保存方式の概要令和5年10 月1日から、複数税率に対応した仕入税額控除の方式として、「適格請求書等保存方式」(インボイス制度)が開始されます。 (1) 適格請求書発行事業者の登録制度適格請求書等保存方式においては、買"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "0022009-090.pdf:p14:c13",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              14
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 3.5387522696354594,
+            "vector_distance": null,
+            "rrf_score": 0.030536130536130537,
+            "keyword_score": 0.26,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.3333333333333333,
+            "snippet": "12 3 適格請求書発行事業者の義務等(売手の留意点) 適格請求書発行事業者の登録を受けていない事業者が、適格請求書又は適格簡易請求書と誤認されるおそれのある書類を交付することや、適格請求書発行事業者が、偽りの記載をした適格請求書又は適格簡易請求書を交付することは禁止されており、違反した場合の罰則も設けられています。 注意 1 適格請求書(適格簡易請求書を含みます。以下1において同じです。)を交付又は適格請求書に係る電磁的記録を提供する義務適格請求書発行事業者には、国内において課税資産の譲渡等を行った場合に、相手方"
+          },
+          {
+            "rank": 5,
+            "chunk_id": "0022009-090.pdf:p33:c32",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              33
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 2.961939843679791,
+            "vector_distance": null,
+            "rrf_score": 0.028949545078577336,
+            "keyword_score": 0.26,
+            "hybrid_rank_score": null,
+            "page_evidence_boost": null,
+            "page_anchor_boost": null,
+            "page_cluster_boost": null,
+            "score_before_page_adjust": null,
+            "score_after_page_adjust": null,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "31 区分記載請求書等保存方式においては、仕入側が作成した一定事項の記載のある仕入明細書等の書類で、相手方の確認を受けたものについては、仕入税額控除の要件として保存すべき請求書等に該当します。 この点、適格請求書等保存方式の下でも同様に仕入明細書等による仕入税額控除は可能ですが、課税仕入れの相手方において課税資産の譲渡等に該当するものであり、次の事項が記載されていることが必要となります(区分記載請求書等保存方式における仕入明細書の記載事項に加え、2、5及び6の下線部分が追加されています。)。 1 仕入明細書の作成者"
+          }
+        ]
+      },
+      "aligned_after_page_rerank": {
+        "doc_rank": 2,
+        "expected_page_rank": 2,
+        "page_match_at_5": true,
+        "top5": [
+          {
+            "rank": 1,
+            "chunk_id": "pure_scan_test_144dpi.pdf:p3:c2",
+            "source_doc": "pure_scan_test_144dpi.pdf",
+            "source_pages": [
+              3
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 6.322027037582238,
+            "vector_distance": 0.2982107400894165,
+            "rrf_score": 0.032018442622950824,
+            "keyword_score": 0.52,
+            "hybrid_rank_score": 0.043770645326709046,
+            "page_evidence_boost": 0.0,
+            "page_anchor_boost": 0.006,
+            "page_cluster_boost": 0.0,
+            "score_before_page_adjust": 0.03777064532670905,
+            "score_after_page_adjust": 0.043770645326709046,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "令和5年 1 月 1 日から、 複数税率に対庫した仕入税額控除の方式として、「適格請求書等保存方式」(インボイス制度) が開始されます。 適格請求書等保存万式においては、買手は、仕入税額控除の要件として、原則、適格請求書発行事業者 (インボイス発行事業者) から交付を受けた適格請求書 (インボイス) 等の保存が必要になります。 適格請求書とは、「売手が買手に対し正確な適用税率や消費税額等を伝えるための手段」であり、一定の事項が記載された請求書や納品書その他これらに類するものをいいます。 適格請求書を交付しようとする"
+          },
+          {
+            "rank": 2,
+            "chunk_id": "0022009-090.pdf:p3:c2",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              3
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 6.160113334352174,
+            "vector_distance": 0.39649784564971924,
+            "rrf_score": 0.02946236559139785,
+            "keyword_score": 0.52,
+            "hybrid_rank_score": 0.041198376924833066,
+            "page_evidence_boost": 0.0,
+            "page_anchor_boost": 0.006,
+            "page_cluster_boost": 0.0,
+            "score_before_page_adjust": 0.03519837692483307,
+            "score_after_page_adjust": 0.041198376924833066,
+            "keyword_coverage": 1.0,
+            "snippet": "1 売 手買 手適格請求書発行事業者課税事業者適格請求書売手から買手へ正確な消費税率や消費税額等を伝える 【適格請求書等保存方式の概要】買手の求めに応じ適格請求書を交付 ※ 事前に適格請求書発行事業者の登録申請手続が必要 ※ 課税事業者のみ登録が可能適格請求書を保存して仕入税額控除を適用1 適格請求書等保存方式の概要令和5年10 月1日から、複数税率に対応した仕入税額控除の方式として、「適格請求書等保存方式」(インボイス制度)が開始されます。 (1) 適格請求書発行事業者の登録制度適格請求書等保存方式においては、買"
+          },
+          {
+            "rank": 3,
+            "chunk_id": "0022009-090.pdf:p15:c14",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              15
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 5.660746021320132,
+            "vector_distance": 0.3327223062515259,
+            "rrf_score": 0.031024531024531024,
+            "keyword_score": 0.52,
+            "hybrid_rank_score": 0.036710605626663034,
+            "page_evidence_boost": 0.0,
+            "page_anchor_boost": 0.0,
+            "page_cluster_boost": 0.0,
+            "score_before_page_adjust": 0.036710605626663034,
+            "score_after_page_adjust": 0.036710605626663034,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "(2) 適格請求書を交付又は適格請求書に係る電磁的記録を提供する義務適格請求書発行事業者には、国内において課税資産の譲渡等を行った場合に、相手方(課税事業者に限ります。)からの適格請求書の交付の求めに応じて適格請求書を交付する義務が課されています(適格請求書発行事業者が行う事業の性質上、適格請求書を交付することが困難な一定の課税資産の譲渡等(P18)については、適格請求書の交付義務が免除されます。)。 また、適格請求書の交付に代えて、適格請求書に係る電磁的記録を提供することができます。 なお、免税取引、非課税取引及"
+          },
+          {
+            "rank": 4,
+            "chunk_id": "0022009-090.pdf:p14:c13",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              14
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 3.5387522696354594,
+            "vector_distance": 0.3322269916534424,
+            "rrf_score": 0.030536130536130537,
+            "keyword_score": 0.26,
+            "hybrid_rank_score": 0.03445000576309408,
+            "page_evidence_boost": 0.0,
+            "page_anchor_boost": 0.0,
+            "page_cluster_boost": 0.0,
+            "score_before_page_adjust": 0.03445000576309408,
+            "score_after_page_adjust": 0.03445000576309408,
+            "keyword_coverage": 0.3333333333333333,
+            "snippet": "12 3 適格請求書発行事業者の義務等(売手の留意点) 適格請求書発行事業者の登録を受けていない事業者が、適格請求書又は適格簡易請求書と誤認されるおそれのある書類を交付することや、適格請求書発行事業者が、偽りの記載をした適格請求書又は適格簡易請求書を交付することは禁止されており、違反した場合の罰則も設けられています。 注意 1 適格請求書(適格簡易請求書を含みます。以下1において同じです。)を交付又は適格請求書に係る電磁的記録を提供する義務適格請求書発行事業者には、国内において課税資産の譲渡等を行った場合に、相手方"
+          },
+          {
+            "rank": 5,
+            "chunk_id": "0022009-090.pdf:p33:c32",
+            "source_doc": "0022009-090.pdf",
+            "source_pages": [
+              33
+            ],
+            "retrieval_source": "hybrid",
+            "bm25_score": 2.961939843679791,
+            "vector_distance": 0.2791673541069031,
+            "rrf_score": 0.028949545078577336,
+            "keyword_score": 0.26,
+            "hybrid_rank_score": 0.032805739062945316,
+            "page_evidence_boost": 0.0,
+            "page_anchor_boost": 0.0,
+            "page_cluster_boost": 0.0,
+            "score_before_page_adjust": 0.032805739062945316,
+            "score_after_page_adjust": 0.032805739062945316,
+            "keyword_coverage": 0.6666666666666666,
+            "snippet": "31 区分記載請求書等保存方式においては、仕入側が作成した一定事項の記載のある仕入明細書等の書類で、相手方の確認を受けたものについては、仕入税額控除の要件として保存すべき請求書等に該当します。 この点、適格請求書等保存方式の下でも同様に仕入明細書等による仕入税額控除は可能ですが、課税仕入れの相手方において課税資産の譲渡等に該当するものであり、次の事項が記載されていることが必要となります(区分記載請求書等保存方式における仕入明細書の記載事項に加え、2、5及び6の下線部分が追加されています。)。 1 仕入明細書の作成者"
+          }
+        ]
+      }
+    }
+  }
+}

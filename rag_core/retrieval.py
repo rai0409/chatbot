@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -40,8 +41,58 @@ class _KeywordIndex:
 _INDEX_CACHE: Dict[str, object] = {"path": None, "mtime": None, "index": None}
 _INDEX_LOCK = Lock()
 
+logger = logging.getLogger(__name__)
 
-def _build_base_where(allowed_types=None, allowed_qualities=None) -> Dict:
+# Degraded keyword corpus states already warned about, keyed by (path, reason),
+# so the warning is emitted once per process per state instead of per request.
+_KEYWORD_INDEX_WARNED_KEYS: set[Tuple[str, str]] = set()
+
+
+def _warn_degraded_keyword_index(path: str, records: int, reason: str) -> None:
+    key = (str(path), reason)
+    if key in _KEYWORD_INDEX_WARNED_KEYS:
+        return
+    _KEYWORD_INDEX_WARNED_KEYS.add(key)
+    logger.warning(
+        "keyword_index_degraded %s",
+        json.dumps(
+            {
+                "keyword_index_loaded": records > 0,
+                "keyword_index_records": records,
+                "keyword_index_path": str(path),
+                "reason": reason,
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+
+def keyword_index_status() -> Dict[str, Any]:
+    index = _load_keyword_index()
+    records = len(index.searchable_docs)
+    return {
+        "keyword_index_loaded": records > 0,
+        "keyword_index_records": records,
+        "keyword_index_path": str(config.CHUNKS_JSONL_PATH),
+    }
+
+
+DEFAULT_TENANT_ID = "default"
+
+
+def normalize_tenant_id(value) -> str:
+    text = str(value or "").strip()
+    return text or DEFAULT_TENANT_ID
+
+
+def _tenant_matches(meta: Dict, tenant_id: str) -> bool:
+    # Legacy chunks without tenant_id normalize to "default", so they are
+    # visible only to the default tenant; non-default tenants require an
+    # explicit tag.
+    return normalize_tenant_id((meta or {}).get("tenant_id")) == normalize_tenant_id(tenant_id)
+
+
+def _build_base_where(allowed_types=None, allowed_qualities=None, tenant_id: str = DEFAULT_TENANT_ID) -> Dict:
     where = {}
     if allowed_types:
         where["type"] = {"$in": list(allowed_types)}
@@ -49,9 +100,32 @@ def _build_base_where(allowed_types=None, allowed_qualities=None) -> Dict:
         where["quality"] = {"$in": list(allowed_qualities)}
     if not config.IGNORE_SEARCHABLE:
         where["searchable"] = 1
+    # Chroma's where syntax cannot express "missing or equal", so the default
+    # tenant relies on the authoritative post-query _tenant_matches filter;
+    # non-default tenants additionally get a strict equality clause.
+    tenant = normalize_tenant_id(tenant_id)
+    if tenant != DEFAULT_TENANT_ID:
+        where["tenant_id"] = tenant
     if config.LOG_WHERE:
         print("where:", json.dumps(where, ensure_ascii=False))
     return where
+
+
+def _to_chroma_where(where: Optional[Dict]) -> Optional[Dict]:
+    # Chroma's where validator accepts exactly one top-level operator, so a flat
+    # multi-condition dict (e.g. {"searchable": 1, "tenant_id": "t"}) is invalid
+    # and must be expressed as a single $and over one-key clauses. This converter
+    # is applied only at the Chroma boundary (collection.query / collection.get);
+    # the flat form returned by _build_base_where is preserved for the in-memory
+    # _meta_matches_where filter and the keyword path. Conditions are not added
+    # or removed, so tenant isolation and searchable filtering are unchanged.
+    if not where:
+        return None
+    items = list(where.items())
+    if len(items) == 1:
+        key, value = items[0]
+        return {key: value}
+    return {"$and": [{key: value} for key, value in items]}
 
 
 def _meta_matches_where(meta: Dict, where: Dict) -> bool:
@@ -199,6 +273,10 @@ def _load_keyword_index() -> _KeywordIndex:
                     chunk_id = str(meta.get("id") or "").strip()
                     if chunk_id:
                         rows_by_id[chunk_id] = dict(obj)
+        if not os.path.exists(path):
+            _warn_degraded_keyword_index(path, len(searchable_docs), "missing_file")
+        elif not searchable_docs:
+            _warn_degraded_keyword_index(path, len(searchable_docs), "empty_corpus")
         bm25 = BM25Okapi(tokenized_corpus or [[""]])
         index = _KeywordIndex(
             tokenized_corpus=tokenized_corpus,
@@ -215,26 +293,71 @@ def _load_keyword_index() -> _KeywordIndex:
         return index
 
 
+class QueryEmbeddingBatch:
+    """Lazily embeds a fixed set of queries in one embed_queries call.
+
+    Embedding happens only when the first vector is requested, so keyword-only
+    and stubbed-vector paths never trigger an embedding call at all.
+    """
+
+    def __init__(self, queries: Sequence[str], client=None):
+        self._queries = list(dict.fromkeys(q for q in queries if q))
+        self._client = client
+        self._embeddings: Optional[Dict[str, List[float]]] = None
+
+    def get(self, query: str) -> List[float]:
+        if self._embeddings is None:
+            vectors = embedder.embed_queries(self._queries, client=self._client)
+            self._embeddings = {q: list(v) for q, v in zip(self._queries, vectors)}
+        if query not in self._embeddings:
+            self._embeddings[query] = list(
+                embedder.embed_queries([query], client=self._client)[0]
+            )
+        return self._embeddings[query]
+
+
+def _resolve_query_embedding(question: str, client, query_embedding) -> List[float]:
+    if query_embedding is None:
+        return embedder.embed_queries([question], client=client)[0]
+    if callable(query_embedding):
+        return list(query_embedding())
+    return list(query_embedding)
+
+
 def vector_retrieve(
     question: str,
     client,
     top_k: int,
     allowed_types=None,
     allowed_qualities=None,
+    query_embedding=None,
+    tenant_id: str = DEFAULT_TENANT_ID,
+    collection_name: Optional[str] = None,
+    create_collection_if_missing: bool = True,
 ) -> List[RetrievedChunk]:
-    collection = store.get_vectorstore()
-    where = _build_base_where(allowed_types, allowed_qualities)
-    embedding = embedder.embed_queries([question], client=client)[0]
+    collection = store.get_vectorstore(
+        collection_name=collection_name,
+        create_if_missing=create_collection_if_missing,
+    )
+    where = _build_base_where(allowed_types, allowed_qualities, tenant_id=tenant_id)
+    embedding = _resolve_query_embedding(question, client, query_embedding)
     oversample = max(1, int(getattr(config, "CHILD_RETRIEVAL_OVERSAMPLE", 2)))
     n_results = max(top_k, top_k * oversample)
-    res = collection.query(query_embeddings=[embedding], n_results=n_results, where=where)
+    res = collection.query(
+        query_embeddings=[embedding], n_results=n_results, where=_to_chroma_where(where)
+    )
     docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
     dists = res.get("distances", [[]])[0]
     out: List[RetrievedChunk] = []
     for text, meta, dist in zip(docs, metas, dists):
         m = dict(meta or {})
+        if not _tenant_matches(m, tenant_id):
+            continue
         m["retrieval_source"] = "vector"
+        # Raw cosine distance survives fusion so the guard can use real
+        # semantic evidence instead of rank-derived pseudo-distances.
+        m["vector_distance"] = float(dist)
         out.append(
             RetrievedChunk(
                 text=_extract_display_text(text=text or "", meta=m),
@@ -251,11 +374,13 @@ def keyword_retrieve(
     top_k: int,
     allowed_types=None,
     allowed_qualities=None,
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> List[RetrievedChunk]:
     index = _load_keyword_index()
     if not index.searchable_docs:
         return []
-    where = _build_base_where(allowed_types, allowed_qualities)
+    where = _build_base_where(allowed_types, allowed_qualities, tenant_id=tenant_id)
+    where.pop("tenant_id", None)  # tenant is checked via _tenant_matches below
     query_tokens = _heuristic_tokenize(question)
     if not query_tokens:
         query_tokens = _heuristic_tokenize(_normalize(question))
@@ -266,6 +391,8 @@ def keyword_retrieve(
     ranked = []
     for idx, bm25_score in enumerate(bm25_scores):
         meta = index.metas[idx]
+        if not _tenant_matches(meta, tenant_id):
+            continue
         if not _meta_matches_where(meta, where):
             continue
         norm_text = index.norm_docs[idx]
@@ -320,6 +447,107 @@ def _bucket_child_priority(bucket: Dict[str, Any]) -> int:
     return 1 if _is_child_chunk(base.metadata) else 0
 
 
+def _hybrid_bucket_rank_adjustment(question: str, bucket: Dict[str, Any]) -> Dict[str, float]:
+    base = _bucket_base_chunk(bucket)
+    if base is None:
+        return {
+            "keyword_score": 0.0,
+            "keyword_evidence_boost": 0.0,
+            "vector_without_keyword_penalty": 0.0,
+            "hybrid_rank_score": float(bucket.get("rrf") or 0.0),
+        }
+
+    # Local import avoids a module import cycle: keyword_scorer imports
+    # RetrievedChunk from this module for its public boost helper.
+    from rag_core.keyword_scorer import classify_query_type, score_keyword_match
+
+    meta = dict(base.metadata or {})
+    keyword_hit = bucket.get("keyword")
+    if isinstance(keyword_hit, RetrievedChunk):
+        meta.update(keyword_hit.metadata or {})
+
+    details = score_keyword_match(
+        question,
+        str(meta.get("searchable_text") or base.text or ""),
+        meta,
+        query_type=classify_query_type(question),
+    )
+    keyword_score = float(details.get("keyword_score") or 0.0)
+    bm25_score = float(meta.get("bm25_score") or 0.0)
+    has_keyword_evidence = bool(bucket.get("keyword") is not None or bm25_score > 0.0 or keyword_score > 0.0)
+
+    # RRF deltas around rank 1-5 are tiny (~0.00025 with k=60). Keep this
+    # adjustment lightweight but large enough to break vector/keyword ties by
+    # observed lexical evidence instead of insertion order.
+    keyword_evidence_boost = 0.0
+    if has_keyword_evidence:
+        keyword_evidence_boost += min(0.006, keyword_score * 0.006)
+        if bm25_score > 0.0:
+            keyword_evidence_boost += min(0.006, bm25_score / 10000.0)
+            keyword_evidence_boost += 0.002
+
+    vector_without_keyword_penalty = 0.0
+    if bucket.get("vector") is not None and bucket.get("keyword") is None and keyword_score <= 0.0:
+        vector_without_keyword_penalty = 0.002
+
+    rrf_score = float(bucket.get("rrf") or 0.0)
+    return {
+        "keyword_score": keyword_score,
+        "keyword_evidence_boost": round(keyword_evidence_boost, 8),
+        "vector_without_keyword_penalty": round(vector_without_keyword_penalty, 8),
+        "hybrid_rank_score": rrf_score + keyword_evidence_boost - vector_without_keyword_penalty,
+    }
+
+
+def _apply_page_sensitive_adjustments(items: Sequence[Dict[str, Any]]) -> None:
+    keyword_items = [item for item in items if isinstance(item.get("keyword"), RetrievedChunk)]
+    max_bm25 = max(
+        (float((item["keyword"].metadata or {}).get("bm25_score") or 0.0) for item in keyword_items),
+        default=0.0,
+    )
+    max_keyword_score = max(
+        (float((item.get("rank_adjustment") or {}).get("keyword_score") or 0.0) for item in keyword_items),
+        default=0.0,
+    )
+    anchor_bm25_scores = [
+        float((item["keyword"].metadata or {}).get("bm25_score") or 0.0)
+        for item in keyword_items
+        if max_keyword_score > 0.0
+        and float((item.get("rank_adjustment") or {}).get("keyword_score") or 0.0) >= max_keyword_score * 0.98
+    ]
+    anchor_max_bm25 = max(anchor_bm25_scores, default=max_bm25)
+
+    for item in items:
+        adj = item.get("rank_adjustment") or {}
+        before = float(adj.get("hybrid_rank_score") or item.get("rrf") or 0.0)
+        page_anchor_boost = 0.0
+        page_evidence_boost = 0.0
+        page_cluster_boost = 0.0
+        keyword_hit = item.get("keyword")
+        keyword_score = float(adj.get("keyword_score") or 0.0)
+        bm25_score = 0.0
+        if isinstance(keyword_hit, RetrievedChunk):
+            bm25_score = float((keyword_hit.metadata or {}).get("bm25_score") or 0.0)
+
+        # If BM25 has a near-best page-level lexical anchor, keep that chunk
+        # competitive against vector-fused near-page hits. The threshold is
+        # intentionally conservative: it only affects chunks already found by
+        # BM25 with meaningful keyword evidence.
+        if anchor_max_bm25 > 0.0 and bm25_score >= anchor_max_bm25 * 0.95 and keyword_score >= 0.5:
+            page_anchor_boost = 0.006
+        if max_keyword_score > 0.0 and keyword_score >= max_keyword_score * 0.98 and keyword_score >= 0.8:
+            page_evidence_boost = 0.004
+
+        after = before + page_anchor_boost + page_evidence_boost + page_cluster_boost
+        adj["page_anchor_boost"] = round(page_anchor_boost, 8)
+        adj["page_evidence_boost"] = round(page_evidence_boost, 8)
+        adj["page_cluster_boost"] = round(page_cluster_boost, 8)
+        adj["score_before_page_adjust"] = before
+        adj["score_after_page_adjust"] = after
+        adj["hybrid_rank_score"] = after
+        item["rank_adjustment"] = adj
+
+
 def hybrid_retrieve(
     question: str,
     client,
@@ -329,6 +557,10 @@ def hybrid_retrieve(
     vector_top_k: Optional[int] = None,
     bm25_top_k: Optional[int] = None,
     rrf_k: Optional[int] = None,
+    query_embedding=None,
+    tenant_id: str = DEFAULT_TENANT_ID,
+    collection_name: Optional[str] = None,
+    create_collection_if_missing: bool = True,
 ) -> List[RetrievedChunk]:
     if not config.ENABLE_HYBRID_RETRIEVAL:
         return vector_retrieve(
@@ -337,6 +569,10 @@ def hybrid_retrieve(
             top_k=top_k,
             allowed_types=allowed_types,
             allowed_qualities=allowed_qualities,
+            query_embedding=query_embedding,
+            tenant_id=tenant_id,
+            collection_name=collection_name,
+            create_collection_if_missing=create_collection_if_missing,
         )
 
     v_top_k = vector_top_k or config.VECTOR_TOP_K or top_k
@@ -348,12 +584,17 @@ def hybrid_retrieve(
         top_k=v_top_k,
         allowed_types=allowed_types,
         allowed_qualities=allowed_qualities,
+        query_embedding=query_embedding,
+        tenant_id=tenant_id,
+        collection_name=collection_name,
+        create_collection_if_missing=create_collection_if_missing,
     )
     keyword_hits = keyword_retrieve(
         question,
         top_k=k_top_k,
         allowed_types=allowed_types,
         allowed_qualities=allowed_qualities,
+        tenant_id=tenant_id,
     )
 
     merged: Dict[str, Dict] = {}
@@ -368,16 +609,28 @@ def hybrid_retrieve(
         bucket["keyword"] = ch
         bucket["rrf"] += 1.0 / (k_rrf + rank)
 
+    for item in merged.values():
+        item["rank_adjustment"] = _hybrid_bucket_rank_adjustment(question, item)
+    _apply_page_sensitive_adjustments(list(merged.values()))
+
     ranked_items = sorted(
         merged.values(),
         key=lambda x: (
             _bucket_child_priority(x),
+            float(x["rank_adjustment"]["hybrid_rank_score"]),
             float(x["rrf"]),
+            1 if x.get("keyword") is not None else 0,
         ),
         reverse=True,
     )
+    selected_items = ranked_items[:top_k]
+    if top_k > 1 and vector_hits and not any(item.get("vector") is not None for item in selected_items):
+        best_vector_item = next((item for item in ranked_items if item.get("vector") is not None), None)
+        if best_vector_item is not None:
+            selected_items = selected_items[: top_k - 1] + [best_vector_item]
+
     out: List[RetrievedChunk] = []
-    for rank, item in enumerate(ranked_items[:top_k], start=1):
+    for rank, item in enumerate(selected_items, start=1):
         v = item["vector"]
         k = item["keyword"]
         base = v or k
@@ -391,6 +644,24 @@ def hybrid_retrieve(
         else:
             m["retrieval_source"] = "keyword"
         m["rrf_score"] = float(item["rrf"])
+        if k is not None and k.metadata.get("bm25_score") is not None:
+            m["bm25_score"] = k.metadata.get("bm25_score")
+        rank_adjustment = item.get("rank_adjustment") or {}
+        keyword_score = float(rank_adjustment.get("keyword_score") or 0.0)
+        if keyword_score > 0.0:
+            m["keyword_score"] = round(keyword_score, 4)
+        m["hybrid_rank_score"] = float(rank_adjustment.get("hybrid_rank_score") or item["rrf"])
+        m["keyword_evidence_boost"] = float(rank_adjustment.get("keyword_evidence_boost") or 0.0)
+        m["vector_without_keyword_penalty"] = float(
+            rank_adjustment.get("vector_without_keyword_penalty") or 0.0
+        )
+        m["page_evidence_boost"] = float(rank_adjustment.get("page_evidence_boost") or 0.0)
+        m["page_anchor_boost"] = float(rank_adjustment.get("page_anchor_boost") or 0.0)
+        m["page_cluster_boost"] = float(rank_adjustment.get("page_cluster_boost") or 0.0)
+        m["score_before_page_adjust"] = float(rank_adjustment.get("score_before_page_adjust") or item["rrf"])
+        m["score_after_page_adjust"] = float(rank_adjustment.get("score_after_page_adjust") or m["hybrid_rank_score"])
+        m["score_before_hybrid_rank_adjust"] = float(item["rrf"])
+        m["score_after_hybrid_rank_adjust"] = float(m["hybrid_rank_score"])
         # Common lower-is-better scale for downstream guard/order.
         pseudo_distance = min(0.25 + (rank - 1) * 0.02, 0.95)
         if v is not None:
@@ -412,6 +683,7 @@ def expand_parent_chunks(
     *,
     max_parent_chunks: Optional[int] = None,
     max_parent_context_chars: Optional[int] = None,
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> List[RetrievedChunk]:
     if not getattr(config, "ENABLE_PARENT_EXPANSION", True):
         return list(chunks)
@@ -437,7 +709,7 @@ def expand_parent_chunks(
             continue
 
         parent_row = index.rows_by_id.get(parent_id)
-        if not parent_row:
+        if not parent_row or not _tenant_matches(parent_row, tenant_id):
             out.append(ch)
             continue
 
@@ -500,8 +772,17 @@ def expand_parent_chunks(
     return out
 
 
-def add_neighbor_chunks(seeds: Sequence[RetrievedChunk], window: int = 1) -> List[RetrievedChunk]:
-    collection = store.get_vectorstore()
+def add_neighbor_chunks(
+    seeds: Sequence[RetrievedChunk],
+    window: int = 1,
+    tenant_id: str = DEFAULT_TENANT_ID,
+    collection_name: Optional[str] = None,
+    create_collection_if_missing: bool = True,
+) -> List[RetrievedChunk]:
+    collection = store.get_vectorstore(
+        collection_name=collection_name,
+        create_if_missing=create_collection_if_missing,
+    )
     out = list(seeds)
     for seed in seeds:
         doc_id = seed.metadata.get("doc_id")
@@ -512,9 +793,13 @@ def add_neighbor_chunks(seeds: Sequence[RetrievedChunk], window: int = 1) -> Lis
             if delta == 0:
                 continue
             try:
-                res = collection.get(where={"doc_id": doc_id, "chunk_index": idx + delta})
+                res = collection.get(
+                    where=_to_chroma_where({"doc_id": doc_id, "chunk_index": idx + delta})
+                )
                 for text, meta in zip(res.get("documents", []), res.get("metadatas", [])):
                     m = dict(meta or {})
+                    if not _tenant_matches(m, tenant_id):
+                        continue
                     m["retrieval_source"] = "vector"
                     out.append(
                         RetrievedChunk(

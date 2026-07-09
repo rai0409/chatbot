@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 .env
 .env.*
+!.env.example
 node_modules/
 dist/
 build/
@@ -13,8 +14,47 @@ build/
 runs/
 
 # local vectorstore artifacts
-vectorstore/chroma.sqlite3
+vectorstore/
+
+# local backup archives (scripts/backup.sh)
+backups/
+restore_staging_*/
 
 chatbot_src.zip
 output_app.zip
 output_ops.zip
+
+# Local vector DB / generated data
+.chroma/
+chroma/
+chroma_db/
+data/chroma/
+
+# Generated artifacts / evaluations
+artifacts/
+
+# Secrets / env
+.env
+.env.*
+*.pem
+*.key
+serviceAccount*.json
+*-firebase-adminsdk-*.json
+config/credentials.json
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Backups
+*.bak
+*.bak_*
+
+# Generated BM25 keyword index
+index/chunks.canonical.bytype.dedup.jsonl

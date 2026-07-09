@@ -13,9 +13,10 @@ import re
 import sys
 import unicodedata
 from pathlib import Path
-from typing import Iterable, List
+from typing import Any, Dict, Iterable, List, Set
 
 import config
+from rag_core.chunking_ja import build_ja_chunk_records
 
 
 BULLET_RE = re.compile(r"^(\s*([0-9]+[\.)]|[①-⑳]|[-•・※▶]))")
@@ -132,10 +133,57 @@ def _resolve_path(path_str: str) -> Path:
     return p
 
 
+def _add_production_metadata(
+    rec: Dict[str, Any],
+    *,
+    tenant_id: str,
+    doc_version: str,
+    language: str,
+    extraction_method: str,
+) -> Dict[str, Any]:
+    rec["tenant_id"] = tenant_id
+    rec["doc_version"] = doc_version
+    rec["language"] = language
+    rec["extraction_method"] = extraction_method
+    return rec
+
+
+def _coerce_unique_chunk_index(
+    rec: Dict[str, Any],
+    *,
+    used_indices: Set[int],
+    next_index: int,
+) -> int:
+    raw_index = rec.get("chunk_index")
+    try:
+        chunk_index = int(raw_index)
+    except Exception:
+        chunk_index = next_index
+
+    if chunk_index in used_indices:
+        chunk_index = next_index
+        while chunk_index in used_indices:
+            chunk_index += 1
+
+    rec["chunk_index"] = chunk_index
+    used_indices.add(chunk_index)
+    return max(next_index, chunk_index + 1)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pdf", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--doc-type", default="policy")
+    parser.add_argument("--title", default="")
+    parser.add_argument("--lang", default="ja")
+    parser.add_argument(
+        "--chunking",
+        choices=("fixed", "ja_doc_type"),
+        default="ja_doc_type",
+    )
+    parser.add_argument("--tenant-id", default="default")
+    parser.add_argument("--doc-version", default="v1")
     parser.add_argument("--max-chars", type=int, default=1800)
     parser.add_argument("--overlap", type=int, default=200)
     parser.add_argument("--ocr", action="store_true")
@@ -166,29 +214,62 @@ def main() -> int:
             raw_text = page.get_text("text")
             norm_text = _normalize_text(raw_text)
             needs_ocr = len(norm_text) < args.min_text_chars or _is_garbled(norm_text)
+            extraction_method = "text"
             if args.ocr and needs_ocr:
                 ocr_text = _ocr_page(page, dpi=args.dpi, lang=args.ocr_lang)
                 norm_text = _normalize_text(ocr_text)
+                extraction_method = "ocr_fallback"
             if not norm_text:
                 continue
-            for chunk in _split_with_overlap(
-                norm_text, max_chars=args.max_chars, overlap=args.overlap
-            ):
-                rec = {
-                    "id": f"{doc_id}:p{page_num}:c{chunk_index}",
-                    "text": chunk,
-                    "source_doc": doc_id,
-                    "source_pages": [page_num],
-                    "doc_id": doc_id,
-                    "chunk_index": chunk_index,
-                    "searchable": 1,
-                    "type": "pdf",
-                    "quality": "high",
-                }
+
+            if args.chunking == "fixed":
+                records = []
+                for chunk in _split_with_overlap(
+                    norm_text, max_chars=args.max_chars, overlap=args.overlap
+                ):
+                    records.append(
+                        {
+                            "id": f"{doc_id}:p{page_num}:c{chunk_index}",
+                            "text": chunk,
+                            "source_doc": doc_id,
+                            "source_pages": [page_num],
+                            "doc_id": doc_id,
+                            "chunk_index": chunk_index,
+                            "searchable": 1,
+                            "type": "pdf",
+                            "quality": "high",
+                        }
+                    )
+                    chunk_index += 1
+            else:
+                records = build_ja_chunk_records(
+                    doc_id=doc_id,
+                    source_doc=doc_id,
+                    text=norm_text,
+                    doc_type=args.doc_type,
+                    title=args.title,
+                    source_pages=[page_num],
+                    base_chunk_index=chunk_index,
+                )
+                used_indices: Set[int] = set(range(chunk_index))
+                for rec in records:
+                    chunk_index = _coerce_unique_chunk_index(
+                        rec,
+                        used_indices=used_indices,
+                        next_index=chunk_index,
+                    )
+
+            for rec in records:
+                _add_production_metadata(
+                    rec,
+                    tenant_id=args.tenant_id,
+                    doc_version=args.doc_version,
+                    language=args.lang,
+                    extraction_method=extraction_method,
+                )
                 out_f.write(
                     f"{json.dumps(rec, ensure_ascii=False)}\n"
                 )
-                chunk_index += 1
     return 0
 
 

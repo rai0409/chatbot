@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import config
 from rag_core import embedder, store
+from rag_core.embedding_fingerprint import stamp_collection_metadata
 from rag_core.utils import ensure_openai_client
 
 
@@ -39,6 +40,32 @@ def _chunked(items: List[str], size: int) -> Iterable[List[str]]:
         yield items[i : i + size]
 
 
+def _sanitize_metadata_value(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _sanitize_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: _sanitize_metadata_value(value) for key, value in meta.items()}
+
+
+def _numeric_source_pages(value: Any) -> List[int]:
+    if not isinstance(value, list):
+        return []
+    pages: List[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            continue
+        try:
+            pages.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return pages
+
+
 def _get_collection_client(collection) -> Optional[Any]:
     return getattr(collection, "_client", None) or getattr(collection, "client", None)
 
@@ -49,7 +76,9 @@ def _reset_collection(collection) -> Any:
     if client is not None and name:
         try:
             client.delete_collection(name=name)
-            return store.get_vectorstore(collection_name=name)
+            return store.get_vectorstore(
+                collection_name=name, verify_embedding_fingerprint=False
+            )
         except Exception:
             pass
     try:
@@ -70,22 +99,24 @@ def _reset_collection(collection) -> Any:
     return collection
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("canonical_jsonl_path")
-    parser.add_argument("--batch", type=int, default=64)
-    parser.add_argument("--collection", default=None)
-    parser.add_argument("--reset", action="store_true")
-    args = parser.parse_args()
-
-    provider = (config.getenv_first("EMBED_PROVIDER", default="openai") or "openai").lower()
-    client = None
-    if provider != "local":
+def ingest_canonical_rows(
+    rows: Iterable[Dict[str, Any]],
+    *,
+    collection_name: Optional[str] = None,
+    batch: int = 64,
+    reset: bool = False,
+    source_jsonl_path: Optional[str] = None,
+    client=None,
+) -> Dict[str, Any]:
+    if client is None and not embedder.is_local_provider():
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
 
-    collection = store.get_vectorstore(collection_name=args.collection)
-    if args.reset:
+    collection = store.get_vectorstore(
+        collection_name=collection_name, verify_embedding_fingerprint=False
+    )
+    if reset:
         collection = _reset_collection(collection)
+    fingerprint = store.stamp_collection_fingerprint(collection)
 
     batch_ids: List[str] = []
     batch_texts: List[str] = []
@@ -93,7 +124,7 @@ def main() -> int:
     ingested = 0
     skipped = 0
 
-    def flush_batch():
+    def flush_batch() -> None:
         nonlocal ingested
         if not batch_ids:
             return
@@ -120,9 +151,8 @@ def main() -> int:
         batch_ids.clear()
         batch_texts.clear()
         batch_metas.clear()
-        print(f"ingested={ingested} skipped={skipped}")
 
-    for row in _iter_jsonl(args.canonical_jsonl_path):
+    for row in rows:
         if row.get("__parse_error__"):
             skipped += 1
             continue
@@ -137,31 +167,65 @@ def main() -> int:
         meta = dict(row)
         meta["id"] = str(raw_id)
         meta.pop("text", None)
+        meta["tenant_id"] = str(meta.get("tenant_id") or "").strip() or "default"
         if not meta.get("source_pages"):
             meta["source_pages"] = [-1]
             meta.setdefault("searchable", 1)
         if meta.get("searchable") is None:
             meta["searchable"] = 1
+        source_pages = _numeric_source_pages(meta.get("source_pages"))
+        if source_pages:
+            meta["source_page_start"] = source_pages[0]
+            meta["source_page_end"] = source_pages[-1]
+        meta = _sanitize_metadata(meta)
 
         batch_ids.append(str(raw_id))
         batch_texts.append(str(text))
         batch_metas.append(meta)
 
-        if len(batch_ids) >= args.batch:
-            try:
-                flush_batch()
-            except Exception as exc:
-                print(f"error: failed to upsert batch: {exc}", file=sys.stderr)
-                return 1
+        if len(batch_ids) >= batch:
+            flush_batch()
 
     if batch_ids:
-        try:
-            flush_batch()
-        except Exception as exc:
-            print(f"error: failed to upsert batch: {exc}", file=sys.stderr)
-            return 1
+        flush_batch()
 
-    print(f"done ingested={ingested} skipped={skipped}")
+    if source_jsonl_path:
+        fingerprint = stamp_collection_metadata(
+            collection,
+            source_jsonl_path=source_jsonl_path,
+            chunk_count=ingested,
+        )
+
+    return {
+        "collection": str(getattr(collection, "name", "") or collection_name or ""),
+        "embedding_fingerprint": fingerprint,
+        "ingested": ingested,
+        "skipped": skipped,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("canonical_jsonl_path")
+    parser.add_argument("--batch", type=int, default=64)
+    parser.add_argument("--collection", default=None)
+    parser.add_argument("--reset", action="store_true")
+    args = parser.parse_args()
+
+    try:
+        result = ingest_canonical_rows(
+            _iter_jsonl(args.canonical_jsonl_path),
+            collection_name=args.collection,
+            batch=args.batch,
+            reset=args.reset,
+            source_jsonl_path=args.canonical_jsonl_path,
+        )
+    except Exception as exc:
+        print(f"error: failed to upsert batch: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"embedding_fingerprint={json.dumps(result['embedding_fingerprint'], ensure_ascii=False)}")
+    print(f"done ingested={result['ingested']} skipped={result['skipped']}")
     return 0
 
 

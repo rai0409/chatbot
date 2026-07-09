@@ -1,34 +1,28 @@
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import List, Sequence
 
-import config
+from rag_core import embedding_provider
 
 
-@lru_cache(maxsize=4)
-def _get_local_model(model_name: str):
-    try:
-        from sentence_transformers import SentenceTransformer
-    except Exception as exc:
-        raise RuntimeError(
-            "Local embeddings require sentence-transformers. Install it and set EMBED_PROVIDER=local."
-        ) from exc
-    return SentenceTransformer(model_name)
+_get_local_model = embedding_provider._get_local_model
 
 
-def embed_queries(queries: Sequence[str], client=None) -> List[List[float]]:
-    provider = (
-        config.getenv_first("EMBED_PROVIDER", default="openai") or "openai"
-    ).lower()
-    if provider == "local":
-        model_name = config.getenv_first("LOCAL_EMBED_MODEL", default="all-MiniLM-L6-v2")
-        model = _get_local_model(model_name)
-        return model.encode(list(queries), normalize_embeddings=True).tolist()
-    if client is None:
-        raise RuntimeError("OpenAI client is required for remote embeddings")
-    model_name = config.getenv_first(
-        "OPENAI_EMBED_MODEL", "EMBED_MODEL", default="text-embedding-3-small"
+def embed_queries(
+    queries: Sequence[str],
+    client=None,
+    provider_name: str | None = None,
+) -> List[List[float]]:
+    return embedding_provider.embed_queries(
+        queries,
+        client=client,
+        provider_name=provider_name,
     )
-    resp = client.embeddings.create(model=model_name, input=list(queries))
-    return [item.embedding for item in resp.data]
+
+
+def get_embedding_provider(provider_name: str | None = None) -> embedding_provider.EmbeddingProvider:
+    return embedding_provider.get_embedding_provider(provider_name)
+
+
+def is_local_provider(provider_name: str | None = None) -> bool:
+    return embedding_provider.is_local_provider(provider_name)

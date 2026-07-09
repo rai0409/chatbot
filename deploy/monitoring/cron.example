@@ -1,0 +1,4 @@
+# Cron fallback for the KuraDen monitoring runner (Prompt050).
+# Runs every 5 minutes; logs/snapshots land under KURADEN_MONITOR_DIR.
+# Edit paths to match the install. No secrets are stored by the runner.
+*/5 * * * * cd /opt/kuraden && KURADEN_MONITOR_DIR=/var/lib/kuraden/monitoring scripts/monitoring_runner.sh >/dev/null 2>&1

@@ -1,0 +1,5 @@
+{"query":"15問に自由回答は入りますか？","expected_top_qa_id":"qa_5551d50f2ab17411"}
+{"query":"自由記述も設問数に含まれますか？","expected_top_qa_id":"qa_5551d50f2ab17411"}
+{"query":"フリーアンサーは15問程度の中に入りますか？","expected_top_qa_id":"qa_5551d50f2ab17411"}
+{"query":"15問に個人情報は含まれますか？","expected_top_qa_id":"qa_5010e6ee7daf7df5"}
+{"query":"17問に自由回答は含まれますか？","expected_top_qa_id":"qa_5551d50f2ab17411","expected_numeric_conflict":true}

@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review Queue</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #20242c;
+      --muted: #657083;
+      --line: #d9dee7;
+      --accent: #0f766e;
+      --accent-strong: #0b5f59;
+      --warn-bg: #fff7df;
+      --warn-line: #e0b84d;
+      --danger: #b42318;
+      --shadow: 0 1px 2px rgba(20, 28, 38, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 28px auto 48px;
+    }
+    header {
+      margin-bottom: 18px;
+    }
+    h1 {
+      margin: 0 0 4px;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 0;
+      font-size: 18px;
+    }
+    .subtle {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+    }
+    .toolbar {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+      gap: 10px;
+      align-items: end;
+      margin-bottom: 14px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 650;
+      color: #394150;
+      margin-bottom: 5px;
+    }
+    input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      min-height: 38px;
+      padding: 8px 10px;
+    }
+    button {
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 650;
+      min-height: 38px;
+      padding: 8px 13px;
+    }
+    button:hover { background: var(--accent-strong); }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfe;
+      padding: 10px;
+    }
+    .metric b {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 3px;
+    }
+    .metric span {
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .warning {
+      border: 1px solid var(--warn-line);
+      background: var(--warn-bg);
+      border-radius: 6px;
+      padding: 10px 12px;
+      color: #5f4810;
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+    .error {
+      color: var(--danger);
+      font-size: 14px;
+      min-height: 22px;
+    }
+    .items {
+      display: grid;
+      gap: 10px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+    }
+    .card-head {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: #3d4756;
+      background: #f8fafc;
+      font-size: 12px;
+      padding: 2px 8px;
+      overflow-wrap: anywhere;
+    }
+    .priority-high { border-color: #f0a8a0; background: #fff1f0; }
+    .priority-medium { border-color: #e0b84d; background: #fff7df; }
+    .priority-low { border-color: #aec7e8; background: #f0f6ff; }
+    .query {
+      font-weight: 650;
+      overflow-wrap: anywhere;
+      margin: 8px 0;
+      white-space: pre-wrap;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .kv {
+      min-width: 0;
+      border-top: 1px solid var(--line);
+      padding-top: 7px;
+      color: #394150;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .kv b {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 2px;
+    }
+    .empty {
+      color: var(--muted);
+      padding: 18px;
+      text-align: center;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }
+    .action-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+      gap: 8px;
+      margin-top: 12px;
+      align-items: end;
+    }
+    .action-note {
+      grid-column: 1 / -1;
+    }
+    .action-status {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 6px;
+    }
+    .action-status.error { color: var(--danger); }
+    .action-status.ok { color: var(--accent-strong); }
+    @media (max-width: 820px) {
+      main { width: min(100% - 20px, 720px); }
+      .toolbar, .summary, .grid, .action-row { grid-template-columns: 1fr; }
+      .action-note { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Review Queue</h1>
+      <div class="subtle">Local product RAG operations queue</div>
+    </header>
+
+    <section class="panel">
+      <div class="toolbar">
+        <div>
+          <label for="priority">Priority</label>
+          <select id="priority">
+            <option value="">All</option>
+            <option value="high">high</option>
+            <option value="medium">medium</option>
+            <option value="low">low</option>
+          </select>
+        </div>
+        <div>
+          <label for="status">Status</label>
+          <select id="status">
+            <option value="">All</option>
+            <option value="open">open</option>
+          </select>
+        </div>
+        <div>
+          <label for="tenant">Tenant</label>
+          <input id="tenant" placeholder="default">
+        </div>
+        <div>
+          <label for="limit">Limit</label>
+          <input id="limit" type="number" min="1" max="500" value="100">
+        </div>
+        <button id="refresh" type="button">Refresh</button>
+      </div>
+
+      <div class="summary">
+        <div class="metric"><b>total_loaded</b><span id="total-loaded">0</span></div>
+        <div class="metric"><b>returned_count</b><span id="returned-count">0</span></div>
+        <div class="metric"><b>malformed</b><span id="malformed-count">0</span></div>
+        <div class="metric"><b>source</b><span id="source-path" class="subtle"></span></div>
+      </div>
+
+      <div id="warning" class="warning" hidden></div>
+      <div id="error" class="error"></div>
+      <div id="items" class="items"></div>
+    </section>
+  </main>
+
+  <script>
+    const el = (id) => document.getElementById(id);
+
+    function text(value) {
+      if (value === null || value === undefined) return "";
+      return String(value);
+    }
+
+    function escapeHtml(value) {
+      return text(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function params() {
+      const search = new URLSearchParams();
+      const priority = el("priority").value;
+      const status = el("status").value;
+      const tenant = el("tenant").value.trim();
+      const limit = el("limit").value;
+      if (priority) search.set("priority", priority);
+      if (status) search.set("status", status);
+      if (tenant) search.set("tenant_id", tenant);
+      if (limit) search.set("limit", limit);
+      return search.toString();
+    }
+
+    async function loadItems() {
+      el("error").textContent = "";
+      const query = params();
+      try {
+        const response = await fetch(`/admin/review/items${query ? `?${query}` : ""}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || "Failed to load review queue");
+        render(payload);
+      } catch (error) {
+        el("error").textContent = error.message || "Failed to load review queue";
+      }
+    }
+
+    function render(payload) {
+      el("total-loaded").textContent = text(payload.total_loaded);
+      el("returned-count").textContent = text(payload.returned_count);
+      el("malformed-count").textContent = text(payload.skipped_malformed_lines);
+      el("source-path").textContent = text(payload.source_path);
+      const warning = el("warning");
+      if (payload.skipped_malformed_lines > 0) {
+        warning.hidden = false;
+        warning.textContent = `${payload.skipped_malformed_lines} malformed line(s) were skipped.`;
+      } else {
+        warning.hidden = true;
+        warning.textContent = "";
+      }
+      const wrapper = el("items");
+      wrapper.innerHTML = "";
+      const items = payload.items || [];
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No review items";
+        wrapper.appendChild(empty);
+        return;
+      }
+      items.forEach((item) => wrapper.appendChild(card(item)));
+    }
+
+    function card(item) {
+      const node = document.createElement("article");
+      node.className = "card";
+      const candidateIds = Array.isArray(item.candidate_ids) ? item.candidate_ids.join(", ") : "";
+      const reasons = Array.isArray(item.reasons) ? item.reasons.join(", ") : "";
+      const reviewId = escapeHtml(item.review_id);
+      const tenantId = escapeHtml(item.tenant_id);
+      const selectedCandidateId = escapeHtml(item.selected_candidate_id);
+      node.innerHTML = `
+        <div class="card-head">
+          <div class="badges">
+            <span class="badge priority-${escapeHtml(item.priority)}">${escapeHtml(item.priority)}</span>
+            <span class="badge">${escapeHtml(item.status)}</span>
+            <span class="badge">${tenantId}</span>
+          </div>
+          <span class="badge">${reviewId}</span>
+        </div>
+        <div class="query">${escapeHtml(item.user_query)}</div>
+        <div class="grid">
+          <div class="kv"><b>answer_mode</b>${escapeHtml(item.answer_mode)}</div>
+          <div class="kv"><b>confidence_route</b>${escapeHtml(item.confidence_route)}</div>
+          <div class="kv"><b>decision_route</b>${escapeHtml(item.decision_route)}</div>
+          <div class="kv"><b>candidate_ids</b>${escapeHtml(candidateIds)}</div>
+          <div class="kv"><b>selected_candidate_id</b>${escapeHtml(item.selected_candidate_id)}</div>
+          <div class="kv"><b>feedback_type</b>${escapeHtml(item.feedback_type)}</div>
+          <div class="kv"><b>bad_reason</b>${escapeHtml(item.bad_reason)}</div>
+          <div class="kv"><b>source</b>${escapeHtml(item.source)}</div>
+          <div class="kv"><b>created_at</b>${escapeHtml(item.created_at)}</div>
+          <div class="kv"><b>reasons</b>${escapeHtml(reasons)}</div>
+        </div>
+        <div class="action-row" data-review-id="${reviewId}" data-tenant-id="${tenantId}" data-selected-candidate-id="${selectedCandidateId}">
+          <div>
+            <label>Action</label>
+            <select class="action-type">
+              <option value="approve_candidate">approve_candidate</option>
+              <option value="reject_candidate">reject_candidate</option>
+              <option value="needs_new_faq">needs_new_faq</option>
+              <option value="needs_document_update">needs_document_update</option>
+              <option value="needs_policy_review">needs_policy_review</option>
+              <option value="mark_resolved">mark_resolved</option>
+              <option value="mark_ignored">mark_ignored</option>
+            </select>
+          </div>
+          <div>
+            <label>Status after</label>
+            <select class="status-after">
+              <option value="">None</option>
+              <option value="open">open</option>
+              <option value="in_review">in_review</option>
+              <option value="resolved">resolved</option>
+              <option value="ignored">ignored</option>
+              <option value="needs_followup">needs_followup</option>
+            </select>
+          </div>
+          <div>
+            <label>Tags</label>
+            <input class="action-tags" placeholder="comma,separated">
+          </div>
+          <div class="action-note">
+            <label>Operator note</label>
+            <input class="operator-note" placeholder="Bounded note">
+          </div>
+          <button type="button" class="submit-action">Log action</button>
+        </div>
+        <div class="action-status"></div>
+      `;
+      return node;
+    }
+
+    async function submitAction(button) {
+      const card = button.closest(".card");
+      const row = button.closest(".action-row");
+      const status = card.querySelector(".action-status");
+      const body = {
+        review_id: row.dataset.reviewId,
+        action_type: row.querySelector(".action-type").value,
+        feedback_token: null,
+        tenant_id: row.dataset.tenantId || "default",
+        selected_candidate_id: row.dataset.selectedCandidateId || null,
+        operator_note: row.querySelector(".operator-note").value.trim() || null,
+        status_after: row.querySelector(".status-after").value || null,
+        tags: row.querySelector(".action-tags").value
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+      };
+      status.textContent = "Saving...";
+      status.className = "action-status";
+      try {
+        const response = await fetch("/admin/review/action", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(body),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || "Action failed");
+        status.textContent = payload.stored ? `Stored ${payload.action_id}` : `Accepted: ${payload.warning || "not stored"}`;
+        status.className = payload.stored ? "action-status ok" : "action-status error";
+      } catch (error) {
+        status.textContent = error.message || "Action failed";
+        status.className = "action-status error";
+      }
+    }
+
+    el("refresh").addEventListener("click", loadItems);
+    el("items").addEventListener("click", (event) => {
+      const button = event.target.closest(".submit-action");
+      if (button) submitAction(button);
+    });
+    loadItems();
+  </script>
+</body>
+</html>

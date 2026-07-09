@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "profile_name": "conservative",
+  "description": "Conservative debug-only decision threshold profile with explicit specific-term requirement.",
+  "high_confidence_min_hybrid": 0.84,
+  "high_confidence_min_margin": 0.1,
+  "low_confidence_max_hybrid": 0.45,
+  "numeric_conflict_route": "numeric_conflict_blocked",
+  "negation_conflict_route": "negation_conflict_review",
+  "ambiguous_route": "ambiguous_multi_topic",
+  "require_specific_terms_for_high_confidence": true,
+  "min_specific_terms_for_high_confidence": 1,
+  "allow_high_confidence_when_margin_missing": false
+}

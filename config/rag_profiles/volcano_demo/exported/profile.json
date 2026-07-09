@@ -1,0 +1,11 @@
+{
+  "project_id": "volcano_demo",
+  "display_name": "火山防災白書デモ",
+  "language": "ja",
+  "default_answer_style": "bullet",
+  "max_answer_bullets": 5,
+  "enable_generic_validation": true,
+  "enable_project_validation": true,
+  "enable_profile_boost": true,
+  "fallback_policy": "extractive"
+}
