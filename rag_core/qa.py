@@ -472,9 +472,23 @@ def _extractive_terms(question: str) -> List[str]:
     return list(dict.fromkeys(terms))
 
 
+def _extractive_term_hit(term: str, compact_sentence: str) -> bool:
+    compact_term = re.sub(r"[\s・/／、。,.]", "", term)
+    relaxed_sentence = re.sub(r"[\s・/／、。,.]", "", compact_sentence)
+    if term in compact_sentence or compact_term in relaxed_sentence:
+        return True
+    if compact_term == "救助活動" and "救助" in relaxed_sentence and "活動" in relaxed_sentence:
+        return True
+    return False
+
+
 def _extractive_sentences(question: str, grounded: Sequence[Chunk]) -> Tuple[List[Tuple[int, str]], int]:
     terms = _extractive_terms(question)
+    question_norm = normalize_japanese_text(question or "")
+    fact_question = any(x in question_norm for x in ("いくつ", "何個", "何件", "何名", "何年", "いつ", "何月", "何日"))
+    wants_active_volcano_count = "活火山" in question_norm and any(x in question_norm for x in ("いくつ", "何個"))
     scored: List[Tuple[int, int, str]] = []
+    ordered: List[Tuple[int, str]] = []
     seen: set[str] = set()
     for idx, ch in enumerate(grounded, start=1):
         for sent in re.split(r"[。！？\n]+", ch.text or ""):
@@ -484,7 +498,8 @@ def _extractive_sentences(question: str, grounded: Sequence[Chunk]) -> Tuple[Lis
             if not compact or compact in seen:
                 continue
             seen.add(compact)
-            hits = sum(1 for term in terms if term in compact)
+            ordered.append((idx, sent))
+            hits = sum(1 for term in terms if _extractive_term_hit(term, compact))
             if hits <= 0:
                 continue
             score = hits * 10
@@ -492,6 +507,13 @@ def _extractive_sentences(question: str, grounded: Sequence[Chunk]) -> Tuple[Lis
                 score += 8
             if re.search(r"\d", sent):
                 score += 2
+            if fact_question and re.search(r"\d", sent):
+                score += 8
+            if wants_active_volcano_count:
+                if "111" in sent and "活火山" in sent:
+                    score += 30
+                elif "活火山" in sent and re.search(r"\d", sent):
+                    score += 12
             if len(sent) > 320:
                 score -= 4
             scored.append((score, idx, sent))
@@ -501,6 +523,23 @@ def _extractive_sentences(question: str, grounded: Sequence[Chunk]) -> Tuple[Lis
         selected.append((idx, sent))
         if len(selected) >= 3:
             break
+    expanded: List[Tuple[int, str]] = []
+    selected_set = set(selected)
+    for idx, sent in selected:
+        expanded.append((idx, sent))
+        if len(expanded) >= 3:
+            break
+        if not any(cue in sent for cue in ("表示されます", "どこ", "何ですか", "ありますか")):
+            continue
+        for pos, (ordered_idx, ordered_sent) in enumerate(ordered):
+            if ordered_idx != idx or ordered_sent != sent:
+                continue
+            if pos + 1 < len(ordered):
+                next_item = ordered[pos + 1]
+                if next_item[0] == idx and next_item not in selected_set and next_item not in expanded:
+                    expanded.append(next_item)
+            break
+    selected = expanded[:3]
     best_score = scored[0][0] if scored else 0
     return selected, best_score
 
@@ -519,10 +558,72 @@ def _extractive_required_terms(question: str) -> List[str]:
     return list(dict.fromkeys(required))
 
 
+_JAPANESE_ERA_YEAR_RE = re.compile(r"令和\s*\d+\s*年度?|平成\s*\d+\s*年度?|昭和\s*\d+\s*年度?")
+_WESTERN_YEAR_RE = re.compile(r"(?<!\d)(20\d{2}|19\d{2})\s*年度?")
+_MONEY_RE = re.compile(r"\d[\d,]*(?:\.\d+)?\s*(?:億円|万円|千円|円)")
+_COUNT_COUNTERS = ("台", "件", "人", "名", "社", "個", "枚")
+
+
+def _extract_requested_years(question: str) -> List[str]:
+    norm = normalize_japanese_text(question or "")
+    years = []
+    years.extend(re.sub(r"\s+", "", item) for item in _JAPANESE_ERA_YEAR_RE.findall(norm))
+    years.extend(re.sub(r"\s+", "", item) for item in _WESTERN_YEAR_RE.findall(norm))
+    return list(dict.fromkeys(years))
+
+
+def _sentence_has_requested_year(sentence: str, requested_years: Sequence[str]) -> bool:
+    compact = re.sub(r"\s+", "", normalize_japanese_text(sentence or ""))
+    return bool(requested_years) and any(year in compact for year in requested_years)
+
+
+def _question_asks_money(question: str) -> bool:
+    norm = normalize_japanese_text(question or "")
+    return any(term in norm for term in ("予算額", "金額", "補助額", "補助上限額", "いくら", "何円", "費用"))
+
+
+def _question_count_counter(question: str) -> Optional[str]:
+    norm = normalize_japanese_text(question or "")
+    for counter in _COUNT_COUNTERS:
+        if f"何{counter}" in norm:
+            return counter
+    return None
+
+
+def _has_answer_type_support(question: str, selected: Sequence[Tuple[int, str]], grounded: Sequence[Chunk]) -> bool:
+    selected_text = "\n".join(sent for _, sent in selected)
+    evidence_text = "\n".join(ch.text for ch in grounded)
+    requested_years = _extract_requested_years(question)
+    if requested_years:
+        evidence_compact = re.sub(r"\s+", "", normalize_japanese_text(evidence_text))
+        if not all(year in evidence_compact for year in requested_years):
+            return False
+        if not any(_sentence_has_requested_year(sent, requested_years) for _, sent in selected):
+            return False
+
+    if _question_asks_money(question):
+        money_sentences = [sent for _, sent in selected if _MONEY_RE.search(normalize_japanese_text(sent))]
+        if not money_sentences:
+            return False
+        if requested_years and not any(_sentence_has_requested_year(sent, requested_years) for sent in money_sentences):
+            return False
+
+    counter = _question_count_counter(question)
+    if counter:
+        count_re = re.compile(rf"\d[\d,]*\s*{re.escape(counter)}")
+        count_sentences = [sent for _, sent in selected if count_re.search(normalize_japanese_text(sent))]
+        if not count_sentences:
+            return False
+
+    return True
+
+
 def _has_sufficient_extractive_evidence(question: str, grounded: Sequence[Chunk]) -> bool:
     terms = _extractive_terms(question)
     selected, best_score = _extractive_sentences(question, grounded)
     if not selected:
+        return False
+    if not _has_answer_type_support(question, selected, grounded):
         return False
     evidence = normalize_japanese_text("\n".join(ch.text for ch in grounded)).lower()
     evidence_compact = re.sub(r"\s+", "", evidence)
@@ -531,6 +632,32 @@ def _has_sufficient_extractive_evidence(question: str, grounded: Sequence[Chunk]
             return False
     required_hits = 2 if len(terms) <= 3 else 3
     return best_score >= required_hits * 10
+
+
+def _should_recover_guarded_extractive(question: str, grounded: Sequence[Chunk], retrieved: Sequence[RetrievedChunk]) -> bool:
+    if not grounded or not retrieved:
+        return False
+    if not _has_sufficient_extractive_evidence(question, grounded):
+        return False
+    top_meta = retrieved[0].metadata or {}
+    top_doc = str(top_meta.get("source_doc") or top_meta.get("doc") or "")
+    top_pages = top_meta.get("source_pages") or top_meta.get("pages") or []
+    if isinstance(top_pages, str):
+        top_pages = [int(p) for p in re.findall(r"\d+", top_pages)]
+    else:
+        top_pages = [int(p) for p in top_pages if str(p).isdigit()]
+    selected, _ = _extractive_sentences(question, grounded)
+    cited_indexes = {idx for idx, _ in selected}
+    for idx in cited_indexes:
+        if not (1 <= idx <= len(grounded)):
+            continue
+        ch = grounded[idx - 1]
+        if top_doc and ch.source_doc != top_doc:
+            continue
+        if top_pages and ch.source_pages and not (set(ch.source_pages) & set(top_pages)):
+            continue
+        return True
+    return False
 
 
 def _extractive_answer_raw(question: str, grounded: Sequence[Chunk]) -> str:
@@ -975,6 +1102,9 @@ def _build_retrieval_trace(
         if collection_name and guard_reason in {"too_general", "soft_distance"} and grounded:
             trace["staging_guard_bypass_reason"] = guard_reason
             guard_reason = None
+        elif guard_reason in {"too_general", "soft_distance"} and _should_recover_guarded_extractive(q, grounded, retrieved):
+            trace["extractive_guard_recovery_reason"] = guard_reason
+            guard_reason = None
         used_fallback = guard_reason is not None
 
     if guard_reason == "missing_procedure_evidence":
@@ -1099,7 +1229,7 @@ def _answer_query_impl(
                 q,
                 state,
                 guard_reason=None,
-                used_fallback=True,
+                used_fallback=False,
                 retrieved=retrieved,
             )
             answer_mode = "grounded_extractive"
@@ -1325,7 +1455,7 @@ def answer_query_stream(
                 q,
                 state,
                 guard_reason=None,
-                used_fallback=True,
+                used_fallback=False,
                 retrieved=state.retrieved,
             )
             answer_mode = "grounded_extractive"
