@@ -1,0 +1,231 @@
+{
+  "branch": "main",
+  "head_commit": "c48dc88f36a7c5c672d8580c1a8c208fc1a3f116",
+  "origin_main_commit": "c48dc88f36a7c5c672d8580c1a8c208fc1a3f116",
+  "git_status_short": {
+    "initial": [],
+    "after_side_effect_restore_before_baseline_files": [],
+    "notes": [
+      "Validation scripts temporarily modified existing tracked artifacts and roadmap.md during rerun.",
+      "Those generated side effects were restored before writing the commercial baseline files."
+    ]
+  },
+  "ci_status": {
+    "source": "user_provided_known_state",
+    "queried_during_snapshot": false,
+    "checks": [
+      {
+        "name": "CI/test (push)",
+        "status": "successful"
+      },
+      {
+        "name": "CI/test (pull_request)",
+        "status": "successful"
+      }
+    ]
+  },
+  "validation_sources": {
+    "existing_artifacts_checked": [
+      {
+        "path": "artifacts/grounded_extractive_quality/validation_summary.json",
+        "exists": true,
+        "valid_json": true
+      },
+      {
+        "path": "artifacts/free_extractive_chat_mode/validation_summary.json",
+        "exists": true,
+        "valid_json": true
+      },
+      {
+        "path": "artifacts/grounded_extractive_quality/grounded_extractive_quality_report.md",
+        "exists": true
+      },
+      {
+        "path": "artifacts/free_extractive_chat_mode/unknown_abstention/unknown_abstention_results.jsonl",
+        "exists": true,
+        "line_count": 32
+      }
+    ],
+    "local_rerun_commands": [
+      {
+        "command": "python -m compileall rag_core webapi tools",
+        "exit_code": 0,
+        "status": "passed"
+      },
+      {
+        "command": "bash scripts/run_grounded_extractive_quality_check.sh",
+        "exit_code": 0,
+        "status": "passed"
+      },
+      {
+        "command": "bash scripts/run_free_extractive_chat_mode_check.sh",
+        "exit_code": 0,
+        "status": "passed"
+      },
+      {
+        "command": "bash scripts/product_readiness_smoke.sh",
+        "exit_code": 0,
+        "status": "passed",
+        "notes": [
+          "Final rerun after restoring generated tracked side effects."
+        ]
+      }
+    ],
+    "transient_failed_reruns": [
+      {
+        "command": "bash scripts/product_readiness_smoke.sh",
+        "exit_code": 1,
+        "status": "failed",
+        "pytest_passed": 116,
+        "pytest_failed": 1,
+        "warnings": 1,
+        "failed_test": "tests/test_production_readiness_report.py::test_report_does_not_start_uvicorn_or_require_server",
+        "reason": "Dirty worktree content included artifacts/grounded_extractive_quality/uvicorn.log in readiness report raw JSON after validation script side effects.",
+        "final_result_after_cleanup": "passed"
+      }
+    ]
+  },
+  "grounded_extractive_quality": {
+    "source": "artifacts/grounded_extractive_quality/validation_summary.json",
+    "gate": "grounded_extractive_quality_after_unknown_regression_fix",
+    "status": "passed",
+    "total_cases": 14,
+    "passed_cases": 14,
+    "failed_cases": 0,
+    "pass_rate": 1.0,
+    "http_errors": 0,
+    "empty_answers": 0,
+    "answer_mode_mismatches": 0,
+    "missing_citations": 0,
+    "source_doc_misses": 0,
+    "page_misses": 0,
+    "required_term_misses": 0,
+    "abstained_count": 0,
+    "fallback_count": 0,
+    "failed_case_ids": []
+  },
+  "free_extractive_chat_mode": {
+    "source": "artifacts/free_extractive_chat_mode/validation_summary.json",
+    "health": {
+      "status": "ok",
+      "chroma_collection": "chatbot_chunks_v1_aligned_candidate",
+      "vectorstore_collection_name": "chatbot_chunks_v1_aligned_candidate",
+      "chat_generation_mode": "extractive",
+      "keyword_index_loaded": true,
+      "keyword_index_records": 116,
+      "embed_provider": "local",
+      "embed_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    },
+    "exact_qa": {
+      "total_cases": 118,
+      "errors": 0,
+      "answer_match_rate": 1.0,
+      "approved_exact_rate": 1.0,
+      "llm_fallback_count": 0
+    },
+    "unknown_abstention": {
+      "total_cases": 32,
+      "errors": 0,
+      "abstained_count": 32,
+      "unsupported_answer_count": 0,
+      "approved_exact_false_positive_count": 0
+    },
+    "normal_retrieval": {
+      "hybrid_hit_at_5": 1.0,
+      "still_failed": []
+    },
+    "failed_checks": []
+  },
+  "product_readiness_smoke": {
+    "command": "bash scripts/product_readiness_smoke.sh",
+    "final_local_rerun": {
+      "exit_code": 0,
+      "status": "passed",
+      "pytest_passed": 117,
+      "pytest_failed": 0,
+      "warnings": 1,
+      "py_compile_completed": true
+    },
+    "warnings": [
+      {
+        "type": "AuthlibDeprecationWarning",
+        "source": "webapi/oidc_auth.py"
+      }
+    ],
+    "transient_failed_attempt_recorded": true
+  },
+  "compileall": {
+    "command": "python -m compileall rag_core webapi tools",
+    "exit_code": 0,
+    "status": "passed",
+    "paths": [
+      "rag_core",
+      "webapi",
+      "tools"
+    ]
+  },
+  "commercial_readiness_assessment": {
+    "level": "extractive_rag_baseline_green_not_full_commercial_ready",
+    "summary": "Local extractive RAG gates are green and suitable as a commercial baseline snapshot, but this is not a full production readiness certification.",
+    "strengths": [
+      "Grounded extractive quality passed 14/14.",
+      "Unknown abstention passed 32/32 with unsupported_answer_count 0.",
+      "Exact QA passed 118/118 with answer_match_rate 1.0.",
+      "Normal retrieval hybrid_hit@5 is 1.0.",
+      "Product readiness smoke passed on final local rerun."
+    ],
+    "gaps": [
+      "LLM mode quality is not validated.",
+      "DOCX/CSV/XLSX/PPTX workflows are not validated.",
+      "Production promote and rollback are not validated by this snapshot.",
+      "CI status was recorded from provided known state, not freshly queried from GitHub Actions.",
+      "Product readiness report is sensitive to dirty worktree paths."
+    ]
+  },
+  "not_validated": [
+    "LLM mode answer quality",
+    "Production promotion",
+    "Production overwrite",
+    "Production rollback",
+    "Production traffic load",
+    "Long-running soak behavior",
+    "Security penetration testing",
+    "Secrets rotation procedure",
+    "Admin workflow end-to-end operation",
+    "Browser-based non-engineer upload workflow",
+    "QA Excel import workflow",
+    "RAG tuning import workflow",
+    "Staging-to-production approval workflow",
+    "DOCX/CSV/XLSX/PPTX workflows",
+    "Multitenant production isolation beyond the current tested scope"
+  ],
+  "non_claims": [
+    "LLM mode quality is validated",
+    "DOCX/CSV/XLSX/PPTX workflows are supported or validated",
+    "Production promote was performed",
+    "Production overwrite was performed",
+    "Vectorstore deletion was performed",
+    "Collection reset was performed",
+    "Ingestion reset was performed",
+    "All commercial requirements are complete",
+    "All free-form user questions are guaranteed correct",
+    "CI was freshly rechecked through GitHub Actions APIs during this task"
+  ],
+  "recommended_next_steps": [
+    "Add a dedicated LLM mode quality gate before making any LLM mode quality claim.",
+    "Harden product readiness reporting so generated log filenames in dirty worktree status do not create misleading failures.",
+    "Add explicit document-format validation gates before claiming DOCX/CSV/XLSX/PPTX workflows.",
+    "Add staging promotion, rollback, and audit validation before any production operation claim.",
+    "Add admin workflow and non-engineer upload/import validation."
+  ],
+  "operations_not_performed": {
+    "git_commit": false,
+    "git_push": false,
+    "production_promote": false,
+    "production_overwrite": false,
+    "vectorstore_deletion": false,
+    "collection_reset": false,
+    "ingestion_reset": false,
+    "evaluator_relaxation": false
+  }
+}
