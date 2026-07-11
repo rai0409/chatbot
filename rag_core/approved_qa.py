@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import replace
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
@@ -35,12 +37,21 @@ class ApprovedAnswer:
     language: str
     doc_version: str | None = None
     tags: Tuple[str, ...] = field(default_factory=tuple)
+    approved_aliases: Tuple[str, ...] = field(default_factory=tuple)
+    match_type: str = "canonical"
+    matched_alias: str | None = None
 
 
 @dataclass(frozen=True)
 class ApprovedQAIndex:
     records: Tuple[ApprovedAnswer, ...]
     by_tenant_question: Dict[Tuple[str, str], ApprovedAnswer]
+    by_tenant_alias: Dict[Tuple[str, str], Tuple[ApprovedAnswer, str]] = field(default_factory=dict)
+
+
+MAX_APPROVED_ALIASES = 20
+MAX_APPROVED_ALIAS_CHARS = 500
+_ALIAS_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def _as_str(value: Any) -> str:
@@ -83,6 +94,8 @@ def _record_normalized_question(record: dict) -> str:
 def validate_approved_qa_records(records: list[dict]) -> list[str]:
     errors: List[str] = []
     seen: Dict[Tuple[str, str], str] = {}
+    canonical_owners: Dict[Tuple[str, str], Tuple[str, str, int]] = {}
+    alias_owners: Dict[Tuple[str, str], Tuple[str, str, int]] = {}
     for idx, record in enumerate(records, start=1):
         if not isinstance(record, dict):
             errors.append(f"line {idx}: record must be an object")
@@ -100,6 +113,59 @@ def validate_approved_qa_records(records: list[dict]) -> list[str]:
             errors.append(f"line {idx}: missing question")
         if not answer:
             errors.append(f"line {idx}: missing approved_answer")
+        normalized = _record_normalized_question(record)
+        if normalized:
+            canonical_owners[(tenant_id, normalized)] = (qa_id, answer, idx)
+
+        raw_aliases = record.get("approved_aliases")
+        if raw_aliases is not None:
+            if not isinstance(raw_aliases, list):
+                errors.append(f"line {idx}: approved_aliases must be a list")
+            else:
+                if status != "approved" and raw_aliases:
+                    errors.append(f"line {idx}: approved_aliases are only allowed on approved records")
+                if len(raw_aliases) > MAX_APPROVED_ALIASES:
+                    errors.append(
+                        f"line {idx}: approved_aliases exceeds maximum count {MAX_APPROVED_ALIASES}"
+                    )
+                local_aliases: Dict[str, str] = {}
+                for aidx, alias in enumerate(raw_aliases, start=1):
+                    if not isinstance(alias, str):
+                        errors.append(f"line {idx}: approved_aliases[{aidx}] must be a string")
+                        continue
+                    if not alias.strip():
+                        errors.append(f"line {idx}: approved_aliases[{aidx}] must not be empty")
+                        continue
+                    if len(alias) > MAX_APPROVED_ALIAS_CHARS:
+                        errors.append(
+                            f"line {idx}: approved_aliases[{aidx}] exceeds {MAX_APPROVED_ALIAS_CHARS} characters"
+                        )
+                    if _ALIAS_CONTROL_RE.search(alias):
+                        errors.append(f"line {idx}: approved_aliases[{aidx}] contains a control character")
+                    alias_normalized = normalize_question_for_exact_match(alias)
+                    if not alias_normalized:
+                        errors.append(f"line {idx}: approved_aliases[{aidx}] normalizes to empty")
+                        continue
+                    if alias_normalized == normalized:
+                        errors.append(
+                            f"line {idx}: approved_aliases[{aidx}] duplicates the canonical question after normalization"
+                        )
+                    if alias_normalized in local_aliases:
+                        errors.append(
+                            f"line {idx}: duplicate approved_aliases after normalization: {alias_normalized}"
+                        )
+                    else:
+                        local_aliases[alias_normalized] = alias.strip()
+                    key = (tenant_id, alias_normalized)
+                    previous = alias_owners.get(key)
+                    if previous is not None and previous[0] != qa_id:
+                        errors.append(
+                            f"line {idx}: approved alias conflicts with qa_id={previous[0]} "
+                            f"for tenant_id={tenant_id}: {alias_normalized}"
+                        )
+                    else:
+                        alias_owners[key] = (qa_id, answer, idx)
+
         if status != "approved":
             continue
 
@@ -111,18 +177,40 @@ def validate_approved_qa_records(records: list[dict]) -> list[str]:
                 if _normalize_citation(citation) is None:
                     errors.append(f"line {idx}: invalid approved_citations[{cidx}]")
 
-        normalized = _record_normalized_question(record)
         if not normalized:
             errors.append(f"line {idx}: missing normalized_question")
             continue
         key = (tenant_id, normalized)
         previous_qa_id = seen.get(key)
-        if previous_qa_id is not None and previous_qa_id != qa_id:
-            errors.append(
-                f"line {idx}: duplicate normalized_question for tenant_id={tenant_id}: {normalized}"
+        if previous_qa_id is not None:
+            previous_answer = next(
+                (_as_str(item.get("approved_answer")) for item in records
+                 if isinstance(item, dict) and _as_str(item.get("qa_id")) == previous_qa_id),
+                "",
             )
+            if previous_qa_id != qa_id:
+                errors.append(
+                    f"line {idx}: duplicate normalized_question for tenant_id={tenant_id}: {normalized}"
+                )
+            elif previous_answer != answer:
+                errors.append(
+                    f"line {idx}: answer conflict for qa_id={qa_id} tenant_id={tenant_id}: {normalized}"
+                )
         else:
             seen[key] = qa_id
+
+    for key, (alias_qa_id, alias_answer, alias_line) in alias_owners.items():
+        canonical = canonical_owners.get(key)
+        if canonical is not None and canonical[0] != alias_qa_id:
+            errors.append(
+                f"line {alias_line}: approved alias conflicts with canonical question "
+                f"qa_id={canonical[0]} for tenant_id={key[0]}: {key[1]}"
+            )
+            if canonical[1] != alias_answer:
+                errors.append(
+                    f"line {alias_line}: answer conflict between approved alias qa_id={alias_qa_id} "
+                    f"and canonical qa_id={canonical[0]} for tenant_id={key[0]}"
+                )
     return errors
 
 
@@ -146,6 +234,10 @@ def _to_answer(record: dict) -> ApprovedAnswer | None:
         language=_as_str(record.get("language")) or "ja",
         doc_version=_as_str(record.get("doc_version")) or None,
         tags=tuple(str(x).strip() for x in (record.get("tags") or []) if str(x).strip()),
+        approved_aliases=tuple(
+            alias.strip() for alias in (record.get("approved_aliases") or [])
+            if isinstance(alias, str) and alias.strip()
+        ),
     )
 
 
@@ -168,6 +260,7 @@ def load_approved_qa(path: str | Path, tenant_id: str = "default") -> ApprovedQA
 
     answers: List[ApprovedAnswer] = []
     by_key: Dict[Tuple[str, str], ApprovedAnswer] = {}
+    by_alias: Dict[Tuple[str, str], Tuple[ApprovedAnswer, str]] = {}
     for record in records:
         answer = _to_answer(record)
         if answer is None or answer.tenant_id != tenant_id:
@@ -176,7 +269,10 @@ def load_approved_qa(path: str | Path, tenant_id: str = "default") -> ApprovedQA
         if key not in by_key:
             by_key[key] = answer
             answers.append(answer)
-    return ApprovedQAIndex(records=tuple(answers), by_tenant_question=by_key)
+            for alias in answer.approved_aliases:
+                alias_key = (answer.tenant_id, normalize_question_for_exact_match(alias))
+                by_alias[alias_key] = (answer, alias)
+    return ApprovedQAIndex(records=tuple(answers), by_tenant_question=by_key, by_tenant_alias=by_alias)
 
 
 def lookup_approved_answer(
@@ -185,4 +281,11 @@ def lookup_approved_answer(
     tenant_id: str = "default",
 ) -> ApprovedAnswer | None:
     normalized = normalize_question_for_exact_match(question)
-    return index.by_tenant_question.get((tenant_id, normalized))
+    canonical = index.by_tenant_question.get((tenant_id, normalized))
+    if canonical is not None:
+        return canonical
+    alias_match = index.by_tenant_alias.get((tenant_id, normalized))
+    if alias_match is None:
+        return None
+    answer, matched_alias = alias_match
+    return replace(answer, match_type="alias", matched_alias=matched_alias)

@@ -112,6 +112,7 @@ def test_guard_stream_emits_meta_then_final_without_deltas(monkeypatch):
 
 
 def test_grounded_stream_deltas_concatenate_and_final_matches_nonstream(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
     hits = [_mk_chunk("A", "PR2 は二段階確認の説明です。")]
     monkeypatch.setattr(qa, "hybrid_retrieve", lambda *a, **k: list(hits))
     monkeypatch.setattr(qa, "guard_merged_top", lambda *a, **k: None)
@@ -137,6 +138,7 @@ def test_grounded_stream_deltas_concatenate_and_final_matches_nonstream(monkeypa
 
 
 def test_validation_failure_final_carries_extractive_fallback(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
     monkeypatch.setattr(
         qa, "hybrid_retrieve", lambda *a, **k: [_mk_chunk("A", "PR2 は二段階確認の説明です。")]
     )
@@ -153,6 +155,7 @@ def test_validation_failure_final_carries_extractive_fallback(monkeypatch):
 
 
 def test_midstream_error_aborts_without_final_or_retry(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
     monkeypatch.setattr(
         qa, "hybrid_retrieve", lambda *a, **k: [_mk_chunk("A", "PR2 は二段階確認の説明です。")]
     )
@@ -173,6 +176,7 @@ def test_midstream_error_aborts_without_final_or_retry(monkeypatch):
 
 
 def test_retry_before_first_token_then_stream(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
     monkeypatch.setattr(
         qa, "hybrid_retrieve", lambda *a, **k: [_mk_chunk("A", "PR2 は二段階確認の説明です。")]
     )
@@ -222,6 +226,7 @@ def test_chat_stream_endpoint_approved_single_event(monkeypatch, tmp_path):
 
 
 def test_chat_stream_endpoint_error_before_first_token(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", False)
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(qa, "hybrid_retrieve", lambda *a, **k: [_mk_chunk("A", "説明です。")])
@@ -236,11 +241,14 @@ def test_chat_stream_endpoint_error_before_first_token(monkeypatch, tmp_path):
 
     events = _parse_sse(_collect_body(response))
     names = [name for name, _ in events]
-    assert names == ["meta", "error"]
-    assert events[-1][1] == {
-        "detail": "chat generation unavailable",
-        "error_type": "rate_limited",
-    }
+    assert names == ["meta", "final"]
+
+    payload = events[-1][1]
+    assert payload["used_fallback"] is True
+    assert payload["guard_reason"] == "llm_unavailable"
+    assert payload["answer_mode"] == "fallback"
+    assert len(payload["citations"]) >= 1
+    assert len(payload["retrieved"]) >= 1
     assert len(failing.calls) == 2  # bounded retry happened before first token
 
 

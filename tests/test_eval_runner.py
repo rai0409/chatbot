@@ -6,6 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import config
+from rag_core import qa
+from rag_core.retrieval import RetrievedChunk
 
 runner = importlib.import_module("eval.runner")
 
@@ -207,7 +210,74 @@ def test_runner_help_explains_deterministic_smoke_positioning():
     assert "not a full live end-to-end answer quality benchmark" in help_text_flat
 
 
-def test_repo_smoke_cases_run_and_include_rerank_movement(tmp_path):
+def test_generation_mode_runtime_restores_after_exception(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "extractive")
+
+    with pytest.raises(RuntimeError, match="eval failure"):
+        with runner._generation_mode_runtime(real_generation=False):
+            assert config.CHAT_GENERATION_MODE == "llm"
+            raise RuntimeError("eval failure")
+
+    assert config.CHAT_GENERATION_MODE == "extractive"
+
+
+def test_deterministic_eval_uses_stub_generation_client():
+    assert isinstance(runner._build_eval_client(real_vector=False, real_generation=False), runner._StubClient)
+
+
+def _install_deterministic_rerank_movement(monkeypatch):
+    """Make the QX12 case move mA deterministically from rank 2 to 1."""
+    original_hybrid_retrieve = qa.hybrid_retrieve
+
+    def deterministic_hybrid_retrieve(question, *args, **kwargs):
+        normalized = (
+            str(question or "")
+            .replace("「", '"')
+            .replace("」", '"')
+        )
+
+        if "QX12" in normalized and "手順" in normalized:
+            return [
+                RetrievedChunk(
+                    text="QX120 の手順です。",
+                    metadata={
+                        "id": "mB",
+                        "source_doc": "movement.pdf",
+                        "source_pages": [18],
+                        "retrieval_source": "keyword",
+                    },
+                    score=0.25,
+                ),
+                RetrievedChunk(
+                    text="QX12 を確認できます。",
+                    metadata={
+                        "id": "mA",
+                        "source_doc": "movement.pdf",
+                        "source_pages": [17],
+                        "retrieval_source": "keyword",
+                    },
+                    score=0.26,
+                ),
+            ]
+
+        return original_hybrid_retrieve(
+            question,
+            *args,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        qa,
+        "hybrid_retrieve",
+        deterministic_hybrid_retrieve,
+    )
+
+
+def test_repo_smoke_cases_run_and_include_rerank_movement(
+    monkeypatch,
+    tmp_path,
+):
+    _install_deterministic_rerank_movement(monkeypatch)
     out_path = tmp_path / "smoke_results.json"
     payload = runner.run_eval(
         cases_path=runner._default_cases_path(),
@@ -242,7 +312,11 @@ def test_repo_smoke_cases_run_and_include_rerank_movement(tmp_path):
     assert guard_case["checks"]["expected_guard_reason"]["pass"] is True
 
 
-def test_run_eval_optional_gold_fields_and_rerank_gain(tmp_path):
+def test_run_eval_optional_gold_fields_and_rerank_gain(
+    monkeypatch,
+    tmp_path,
+):
+    _install_deterministic_rerank_movement(monkeypatch)
     cases_path = tmp_path / "cases.jsonl"
     _write_jsonl(
         cases_path,

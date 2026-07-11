@@ -8,6 +8,7 @@ from rag_core.source_metadata import bounded_safe_string, normalize_citation, no
 
 
 ANSWER_MODE_APPROVED_EXACT_MATCH = "approved_exact_match"
+ANSWER_MODE_APPROVED_ALIAS_MATCH = "approved_alias_match"
 ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY = "approved_similar_candidate_only"
 ANSWER_MODE_RAG_ANSWER = "rag_answer"
 ANSWER_MODE_FALLBACK_NO_ANSWER = "fallback_no_answer"
@@ -21,6 +22,7 @@ CONFIDENCE_ROUTE_HUMAN_REVIEW = "human_review"
 
 SAFE_ANSWER_MODES = {
     ANSWER_MODE_APPROVED_EXACT_MATCH,
+    ANSWER_MODE_APPROVED_ALIAS_MATCH,
     ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY,
     ANSWER_MODE_RAG_ANSWER,
     ANSWER_MODE_FALLBACK_NO_ANSWER,
@@ -186,8 +188,13 @@ def build_audit_event(
     timestamp: str | None = None,
     feedback_token: str | None = None,
     max_query_chars: int = _DEFAULT_QUERY_CHARS,
+    normalized_input_question: str | None = None,
+    matched_alias: str | None = None,
+    canonical_question: str | None = None,
+    retrieval_required: bool | None = None,
+    llm_used: bool | None = None,
 ) -> Dict[str, Any]:
-    return {
+    event = {
         "request_id": request_id,
         "trace_id": trace_id,
         "tenant_id": tenant_id,
@@ -202,6 +209,17 @@ def build_audit_event(
         "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
         "feedback_token": feedback_token or generate_feedback_token(),
     }
+    if normalized_input_question is not None:
+        event["normalized_input_question"] = _bounded(normalized_input_question, max_query_chars)
+    if matched_alias is not None:
+        event["matched_alias"] = _bounded(matched_alias, max_query_chars)
+    if canonical_question is not None:
+        event["canonical_question"] = _bounded(canonical_question, max_query_chars)
+    if retrieval_required is not None:
+        event["retrieval_required"] = retrieval_required
+    if llm_used is not None:
+        event["llm_used"] = llm_used
+    return event
 
 
 def _normalize_citations(citations: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:

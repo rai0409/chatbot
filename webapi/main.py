@@ -29,6 +29,7 @@ from rag_core.audit_log import (
     append_product_preview_chat_audit_event,
 )
 from rag_core.product_contract import (
+    ANSWER_MODE_APPROVED_ALIAS_MATCH,
     ANSWER_MODE_APPROVED_EXACT_MATCH,
     ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY,
     ANSWER_MODE_FALLBACK_NO_ANSWER,
@@ -44,6 +45,7 @@ from rag_core.feedback_rerank_profile import PROFILE_PATH, apply_feedback_previe
 from rag_core.product_profile import load_product_profile
 from rag_core.product_route_policy import build_route_policy
 from rag_core.qa import answer_query_stream, answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
+from rag_core.question_normalization import normalize_question_for_exact_match
 from rag_core.retrieval import RetrievedChunk, keyword_index_status, normalize_tenant_id
 from rag_core.review_actions import (
     ALLOWED_ACTION_TYPES,
@@ -387,20 +389,45 @@ def _approved_chat_payload(answer: ApprovedAnswer) -> Dict[str, Any]:
         payload.setdefault("chunk_id", citation.chunk_id)
         payload.setdefault("title", citation.title)
         citations.append(payload)
+    answer_mode = (
+        "approved_alias_match" if answer.match_type == "alias" else "approved_exact_match"
+    )
     return {
         "answer_text": answer.approved_answer,
         "answer_with_footnotes": answer.approved_answer,
-        "intent": "approved_exact_match",
+        "intent": answer_mode,
         "guard_reason": None,
         "used_fallback": False,
         "citations": citations,
         "retrieved": [],
         "rewritten_query": "",
         "augmented_query": "",
-        "answer_mode": "approved_exact_match",
+        "answer_mode": answer_mode,
         "approved_qa_id": answer.qa_id,
         "normalized_question": answer.normalized_question,
-        "retrieval_source": "approved_qa_exact",
+        "canonical_approved_question": answer.question,
+        "matched_alias": answer.matched_alias,
+        "retrieval_source": "approved_qa_alias" if answer.match_type == "alias" else "approved_qa_exact",
+        "retrieval_required": False,
+        "llm_used": False,
+    }
+
+
+def _approved_answer_mode(answer: ApprovedAnswer) -> str:
+    return "approved_alias_match" if answer.match_type == "alias" else "approved_exact_match"
+
+
+def _approved_audit_fields(answer: ApprovedAnswer, input_question: str) -> Dict[str, Any]:
+    return {
+        "normalized_question": answer.normalized_question,
+        "normalized_input_question": normalize_question_for_exact_match(input_question),
+        "answer_mode": _approved_answer_mode(answer),
+        "approved_qa_id": answer.qa_id,
+        "matched_alias": answer.matched_alias,
+        "canonical_question": answer.question,
+        "citations_count": len(answer.approved_citations),
+        "retrieval_required": False,
+        "llm_used": False,
     }
 
 
@@ -1405,20 +1432,21 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         approved = None if staging_collection else _approved_qa_lookup(req.question, tenant_id=tenant_id)
         if approved is not None:
             payload = _approved_chat_payload(approved)
+            approved_mode = _approved_answer_mode(approved)
+            approved_trace_id = req.trace_id or uuid.uuid4().hex
+            payload["request_id"] = approved_trace_id
+            payload["trace_id"] = approved_trace_id
             append_audit_event(
                 "chat",
                 {
-                    "request_id": req.trace_id,
-                    "trace_id": req.trace_id,
+                    "request_id": approved_trace_id,
+                    "trace_id": approved_trace_id,
                     "tenant_id": approved.tenant_id,
                     "question": req.question,
-                    "normalized_question": approved.normalized_question,
-                    "answer_mode": "approved_exact_match",
-                    "approved_qa_id": approved.qa_id,
-                    "citations_count": len(approved.approved_citations),
+                    **_approved_audit_fields(approved, req.question),
                 },
             )
-            _record_chat_outcome_metrics(answer_mode="approved_exact_match")
+            _record_chat_outcome_metrics(answer_mode=approved_mode)
             return payload
 
         approved_exact_payload = None if staging_collection else _approved_exact_chat_lookup(req.question, tenant_id)
@@ -1580,20 +1608,21 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
             approved = None if staging_collection else _approved_qa_lookup(req.question, tenant_id=tenant_id)
             if approved is not None:
                 payload = _approved_chat_payload(approved)
+                approved_mode = _approved_answer_mode(approved)
+                approved_trace_id = req.trace_id or uuid.uuid4().hex
+                payload["request_id"] = approved_trace_id
+                payload["trace_id"] = approved_trace_id
                 append_audit_event(
                     "chat",
                     {
-                        "request_id": req.trace_id,
-                        "trace_id": req.trace_id,
+                        "request_id": approved_trace_id,
+                        "trace_id": approved_trace_id,
                         "tenant_id": approved.tenant_id,
                         "question": req.question,
-                        "normalized_question": approved.normalized_question,
-                        "answer_mode": "approved_exact_match",
-                        "approved_qa_id": approved.qa_id,
-                        "citations_count": len(approved.approved_citations),
+                        **_approved_audit_fields(approved, req.question),
                     },
                 )
-                _record_chat_outcome_metrics(answer_mode="approved_exact_match")
+                _record_chat_outcome_metrics(answer_mode=approved_mode)
                 yield _sse_event("approved", payload)
                 return
 
@@ -1825,12 +1854,17 @@ def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContex
         approved = _approved_qa_lookup(user_query, tenant_id=tenant_id)
         if approved is not None:
             latency_ms = round((time.time() - started) * 1000, 3)
+            approved_mode = (
+                ANSWER_MODE_APPROVED_ALIAS_MATCH
+                if approved.match_type == "alias"
+                else ANSWER_MODE_APPROVED_EXACT_MATCH
+            )
             audit_event = build_audit_event(
                 request_id=request_id,
                 trace_id=trace_id,
                 tenant_id=tenant_id,
                 user_query=user_query,
-                answer_mode=ANSWER_MODE_APPROVED_EXACT_MATCH,
+                answer_mode=approved_mode,
                 selected_qa_id=approved.qa_id,
                 candidate_ids=[],
                 decision_route=CONFIDENCE_ROUTE_EXACT_MATCH,
@@ -1838,6 +1872,11 @@ def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContex
                 threshold_profile=threshold_profile,
                 latency_ms=latency_ms,
                 feedback_token=feedback_token,
+                normalized_input_question=normalize_question_for_exact_match(user_query),
+                matched_alias=approved.matched_alias,
+                canonical_question=approved.question,
+                retrieval_required=False,
+                llm_used=False,
             )
             decision = _product_preview_decision_metadata(
                 route=CONFIDENCE_ROUTE_EXACT_MATCH,
@@ -1877,11 +1916,11 @@ def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContex
             }
             if product_policy_meta:
                 profile_info.update(_product_profile_info_metadata(product_policy_meta))
-            return build_product_answer_envelope(
+            envelope = build_product_answer_envelope(
                 request_id=request_id,
                 trace_id=trace_id,
                 tenant_id=tenant_id,
-                answer_mode=ANSWER_MODE_APPROVED_EXACT_MATCH,
+                answer_mode=approved_mode,
                 answer_text=approved.approved_answer,
                 confidence_route=CONFIDENCE_ROUTE_EXACT_MATCH,
                 citations=_approved_product_citations(approved),
@@ -1891,6 +1930,12 @@ def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContex
                 warnings=response_warnings,
                 feedback_token=feedback_token,
             )
+            envelope["approved_qa_id"] = approved.qa_id
+            envelope["canonical_approved_question"] = approved.question
+            envelope["matched_alias"] = approved.matched_alias
+            envelope["retrieval_required"] = False
+            envelope["llm_used"] = False
+            return envelope
 
         with _temporary_product_preview_profiles(
             keyword_profile=keyword_profile,

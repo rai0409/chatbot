@@ -1508,6 +1508,13 @@ def answer_query_stream(
         trace["chat_generation_mode"] = "llm"
         trace["generation_error_type"] = type(exc).__name__
         trace["generation_error"] = str(exc)[:500]
+
+        # Once any streamed text has been emitted, returning a different
+        # extractive fallback as the final answer would create an inconsistent
+        # client-visible stream. Do not retry or replace partial output.
+        if pieces:
+            raise
+
         result = _build_extractive_answer_result(
             q,
             state,

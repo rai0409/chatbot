@@ -1,537 +1,904 @@
-# Commercial Chatbot Roadmap
+# Commercial Japanese RAG / Chatbot Roadmap
 
-This roadmap defines the commercial direction for the Japanese RAG chatbot.
+## Purpose
 
-The current system has already verified the most important deterministic route:
+This roadmap defines the commercial-product direction for the Japanese RAG chatbot.
 
-```text
-approved Q&A exact match
-same question -> same approved_answer
-/chat API verification: 22/22 pass
-```
+The product must prioritize:
 
-The next goal is to expand from exact-match answers to similar-question search and robust RAG while preserving safety, citations, and reproducibility.
+* deterministic approved answers
+* grounded extractive answers
+* explicit refusal when evidence is insufficient
+* inspectable retrieval and answer traces
+* safe QA and tuning updates
+* measurable improvement and regression detection
+* non-engineer operation
+* staging-first data changes
+* controlled promotion and rollback
 
----
+The objective is not merely to answer questions.
 
-## Guiding principles
-
-1. **Approved answers are the safest answers.**
-   - If a question is already approved, return the approved answer exactly.
-   - Do not rewrite approved answers with an LLM.
-
-2. **Similarity is not the same as exact match.**
-   - Similar-question matching must be introduced first as debug/candidate search.
-   - Automatic similar-answer routing requires strict thresholds and evaluation.
-
-3. **RAG must retrieve complete evidence.**
-   - For Q&A documents, Q and A must be indexed together as a pair.
-   - PDF-derived chunks alone can split questions and answers.
-
-4. **Everything must be inspectable.**
-   - Return metadata for answer mode, approved-QA ID, retrieval candidates, score details, and citations.
-
-5. **Every production data update must be testable.**
-   - Approved-QA updates must pass `approved_qa_runner`.
-   - RAG updates must pass smoke and retrieval debug checks.
+The objective is to make every answer, QA update, tuning change, document update, and production promotion measurable, reviewable, and reversible.
 
 ---
 
-## Current verified state
+## Commercial product principles
 
-### Completed
+### 1. Approved answers remain deterministic
 
-- Japanese doc-type-aware PDF chunking
-- Chroma ingest metadata sanitation
-- `/search/debug` endpoint
-- retrieval-only debug mode
-- query type and keyword score details
-- conservative keyword boost for exact/identifier queries
-- approved Q&A exact-match framework
-- approved Q&A intake converter
-- contract-ingest JSON to canonical JSONL converter
-- canonical JSONL to draft approved-QA candidate converter
-- approved-QA review/promote/export CLI
-- table-style Q&A PDF to approved-QA converter
+When an approved QA exact match is found:
 
-### Real-data verification
+* return the approved answer without LLM rewriting
+* include approved QA ID
+* include approved citations
+* record the answer mode
+* preserve tenant isolation
 
-Using `58887_95105_misc.pdf`:
+### 2. Similarity must not be treated as certainty
 
-- PDF table extraction: 22 Q&A records
-- approved-QA runner: 22/22 pass
-- `/chat` production path: 22/22 exact same-question approved_answer match
-- canonical vector ingest: 104 records ingested, skipped=0
+Similar-question retrieval must first operate as:
 
-### Commercial meaning
+* candidate retrieval
+* debug output
+* score inspection
+* conflict inspection
+* regression evaluation
 
-The system can already support a safe production mode for known official Q&A:
+Automatic approved similar-answer routing must not be enabled until commercial gates are satisfied.
 
-```text
-user question
--> exact approved-QA match
--> approved_answer
--> approved citations
-```
+### 3. Unknown questions must be refused safely
 
-This is suitable for official FAQ, public Q&A, bid-question answers, and internal support templates.
+When the available evidence does not answer the requested fact:
+
+* do not produce a plausible unsupported answer
+* distinguish related evidence from sufficient evidence
+* return an explicit fallback or abstention
+* record the guard reason
+
+### 4. Retrieval units must contain usable evidence
+
+For approved QA:
+
+* the question and answer must remain together
+* source document and page metadata must be preserved
+* canonical QA-pair chunks must remain traceable to the approved QA record
+
+For normal documents:
+
+* headings, sections, pages, tables, and document identity must be preserved where available
+
+### 5. Every update must be evaluated before promotion
+
+The following must use candidate-first workflows:
+
+* approved QA additions
+* aliases
+* stopwords
+* keep words
+* synonyms
+* domain terms
+* retrieval weighting
+* chunking
+* reranking
+* document ingestion
+* vectorstore rebuilds
+
+No candidate may silently overwrite the production baseline.
+
+### 6. Non-engineers must be able to operate the product safely
+
+A non-engineer should eventually be able to:
+
+* create QA records in Excel
+* select arbitrary Excel file and column names
+* run dry-run validation
+* see invalid rows
+* see whether quality improved or worsened
+* reject a bad candidate
+* approve a passing candidate
+* test a staging collection
+* roll back a promoted version
 
 ---
 
-## Target answer routing
+# Current verified state
 
-The commercial `/chat` route should use this order:
+## Git and CI
 
-```text
-1. approved_exact_match
-2. approved_similar_candidate / approved_similar_match
-3. qa_pair_rag
-4. normal_document_rag
-5. fallback
-```
+Verified:
 
-### 1. approved_exact_match
+* GitHub default branch: `main`
+* local and GitHub `main` were synchronized after PR #18
+* GitHub Actions push check passed
+* GitHub Actions pull-request check passed
+* product readiness smoke passed:
+
+  * 117 passed
+  * 1 Authlib deprecation warning
+
+The Authlib warning is not currently a test failure but remains technical debt.
+
+## Approved QA exact-answer route
 
 Status: **implemented and verified**
 
-Behavior:
+Capabilities:
 
-```text
-normalized user question == approved normalized_question
--> return approved_answer exactly
-```
+* approved QA schema
+* approved QA loader and validation
+* exact-question normalization
+* deterministic approved answer response
+* approved answer citations
+* approved QA ID
+* approved QA evaluation runner
+* non-approved questions do not use exact-match mode
+* review/promote/reject/export workflow
+* CSV/JSON/JSONL intake
+* Q&A-style PDF conversion
 
-Acceptance:
+Verified quality:
 
-- `answer_mode=approved_exact_match`
-- `approved_qa_id` present
-- `answer_text == approved_answer`
-- no retrieval required
-- no LLM required
-- `approved_qa_runner` pass_rate=1.0
+* exact QA: 118/118
+* answer match rate: 1.0
 
-### 2. approved_similar_candidate
+Earlier real-data verification:
 
-Status: **next major capability**
+* table-style PDF extraction: 22 QA records
+* `/chat` exact approved-answer path: 22/22
 
-Behavior:
+Commercial meaning:
 
-```text
-no exact match
--> search approved Q&A questions
--> return candidate approved records with scores
-```
+Registered approved QA questions can already return their approved answers correctly.
 
-Initial release should be debug-only.
-It should not auto-answer.
+The next QA-related problem is not creating another answer route.
 
-Required metadata:
+The next problem is making QA additions safe and usable for non-engineers.
 
-- candidate `qa_id`
-- candidate question
-- approved answer preview
-- semantic score
-- keyword score
-- top1/top2 margin
-- matched terms
-- matched fields
-- source citation
+## Grounded extractive answer mode
 
-### 3. approved_similar_match
+Status: **implemented and verified**
 
-Status: **future, after candidate evaluation**
+Capabilities:
 
-Behavior:
+* free local extractive answer generation
+* no OpenAI API required for extractive mode
+* citation-preserving answer output
+* answer quality gate
+* required-term validation
+* source/page validation
+* unsupported-answer detection
 
-```text
-no exact match
--> high-confidence approved-QA similar match
--> return approved_answer
-```
+Verified quality:
 
-Commercial gate:
+* grounded extractive quality: 14/14
+* unsupported answers: 0
+* failed checks: none
 
-- high score threshold
-- adequate top1/top2 margin
-- keyword evidence
-- no conflicting close candidate
-- regression cases pass
+## Unknown abstention
 
-Suggested initial threshold policy:
+Status: **implemented and verified**
 
-```text
-top_score >= 0.92
-top1_top2_margin >= 0.08
-keyword_score >= 0.50
-```
+Capabilities:
 
-These values must be evaluated before production use.
+* evidence sufficiency checks
+* distinction between related evidence and answer evidence
+* fallback when a requested fact is absent
+* generalized answer-type/evidence guards
 
-### 4. qa_pair_rag
+Verified quality:
 
-Status: **recommended next PR**
+* unknown abstention: 32/32
 
-Behavior:
+Commercial meaning:
 
-```text
-approved Q&A JSONL
--> canonical Q+A pair chunks
--> vectorstore
--> RAG can retrieve Q and A together
-```
+The current extractive mode is designed to avoid answering unsupported questions merely because related evidence exists.
 
-This addresses the known failure where PDF chunking can separate question and answer chunks.
+## Normal retrieval
 
-### 5. normal_document_rag
+Status: **implemented and verified for the current evaluation set**
 
-Status: **implemented**
+Capabilities:
 
-Used for:
+* Chroma vector retrieval
+* keyword/BM25-style retrieval support
+* hybrid retrieval
+* retrieval debug output
+* query type metadata
+* keyword evidence
+* conservative keyword boost
+* canonical metadata
+* source/page metadata
+* tenant-aware retrieval paths
 
-- procedures
-- manuals
-- policies
-- specs
-- general documents
-- non-approved questions
+Verified quality:
 
-### 6. fallback
+* hybrid_hit@5: 1.0
+
+This is a current-dataset baseline, not proof of universal retrieval accuracy.
+
+## Approved QA pair RAG
 
 Status: **implemented**
 
-Used when evidence is weak or the question is too broad.
+Capabilities:
+
+* approved QA JSONL to canonical Q+A pair conversion
+* one approved QA record becomes one self-contained retrieval unit
+* question and approved answer remain together
+* source document and page metadata are preserved
+* tenant, document version, review metadata, and QA ID are preserved
+* non-approved draft records are excluded
+* existing exact-match evaluation remains independent
+
+Existing implementation:
+
+* `scripts/approved_qa_to_canonical_jsonl.py`
+* `tests/test_approved_qa_to_canonical_jsonl.py`
+
+Remaining work:
+
+* larger real-data retrieval evaluation
+* paraphrase retrieval test set
+* candidate ranking leaderboard
+* operator-visible QA-pair retrieval diagnostics
+
+## Metadata and reproducibility
+
+Status: **partially implemented**
+
+Capabilities include:
+
+* canonical metadata handling
+* document and chunk identity
+* fingerprint audit tooling
+* current baseline artifacts
+* validation reports
+* controlled production switch planning
+
+Remaining work:
+
+* clean-runner reproducibility gate
+* environment-independent artifact paths
+* baseline artifact versioning in Git
+* dataset and vectorstore manifest
+* dependency lock validation
+
+## Promotion safety
+
+Status: **planned and partially documented**
+
+Current direction:
+
+* candidate-first changes
+* no direct production overwrite
+* controlled production switch plan
+* promotion decision report
+* rollback requirement
+
+Remaining work:
+
+* executable promotion command
+* immutable release manifest
+* approved candidate identifier
+* operator approval audit
+* rollback command
+* production pointer switch
+* promotion integration test
 
 ---
 
-## Roadmap phases
+# Correct commercial answer-routing target
 
-## Phase 1: Deterministic approved-answer layer
+The intended route is:
+
+1. approved_exact_match
+2. approved_similar_candidate
+3. approved_similar_match
+4. qa_pair_rag
+5. normal_document_rag
+6. fallback
+
+## approved_exact_match
 
 Status: **complete**
 
-Delivered:
+Requirements:
 
-- approved Q&A JSONL schema
-- exact-match normalization
-- approved-QA loader and validator
-- `/chat` exact-match integration
-- approved-QA runner
-- CSV/JSON/JSONL intake
-- review/promote/reject/export CLI
-- table-style Q&A PDF converter
-- production path verification
+* exact or approved normalized match
+* approved answer returned without rewriting
+* QA ID included
+* citations included
+* no LLM dependency
 
-Commercial acceptance:
+## approved_similar_candidate
 
-```text
-/chat exact same-question approved_answer: 22/22 pass
-```
+Status: **not yet commercially complete**
+
+Purpose:
+
+* retrieve likely approved QA candidates
+* do not auto-answer
+* expose candidate evidence for evaluation
+
+Required output:
+
+* QA ID
+* approved question
+* answer preview
+* semantic score
+* keyword score
+* normalized overlap
+* matched terms
+* top1/top2 margin
+* source citation
+* conflict indicator
+
+## approved_similar_match
+
+Status: **not enabled as a commercial route**
+
+Must not use unvalidated fixed thresholds.
+
+Thresholds must be learned from an evaluation set containing:
+
+* safe paraphrases
+* close but different questions
+* contradictory questions
+* insufficient-evidence questions
+* numeric/date/entity confusions
+* tenant conflicts
+
+## qa_pair_rag
+
+Status: **implementation complete; commercial evaluation incomplete**
+
+The Q+A pair converter exists.
+
+The next work is not to recreate it.
+
+The next work is to evaluate and integrate it into measurable candidate retrieval and non-engineer QA operations.
+
+## normal_document_rag
+
+Status: **implemented; input workflow incomplete**
+
+Works for the current indexed document pipeline.
+
+Remaining gaps:
+
+* browser-based document upload
+* extraction preview
+* staging collection
+* format-specific validation
+* operator approval
+
+## fallback
+
+Status: **implemented and verified for current unknown tests**
+
+Remaining work:
+
+* broader adversarial unknown set
+* numeric/date/entity mismatch cases
+* production monitoring
+* false-refusal analysis
 
 ---
 
-## Phase 2: Q+A pair RAG foundation
+# Execution roadmap
+
+## Prompt 1: Commercial baseline snapshot
+
+Status: **implemented locally**
+
+Delivered locally:
+
+* `docs/commercial_rag_quality_baseline.md`
+* `artifacts/commercial_quality/current_baseline.json`
+* `artifacts/commercial_quality/baseline_summary.md`
+
+Verified:
+
+* grounded quality 14/14
+* unknown abstention 32/32
+* exact QA 118/118
+* hybrid_hit@5 1.0
+* product readiness smoke 117 passed
+
+Remaining action:
+
+* review
+* commit the baseline document and selected safe artifacts
+* push through normal branch/PR workflow
+
+## Prompt 2: Existing QA operator workflow audit and Excel gap implementation
 
 Status: **next**
 
-Goal:
+Purpose:
 
-Convert approved Q&A records into canonical Q+A pair chunks for vector retrieval.
+Determine exactly what already exists for QA import and operator workflows, then implement only the missing commercial gaps.
 
-Why:
+Must inspect:
 
-- table-style PDF chunks can split Q and A
-- RAG should retrieve a complete Q+A pair
-- this improves similar and partial question retrieval
+* approved QA storage format
+* CSV/JSON/JSONL intake
+* table-style PDF intake
+* review/promote/reject/export CLI
+* exact normalization
+* aliases
+* existing Excel support
+* existing column mapping
+* existing validation reports
+* existing source/page verification
+* existing candidate and production separation
 
-Deliverables:
+Implement only missing features, likely including:
 
-- `scripts/approved_qa_to_canonical_jsonl.py`
-- tests for approved-QA to canonical conversion
-- ingest verification
-- `/search/debug` verification that Q+A pair chunks are retrievable
+* `.xlsx` QA management input
+* arbitrary file names
+* arbitrary column mapping
+* Japanese column aliases
+* dry-run
+* invalid-row report
+* candidate-only output
+* deterministic QA ID
+* conflict detection against existing approved QA
+* no production apply
 
-Acceptance:
+## Prompt 3: Approved QA 100% regression and alias contract
 
-```text
-approved_qa/default.jsonl -> 22 canonical qa_pair rows
-ingest: skipped=0
-/search/debug retrieves qa_pair chunks for related questions
-smoke eval remains 21/21
-full pytest passes
-```
+Purpose:
 
----
+Maintain 100% correctness for registered approved questions while adding controlled aliases.
 
-## Phase 3: Approved similar-question search debug
+Scope:
 
-Status: **planned**
+* approved exact question
+* normalized approved question
+* explicitly approved aliases
 
-Goal:
+Must not claim 100% accuracy for unrestricted free-form questions.
 
-Search approved Q&A questions for similar questions without auto-answering.
+Required gates:
 
-Deliverables:
+* existing exact QA remains 100%
+* alias test set remains 100%
+* conflicting aliases fail validation
+* unknown abstention does not regress
+* grounded quality does not regress
 
-- approved-QA question search index
-- debug CLI or API endpoint
-- top-k candidate output
-- score details
-- keyword evidence
-- margin calculation
-- evaluation cases for paraphrases
+## Prompt 4: QA candidate evaluation and promotion gate
 
-Example:
+Purpose:
 
-```text
-query: 15問に自由回答は入りますか？
-candidate: 15問程度の項目はフリーアンサーも含まれるという認識で良いでしょうか。
-answer: フリーアンサーも含みます。
-```
+Evaluate an imported QA candidate before it can be approved.
 
-Acceptance:
+Checks:
 
-```text
-paraphrase cases retrieve correct approved qa_id at top1
-no auto-answer yet
-candidate output is inspectable
-```
+* new QA answer correctness
+* existing QA regression
+* alias collision
+* source/page existence
+* required-term evidence
+* unknown abstention
+* grounded quality
+* retrieval effect
 
----
+Outputs:
 
-## Phase 4: High-confidence approved similar match
+* pass/fail summary
+* row-level errors
+* regression list
+* promotion recommendation
 
-Status: **planned**
+No automatic production promotion.
 
-Goal:
+## Prompt 5: Approved similar-candidate retrieval
 
-Allow automatic approved answers for high-confidence similar questions.
+Purpose:
 
-Deliverables:
-
-- threshold config
-- margin config
-- conflict detection
-- `answer_mode=approved_similar_match`
-- audit logs
-- negative test cases
-
-Acceptance:
-
-```text
-high-confidence paraphrases pass
-confusable cases do not auto-answer
-unknown questions fall back to RAG
-approved exact match remains 100%
-```
-
----
-
-## Phase 5: Feedback loop and ranking improvement
-
-Status: **planned**
-
-Goal:
-
-Use operator/user feedback to improve retrieval ranking and approved-QA coverage.
+Add inspectable similar-question retrieval without automatic answering.
 
 Deliverables:
 
-- feedback endpoint or CLI
-- feedback JSONL event log
-- rating schema
-- reason labels
-- bad-answer capture
-- suggested approved-QA candidates
-- retraining or score adjustment hooks
+* debug CLI or endpoint
+* candidate leaderboard
+* semantic and keyword scores
+* margin
+* conflict indicator
+* source citations
+* paraphrase evaluation set
 
-Feedback schema should include:
+The answer route remains unchanged.
 
-- request_id
-- trace_id
-- user question
-- answer_mode
-- selected qa_id or retrieved chunks
-- rating
-- reason
-- corrected answer if available
-- reviewer
-- timestamp
+## Prompt 6: Similar-question safety evaluation
 
-Acceptance:
+Purpose:
 
-```text
-feedback events are bounded
-no private data leakage in logs
-feedback can be tied back to retrieval traces
-```
+Determine whether automatic approved-similar routing can ever be enabled safely.
 
----
+Evaluation classes:
 
-## Phase 6: Production deployment policy
+* valid paraphrases
+* same words, different meaning
+* numeric differences
+* year/date differences
+* entity differences
+* negation
+* conflicting approved QA
+* unknown questions
 
-Status: **planned**
+Outputs:
 
-Goal:
+* threshold curves
+* precision
+* recall
+* false-positive list
+* false-negative list
+* recommended operating point
 
-Make production data updates safe and repeatable.
+Commercial requirement:
+
+False approved-answer routing must be treated as more severe than fallback.
+
+## Prompt 7: RAG tuning data contract
+
+Purpose:
+
+Allow non-engineers to manage tuning values through Excel or CSV.
+
+Supported candidate types:
+
+* stopwords
+* keep words
+* synonyms
+* domain terms
+* phrase terms
+* negative terms
+* token normalization exceptions
+* keyword boosts
+
+Requirements:
+
+* arbitrary file name
+* arbitrary column mapping
+* tenant/collection scope
+* candidate-only output
+* schema validation
+* duplicate/conflict detection
+
+## Prompt 8: Tuning A/B evaluation
+
+Purpose:
+
+Show whether a tuning candidate improved or worsened quality.
+
+Metrics:
+
+* exact QA accuracy
+* alias QA accuracy
+* grounded answer pass rate
+* unknown abstention
+* recall@1
+* recall@5
+* recall@20
+* MRR
+* fallback rate
+* unsupported-answer count
+* wrong-approved-answer count
+
+The report must clearly classify:
+
+* improved
+* neutral
+* mixed
+* regressed
+* unsafe
+
+A candidate that improves recall but worsens approved-answer safety must fail.
+
+## Prompt 9: Chunking and preprocessing candidate framework
+
+Purpose:
+
+Evaluate preprocessing changes without damaging the baseline.
+
+Candidate variables:
+
+* Unicode normalization
+* Japanese punctuation
+* MeCab/tokenizer behavior
+* stopwords
+* keep words
+* chunk size
+* overlap
+* heading inheritance
+* table row grouping
+* Q+A pair grouping
+* metadata propagation
+
+Requirements:
+
+* chunk lineage
+* baseline/candidate separation
+* deterministic build
+* no production overwrite
+* A/B metrics
+
+## Prompt 10: Retrieval pipeline leaderboard
+
+Purpose:
+
+Compare retrieval architectures on the same fixed evaluation set.
+
+Candidates:
+
+* keyword only
+* vector only
+* hybrid
+* hybrid plus rerank
+* metadata-filtered hybrid
+* QA-pair-specific retrieval
+* normal-document retrieval
+
+Evaluation must include both relevance and answer safety.
+
+## Prompt 11: QA management UI
+
+Purpose:
+
+Allow a non-engineer to:
+
+* upload QA Excel
+* map columns
+* run dry-run
+* inspect invalid rows
+* inspect conflicts
+* download reports
+* submit a candidate for approval
+
+No direct production write.
+
+## Prompt 12: Tuning management UI
+
+Purpose:
+
+Allow a non-engineer to:
+
+* upload tuning Excel or CSV
+* inspect normalized candidate values
+* run A/B evaluation
+* see improved/regressed metrics
+* approve or reject a candidate
+
+Unsafe candidates must not be promotable.
+
+## Prompt 13: Raw document upload and staging ingestion
+
+Purpose:
+
+Add a browser-based document workflow.
+
+Initial priority:
+
+* PDF
+
+Later formats, only after dedicated gates:
+
+* DOCX
+* CSV
+* XLSX
+* PPTX
+* PNG/JPEG OCR
+
+Workflow:
+
+upload
+→ security checks
+→ extraction preview
+→ canonical normalization
+→ candidate chunks
+→ staging collection
+→ staging retrieval test
+→ staging chat test
+
+## Prompt 14: Staging chat UI
+
+Purpose:
+
+Allow operators to select and test a staging collection.
+
+Must show:
+
+* active collection
+* production/staging status
+* dataset fingerprint
+* document count
+* chunk count
+* retrieval trace
+* citations
+* answer mode
+
+## Prompt 15: Controlled promotion and rollback
+
+Purpose:
+
+Promote only validated QA, tuning, chunking, or vectorstore candidates.
+
+Requirements:
+
+* immutable candidate ID
+* baseline ID
+* validation report
+* operator identity
+* approval reason
+* production pointer switch
+* rollback pointer
+* audit event
+* integration test
+
+## Prompt 16: Observability and quality monitoring
+
+Purpose:
+
+Measure commercial behavior after deployment.
+
+Monitor:
+
+* answer modes
+* fallback rate
+* unsupported-answer guard
+* approved exact usage
+* similar-candidate usage
+* retrieval misses
+* citation absence
+* latency
+* cache hit rate
+* tenant isolation errors
+* operator changes
+
+Do not store unnecessary sensitive question contents.
+
+## Prompt 17: Security and tenant isolation hardening
+
+Purpose:
+
+Validate commercial security boundaries.
+
+Scope:
+
+* API authentication
+* admin authentication
+* tenant isolation
+* staging collection authorization
+* upload limits
+* formula injection
+* path traversal
+* malicious files
+* audit integrity
+* secrets handling
+* dependency vulnerabilities
+
+## Prompt 18: LLM mode quality gate
+
+Purpose:
+
+Evaluate LLM mode separately from extractive mode.
+
+Must measure:
+
+* faithfulness
+* citation correctness
+* unsupported claims
+* instruction-following
+* refusal behavior
+* prompt injection resistance
+* cost
+* latency
+
+LLM mode must not inherit the extractive mode quality claim automatically.
+
+## Prompt 19: Format-specific ingestion gates
+
+Purpose:
+
+Validate each document format independently.
+
+Separate gates:
+
+* PDF
+* DOCX
+* CSV
+* XLSX
+* PPTX
+* image/OCR
+
+A format must not be advertised as commercially supported until its dedicated gate passes.
+
+## Prompt 20: Clean-runner and reproducible release gate
+
+Purpose:
+
+Prove that a clean environment can reproduce:
+
+* dependencies
+* canonical corpus
+* embeddings
+* vectorstore
+* QA baseline
+* evaluation artifacts
+* CI results
 
 Deliverables:
 
-- deployment runbook
-- data policy
-- rollback process
-- approved-QA release checklist
-- vectorstore rebuild checklist
-- monitoring fields
-
-Acceptance before deployment:
-
-```text
-approved_qa_runner pass_rate=1.0
-/chat approved exact sample pass
-/search/debug pass
-non-match fallback pass
-smoke eval pass
-full pytest pass
-```
+* dependency lock
+* dataset manifest
+* model manifest
+* vectorstore fingerprint
+* build command
+* release manifest
+* verification command
 
 ---
 
-## Commercial operating procedure
+# Commercial quality gates
 
-### For table-style Q&A PDFs
+## Required before every QA release
 
-Use this path:
+* approved exact QA accuracy remains 100%
+* alias QA accuracy remains 100% where aliases are approved
+* unknown abstention does not regress
+* grounded quality does not regress
+* source and page references are valid
+* no duplicate or conflicting QA
+* no unreviewed records enter production
+* tenant IDs are valid
 
-```text
-PDF
--> qanda_table_pdf_to_approved_qa.py
--> draft approved-QA JSONL
--> review/promote/export
--> data/approved_qa/default.jsonl
--> approved_qa_runner
--> /chat exact-match verification
--> approved_qa_to_canonical_jsonl.py
--> vectorstore ingest
-```
+## Required before every tuning release
 
-### For normal documents
+* baseline and candidate are both evaluated
+* exact QA does not regress
+* wrong-approved-answer count remains zero
+* unknown abstention does not regress
+* grounded quality does not regress
+* retrieval metrics are reported
+* regressions are listed individually
 
-Use this path:
+## Required before every vectorstore release
 
-```text
-PDF
--> pdf_to_canonical_jsonl.py
--> ingest_canonical_jsonl.py
--> /search/debug
--> /chat grounded RAG
-```
+* dataset manifest exists
+* chunk count is recorded
+* skipped count is recorded
+* metadata schema passes
+* fingerprint is recorded
+* staging retrieval passes
+* rollback target exists
 
-### For contract-ingest JSON
+## Required before claiming commercial support
 
-Use this path:
-
-```text
-contract-ingest JSON
--> contract_ingest_json_to_canonical_jsonl.py
--> ingest_canonical_jsonl.py
--> RAG
-```
-
-If the extracted content is Q&A-like, convert it to draft approved-QA and review it.
-
----
-
-## Production quality gates
-
-### Approved Q&A gates
-
-Required:
-
-```text
-approved_qa_runner pass_rate=1.0
-failed=0
-```
-
-Required `/chat` checks:
-
-```text
-exact same question -> approved_exact_match
-answer_text == approved_answer
-approved_qa_id matches
-non-approved question does not return approved_exact_match
-```
-
-### RAG gates
-
-Required:
-
-```text
-/search/debug returns relevant evidence
-citations exist
-guard/fallback behavior is explicit
-smoke eval passes
-```
-
-### Data gates
-
-Required:
-
-```text
-no unreviewed draft records in production approved-QA file
-no rejected records in production approved-QA file
-tenant_id is correct
-source_doc/source_pages exist
-doc_version is present
-```
+* feature has a dedicated test
+* feature has a dedicated evaluation artifact
+* feature is reproducible
+* failure behavior is documented
+* operational workflow exists
+* rollback exists where production data is affected
 
 ---
 
-## Data policy
+# Immediate next work
 
-Recommended commercial policy:
+The next task is not to recreate approved QA answering or Q+A pair conversion.
 
-- Keep real production PDFs out of git unless explicitly safe.
-- Keep customer-specific approved-QA files out of git by default.
-- Commit scripts, tests, and safe examples.
-- Store production approved-QA files in controlled deployment storage.
-- Every approved-QA file must be reproducible from source or reviewed export.
-- Every release must record:
-  - source document
-  - extraction command
-  - review command
-  - approved-QA runner output
-  - API exact-match verification output
+The next task is:
 
----
+**Audit the existing QA operator workflow and implement only the missing Excel-based candidate intake capabilities.**
 
-## Immediate next PR
+This is selected because:
 
-Recommended next PR:
-
-```text
-PR5: Convert approved Q&A to canonical Q+A pair chunks for RAG
-```
-
-Why this is next:
-
-- exact match is already complete
-- approved Q&A has high-quality Q+A pairs
-- RAG needs Q and A together
-- this helps future similar-question search
-- it does not risk changing approved exact-match behavior
-
----
-
-## Success definition
-
-The commercial chatbot is considered ready for a first internal pilot when:
-
-```text
-1. approved exact match works for all approved Q&A
-2. Q+A pair chunks are searchable by RAG
-3. non-approved questions fall back safely
-4. /search/debug exposes why a result was selected
-5. smoke eval and approved-QA regression pass
-6. operators can add/review/export approved Q&A without code changes
-```
+* approved exact answers already work
+* QA-pair canonical conversion already exists
+* CSV/JSON/JSONL and review workflows already exist
+* non-engineer Excel operation remains the main usability gap
+* candidate validation is required before UI implementation
+* this work does not need to change the current answer route

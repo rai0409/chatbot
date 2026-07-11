@@ -73,6 +73,7 @@ def test_missing_procedure_evidence_fallback_has_no_citations(monkeypatch):
 
 
 def test_grounded_answer_still_produces_real_citations(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
     hits = [_mk_chunk("A", "PR2 は二段階確認の説明です。")]
     monkeypatch.setattr(qa, "hybrid_retrieve", lambda *args, **kwargs: hits)
     monkeypatch.setattr(qa, "guard_merged_top", lambda *args, **kwargs: None)
@@ -92,6 +93,7 @@ def test_grounded_answer_still_produces_real_citations(monkeypatch):
 
 
 def test_extractive_fallback_still_cites_real_chunks(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
     hits = [_mk_chunk("A", "PR2 は二段階確認の説明です。")]
     monkeypatch.setattr(qa, "hybrid_retrieve", lambda *args, **kwargs: hits)
     monkeypatch.setattr(qa, "guard_merged_top", lambda *args, **kwargs: None)

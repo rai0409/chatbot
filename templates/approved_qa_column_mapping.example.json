@@ -1,0 +1,13 @@
+{
+  "columns": {
+    "お客様の質問": "question",
+    "正式回答": "approved_answer",
+    "根拠ファイル": "source_doc",
+    "根拠頁": "source_pages",
+    "顧客区分": "tenant_id",
+    "公開可否": "enabled",
+    "別の聞き方": "aliases",
+    "確認語": "required_terms",
+    "担当メモ": "notes"
+  }
+}

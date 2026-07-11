@@ -134,7 +134,8 @@ def classify_response(case: dict[str, Any], payload: dict[str, Any] | None, erro
     answer_mode = str(payload.get("answer_mode") or "")
     retrieval_source = str(payload.get("retrieval_source") or "")
     approved_exact_false_positive = (
-        answer_mode == "approved_exact_match" or retrieval_source == "approved_qa_exact"
+        answer_mode in {"approved_exact_match", "approved_alias_match"}
+        or retrieval_source in {"approved_qa_exact", "approved_qa_alias"}
     )
     abstained = _has_abstain_signal(payload, answer_text)
     grounded_answer = bool(citations_count > 0 and not abstained and not approved_exact_false_positive)
