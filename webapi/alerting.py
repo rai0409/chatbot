@@ -44,7 +44,7 @@ DEFAULT_THRESHOLDS: Dict[str, Any] = {
 }
 
 # Answer modes that count as a successful (served) answer.
-_SUCCESS_MODES = {"grounded", "approved_exact_match"}
+_SUCCESS_MODES = {"grounded", "approved_exact_match", "approved_alias_match"}
 
 
 def _counter(payload: Dict[str, Any], name: str) -> Dict[str, int]:

@@ -134,12 +134,20 @@ def list_records(
         if tenant_id and (_compact(record.get("tenant_id")) or "default") != tenant_id:
             continue
         if needle:
+            candidate_metadata = record.get("candidate_metadata")
+            candidate_aliases = (
+                candidate_metadata.get("aliases")
+                if isinstance(candidate_metadata, dict) and isinstance(candidate_metadata.get("aliases"), list)
+                else []
+            )
             haystack = " ".join(
                 [
                     _compact(record.get("qa_id")),
                     _compact(record.get("question")),
                     _compact(record.get("approved_answer")),
                     _compact(record.get("notes")),
+                    " ".join(_compact(alias) for alias in candidate_aliases),
+                    " ".join(_compact(alias) for alias in (record.get("approved_aliases") or [])),
                 ]
             ).lower()
             if needle not in haystack:
@@ -175,6 +183,13 @@ def print_list(records: Sequence[dict], *, json_output: bool = False) -> None:
         return
     for record in records:
         pages = _source_pages(record)
+        candidate_metadata = record.get("candidate_metadata")
+        candidate_aliases = (
+            candidate_metadata.get("aliases")
+            if isinstance(candidate_metadata, dict) and isinstance(candidate_metadata.get("aliases"), list)
+            else []
+        )
+        approved_aliases = record.get("approved_aliases") if isinstance(record.get("approved_aliases"), list) else []
         print(
             "\t".join(
                 [
@@ -184,6 +199,10 @@ def print_list(records: Sequence[dict], *, json_output: bool = False) -> None:
                     _source_doc(record),
                     json.dumps(pages, ensure_ascii=False),
                     _preview(_compact(record.get("approved_answer"))),
+                    f"candidate_aliases={len(candidate_aliases)}",
+                    json.dumps(candidate_aliases, ensure_ascii=False),
+                    f"approved_aliases={len(approved_aliases)}",
+                    json.dumps(approved_aliases, ensure_ascii=False),
                 ]
             )
         )
@@ -208,6 +227,7 @@ def update_record_status(
     notes: str = "",
     reason: str = "",
     reviewed_at: str | None = None,
+    approve_aliases: bool = False,
 ) -> List[dict]:
     if status not in {"approved", "rejected"}:
         raise ValueError(f"unsupported review status: {status}")
@@ -230,6 +250,13 @@ def update_record_status(
                 item["review_notes"] = _merge_review_notes(item.get("review_notes"), notes)
             if status == "rejected":
                 item["rejection_reason"] = _compact(reason)
+                item.pop("approved_aliases", None)
+            elif approve_aliases:
+                candidate_metadata = item.get("candidate_metadata")
+                aliases = candidate_metadata.get("aliases") if isinstance(candidate_metadata, dict) else []
+                if aliases and not isinstance(aliases, list):
+                    raise ValueError("candidate_metadata.aliases must be a list")
+                item["approved_aliases"] = list(aliases or [])
         out.append(item)
     if not found:
         raise KeyError(f"qa_id not found: {qa_id}")
@@ -243,6 +270,7 @@ def promote_all_records(
     notes: str = "",
     yes: bool = False,
     reviewed_at: str | None = None,
+    approve_aliases: bool = False,
 ) -> List[dict]:
     if not yes:
         raise ValueError("promote-all requires --yes")
@@ -258,12 +286,24 @@ def promote_all_records(
             item["reviewed_by"] = reviewer
             if notes:
                 item["review_notes"] = _merge_review_notes(item.get("review_notes"), notes)
+            if approve_aliases:
+                candidate_metadata = item.get("candidate_metadata")
+                aliases = candidate_metadata.get("aliases") if isinstance(candidate_metadata, dict) else []
+                if aliases and not isinstance(aliases, list):
+                    raise ValueError("candidate_metadata.aliases must be a list")
+                item["approved_aliases"] = list(aliases or [])
         out.append(item)
     return validate_or_raise(out)
 
 
 def export_approved(records: Sequence[dict]) -> List[dict]:
-    approved = [record for record in ensure_normalized_questions(records) if _compact(record.get("status")) == "approved"]
+    approved = []
+    for record in ensure_normalized_questions(records):
+        if _compact(record.get("status")) != "approved":
+            continue
+        item = dict(record)
+        item.pop("candidate_metadata", None)
+        approved.append(item)
     return validate_or_raise(approved)
 
 
@@ -321,6 +361,7 @@ def _run_promote(args: argparse.Namespace) -> int:
         status="approved",
         reviewer=args.reviewer,
         notes=args.notes or "",
+        approve_aliases=args.approve_aliases,
     )
     target = _write_changed(
         input_path=args.input_path,
@@ -370,6 +411,7 @@ def _run_promote_all(args: argparse.Namespace) -> int:
         reviewer=args.reviewer,
         notes=args.notes or "",
         yes=args.yes,
+        approve_aliases=args.approve_aliases,
     )
     target = _write_changed(
         input_path=args.input_path,
@@ -401,6 +443,11 @@ def build_parser() -> argparse.ArgumentParser:
     promote_parser.add_argument("--qa-id", required=True)
     promote_parser.add_argument("--reviewer", required=True)
     promote_parser.add_argument("--notes", default="")
+    promote_parser.add_argument(
+        "--approve-aliases",
+        action="store_true",
+        help="Explicitly approve candidate_metadata.aliases into approved_aliases.",
+    )
     promote_parser.add_argument("--overwrite", action="store_true")
     promote_parser.add_argument("--in-place", action="store_true")
     promote_parser.set_defaults(func=_run_promote)
@@ -432,6 +479,11 @@ def build_parser() -> argparse.ArgumentParser:
     promote_all_parser.add_argument("--reviewer", required=True)
     promote_all_parser.add_argument("--notes", default="")
     promote_all_parser.add_argument("--yes", action="store_true")
+    promote_all_parser.add_argument(
+        "--approve-aliases",
+        action="store_true",
+        help="Explicitly approve aliases for every promoted draft record.",
+    )
     promote_all_parser.add_argument("--overwrite", action="store_true")
     promote_all_parser.add_argument("--in-place", action="store_true")
     promote_all_parser.set_defaults(func=_run_promote_all)

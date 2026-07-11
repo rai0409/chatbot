@@ -203,6 +203,20 @@ def _reset_keyword_index_cache() -> None:
 
 
 @contextmanager
+def _generation_mode_runtime(real_generation: bool):
+    """Isolate deterministic eval generation from the production default."""
+    previous_mode = config.CHAT_GENERATION_MODE
+
+    if not real_generation:
+        config.CHAT_GENERATION_MODE = "llm"
+
+    try:
+        yield
+    finally:
+        config.CHAT_GENERATION_MODE = previous_mode
+
+
+@contextmanager
 def _eval_runtime(chunks_jsonl: Optional[Path], stub_vector: bool):
     prev_chunks_path = config.CHUNKS_JSONL_PATH
     prev_vector_retrieve = retrieval.vector_retrieve
@@ -615,7 +629,10 @@ def run_eval(
     client = _build_eval_client(real_vector=real_vector, real_generation=real_generation)
     results: List[Dict[str, Any]] = []
 
-    with _eval_runtime(chunks_jsonl=chunks_jsonl, stub_vector=not real_vector):
+    with (
+        _generation_mode_runtime(real_generation=real_generation),
+        _eval_runtime(chunks_jsonl=chunks_jsonl, stub_vector=not real_vector),
+    ):
         for case in cases:
             answer, trace = qa.answer_query_with_trace(
                 case.query,

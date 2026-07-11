@@ -93,7 +93,8 @@ def test_answer_query_procedure_neighbor_context_keeps_stable_order_under_weak_e
         intent_override="procedure",
     )
     assert res.intent == "procedure"
-    assert res.guard_reason == "soft_distance"
+    assert res.guard_reason is None
+    assert res.used_fallback is False
     assert [it.metadata["id"] for it in res.retrieved] == ["A", "B", "C", "D"]
     assert all(it.metadata.get("retrieval_source") == "hybrid" for it in res.retrieved)
 

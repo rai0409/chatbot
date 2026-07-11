@@ -180,5 +180,21 @@ def test_approved_exact_match_precedes_and_is_uncached(monkeypatch, tmp_path):
     second = main.chat(main.ChatRequest(question="営業時間を教えてください"))
 
     assert first["answer_mode"] == "approved_exact_match"
-    assert second == first
+    assert second["answer_mode"] == "approved_exact_match"
+
+    # Approved exact answers bypass the answer cache. Stable answer fields must
+    # be identical, while per-request observability IDs must be newly issued.
+    volatile_fields = {"request_id", "trace_id"}
+    stable_first = {
+        key: value for key, value in first.items()
+        if key not in volatile_fields
+    }
+    stable_second = {
+        key: value for key, value in second.items()
+        if key not in volatile_fields
+    }
+
+    assert stable_second == stable_first
+    assert second["request_id"] != first["request_id"]
+    assert second["trace_id"] != first["trace_id"]
     assert answer_cache.size() == 0

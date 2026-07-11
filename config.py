@@ -66,17 +66,27 @@ VECTORSTORE_COLLECTION_NAME = getenv_first(
 
 
 def resolve_chroma_collection_name(explicit: Optional[str] = None) -> str:
+    """Resolve the active Chroma collection without discarding runtime config.
+
+    Precedence:
+    1. Explicit function argument.
+    2. CHROMA_COLLECTION runtime override.
+    3. The already-resolved VECTORSTORE_COLLECTION_NAME setting.
+
+    VECTORSTORE_COLLECTION_NAME is intentionally not re-read from os.environ
+    here. This preserves config monkeypatches and other controlled runtime
+    overrides used by tests and staging workflows.
+    """
     name = str(explicit or "").strip()
     if name:
         return name
-    return str(
-        getenv_first(
-            "CHROMA_COLLECTION",
-            "VECTORSTORE_COLLECTION_NAME",
-            default=DEFAULT_CHROMA_COLLECTION,
-        )
-        or DEFAULT_CHROMA_COLLECTION
-    )
+
+    env_override = str(os.getenv("CHROMA_COLLECTION") or "").strip()
+    if env_override:
+        return env_override
+
+    configured = str(VECTORSTORE_COLLECTION_NAME or "").strip()
+    return configured or DEFAULT_CHROMA_COLLECTION
 
 
 _CHUNKS_JSONL_PATH_RAW = getenv_first(
