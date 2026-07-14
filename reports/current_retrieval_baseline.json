@@ -1,0 +1,323 @@
+{
+  "approved_qa_fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "baseline_commit_sha": "3ae7f5a3445031e8d6d35a37800b7f78312969bc",
+  "branch": "chore/retrieval-baseline",
+  "compatibility_fingerprint_fields": {
+    "approved_qa_fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "corpus_fingerprint": "3f7e88fad5f540bcdb8e0e5973d988bb1f3282a0daf60fe1348bae1f96d921d3",
+    "embedding_dimension": 384,
+    "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "embedding_normalization": "l2",
+    "embedding_provider": "local",
+    "index_schema_version": "canonical-jsonl+chroma.v1",
+    "reranker_fingerprint": "b42889552b5245520ca3c993212a2f3503e5835accd1f489a156dfaf84bf5d41",
+    "retrieval_mode": "hybrid",
+    "tokenizer_version": "heuristic-ja-tokenizer:0d6b77f3dbc02b1ff9311499ae84c06116d12be19fe7227305b2dbf9eaf247f0"
+  },
+  "compatibility_fingerprint_hash": "f5a27826c5fc7b3cc2b362c20d94847c09f2187770d602ff7dca6a7d8b368fe2",
+  "corpus_fingerprint": "3f7e88fad5f540bcdb8e0e5973d988bb1f3282a0daf60fe1348bae1f96d921d3",
+  "dirty_paths": [
+    "?? reports/current_retrieval_baseline.json",
+    "?? scripts/generate_retrieval_baseline.py",
+    "?? tests/test_retrieval_baseline.py"
+  ],
+  "dirty_working_tree": true,
+  "evaluation_results": {
+    "approved_alias": {
+      "alias_qa": {
+        "failed": 0,
+        "pass_rate": 1.0,
+        "passed": 8,
+        "total": 8
+      },
+      "canonical_answer_mismatches": 0,
+      "citation_mismatches": 0,
+      "collision_cases_rejected": 3,
+      "collision_count": 3,
+      "collision_validation_failures": 0,
+      "exact_qa": {
+        "failed": 0,
+        "passed": 4,
+        "total": 4
+      },
+      "existing_gate_regressions": [],
+      "false_positive_queries": 8,
+      "false_positive_total": 0,
+      "recommendation": "keep_candidate_only_until_explicit_review",
+      "status": "passed",
+      "tenant_isolation_failures": 0
+    },
+    "approved_exact_qa": {
+      "failed": 0,
+      "pass_rate": 1.0,
+      "passed": 3,
+      "total": 3
+    },
+    "grounded_extractive_answer": {
+      "abstained_count": 0,
+      "answer_mode_mismatches": 0,
+      "category_distribution": {
+        "手順系質問": 5,
+        "条件確認系質問": 3,
+        "根拠ページ確認系質問": 3,
+        "通常質問": 3
+      },
+      "empty_answers": 0,
+      "failed_case_ids": [],
+      "failed_cases": 0,
+      "fallback_count": 0,
+      "http_errors": 0,
+      "missing_citations": 0,
+      "page_misses": 0,
+      "pass_rate": 1.0,
+      "passed_cases": 14,
+      "required_term_misses": 0,
+      "source_doc_misses": 0,
+      "total_cases": 14
+    },
+    "grounded_smoke": {
+      "abstain_cases": 0,
+      "abstain_passes": 0,
+      "failed_cases": 0,
+      "generated_at": "2026-07-14T01:52:25.490039+00:00",
+      "gold_chunk_cases": 0,
+      "gold_chunk_hits": 0,
+      "gold_doc_cases": 0,
+      "gold_doc_hits": 0,
+      "passed_cases": 21,
+      "runner_version": "pr5a-lightweight",
+      "schema_version": "eval_runner.v1",
+      "total_cases": 21
+    },
+    "product_readiness_smoke": {
+      "command": "bash scripts/product_readiness_smoke.sh",
+      "duration_seconds": 2.465,
+      "exit_code": 0,
+      "label": "product_readiness_smoke",
+      "status": "passed"
+    },
+    "retrieval_evaluation": {
+      "bm25_only": {
+        "abstain_expected_cases": 5,
+        "abstain_labeled_cases": 25,
+        "abstain_passes": 12,
+        "cases": 25,
+        "gold_chunk_cases": 19,
+        "gold_chunk_hits": 19,
+        "gold_doc_cases": 20,
+        "gold_doc_hits": 20,
+        "mean_mrr_at_k": 0.975,
+        "mean_ndcg_at_k": 1.0030803155822425
+      },
+      "dense_only": {
+        "abstain_expected_cases": 5,
+        "abstain_labeled_cases": 25,
+        "abstain_passes": 5,
+        "cases": 25,
+        "gold_chunk_cases": 19,
+        "gold_chunk_hits": 0,
+        "gold_doc_cases": 20,
+        "gold_doc_hits": 0,
+        "mean_mrr_at_k": null,
+        "mean_ndcg_at_k": 0.0
+      },
+      "hybrid": {
+        "abstain_expected_cases": 5,
+        "abstain_labeled_cases": 25,
+        "abstain_passes": 12,
+        "cases": 25,
+        "gold_chunk_cases": 19,
+        "gold_chunk_hits": 19,
+        "gold_doc_cases": 20,
+        "gold_doc_hits": 20,
+        "mean_mrr_at_k": 1.0,
+        "mean_ndcg_at_k": 1.0215338279036696
+      },
+      "hybrid_rerank": {
+        "abstain_expected_cases": 5,
+        "abstain_labeled_cases": 25,
+        "abstain_passes": 12,
+        "cases": 25,
+        "gold_chunk_cases": 19,
+        "gold_chunk_hits": 19,
+        "gold_doc_cases": 20,
+        "gold_doc_hits": 20,
+        "mean_mrr_at_k": 1.0,
+        "mean_ndcg_at_k": 1.0215338279036696
+      }
+    },
+    "unknown_abstention": {
+      "abstained_count": 30,
+      "approved_exact_false_positive_count": 0,
+      "errors": 0,
+      "grounded_answer_count": 2,
+      "total_cases": 32,
+      "unsupported_answer_count": 0
+    }
+  },
+  "executed_commands": [
+    {
+      "command": ".venv/bin/python -m eval.runner --output <temporary-output>/smoke_before.json --quiet",
+      "duration_seconds": 2.297,
+      "exit_code": 0,
+      "label": "smoke_before",
+      "status": "passed"
+    },
+    {
+      "command": ".venv/bin/python -m eval.runner --retrieval-aware --cases eval/cases/retrieval_cases.jsonl --chunks-jsonl eval/cases/smoke_chunks.jsonl --modes bm25_only,dense_only,hybrid,hybrid_rerank --per-query-output <temporary-output>/retrieval_rows_before.jsonl --summary-output <temporary-output>/retrieval_before.json --quiet",
+      "duration_seconds": 4.44,
+      "exit_code": 0,
+      "label": "retrieval_evaluation_before",
+      "status": "passed"
+    },
+    {
+      "command": ".venv/bin/python -m eval.approved_qa_runner --cases eval/cases/approved_qa_sample.jsonl --output <temporary-output>/approved_exact.json",
+      "duration_seconds": 0.071,
+      "exit_code": 0,
+      "label": "approved_exact_qa",
+      "status": "passed"
+    },
+    {
+      "command": ".venv/bin/python -m eval.approved_qa_alias_runner --output-dir <temporary-output>/approved_alias",
+      "duration_seconds": 0.088,
+      "exit_code": 0,
+      "label": "approved_alias",
+      "status": "passed"
+    },
+    {
+      "command": ".venv/bin/python tools/evaluate_grounded_extractive_quality.py --chat-url http://127.0.0.1:8021/chat --output-dir <temporary-output>/grounded",
+      "duration_seconds": 19.232,
+      "exit_code": 0,
+      "label": "grounded_extractive_answer",
+      "status": "passed"
+    },
+    {
+      "command": ".venv/bin/python tools/evaluate_unknown_abstention.py --chat-url http://127.0.0.1:8021/chat --output-dir <temporary-output>/unknown",
+      "duration_seconds": 8.938,
+      "exit_code": 0,
+      "label": "unknown_abstention",
+      "status": "passed"
+    },
+    {
+      "command": "bash scripts/product_readiness_smoke.sh",
+      "duration_seconds": 2.465,
+      "exit_code": 0,
+      "label": "product_readiness_smoke",
+      "status": "passed"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_retrieval_baseline.py -q",
+      "duration_seconds": 1.747,
+      "exit_code": 0,
+      "label": "focused_tests",
+      "status": "passed"
+    },
+    {
+      "command": ".venv/bin/python -m pytest -q",
+      "duration_seconds": 13.861,
+      "exit_code": 0,
+      "label": "full_pytest",
+      "status": "passed"
+    },
+    {
+      "command": ".venv/bin/python -m compileall -q config.py rag_core eval scripts tools webapi",
+      "duration_seconds": 0.057,
+      "exit_code": 0,
+      "label": "python_compile_check",
+      "status": "passed"
+    },
+    {
+      "command": ".venv/bin/python -m eval.runner --output <temporary-output>/smoke_after.json --quiet",
+      "duration_seconds": 2.671,
+      "exit_code": 0,
+      "label": "smoke_after",
+      "status": "passed"
+    },
+    {
+      "command": ".venv/bin/python -m eval.runner --retrieval-aware --cases eval/cases/retrieval_cases.jsonl --chunks-jsonl eval/cases/smoke_chunks.jsonl --modes bm25_only,dense_only,hybrid,hybrid_rerank --per-query-output <temporary-output>/retrieval_rows_after.jsonl --summary-output <temporary-output>/retrieval_after.json --quiet",
+      "duration_seconds": 4.485,
+      "exit_code": 0,
+      "label": "retrieval_evaluation_after",
+      "status": "passed"
+    }
+  ],
+  "generated_at": "2026-07-14T01:52:31.022443+00:00",
+  "runtime_configuration": {
+    "answer_guard": {
+      "enabled": true,
+      "generation_mode": "extractive",
+      "hard_max_distance": 0.95,
+      "hard_max_distance_procedure_delta": 0.03,
+      "minimum_keyword_evidence_bm25": 0.0,
+      "soft_distance_change": 0.9,
+      "soft_distance_other": 0.65,
+      "soft_distance_procedure": 0.9,
+      "soft_distance_reset": 0.8
+    },
+    "embedding": {
+      "dimension": 384,
+      "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "normalization": "l2",
+      "provider": "local"
+    },
+    "rerank": {
+      "candidate_count": 0,
+      "cross_encoder_enabled": false,
+      "cross_encoder_model": null,
+      "fingerprint": "b42889552b5245520ca3c993212a2f3503e5835accd1f489a156dfaf84bf5d41",
+      "heuristic_enabled": true
+    },
+    "retrieval": {
+      "bm25_top_k": 20,
+      "keyword_tokenizer": "heuristic-ja-tokenizer:0d6b77f3dbc02b1ff9311499ae84c06116d12be19fe7227305b2dbf9eaf247f0",
+      "mode": "hybrid",
+      "rrf": {
+        "enabled": true,
+        "k": 60
+      },
+      "top_k": 20,
+      "vector_top_k": 20
+    },
+    "sources": {
+      "approved_qa": "eval/cases/approved_qa_sample.jsonl",
+      "approved_qa_enabled": false,
+      "corpus": "index/chunks.canonical.bytype.dedup.jsonl",
+      "vectorstore": "vectorstore"
+    },
+    "vector_collection": {
+      "embedding_stamp": {
+        "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "provider": "local"
+      },
+      "name": "approved_qa_pair_local_pdf45_test",
+      "record_count": 118
+    }
+  },
+  "runtime_invariance": {
+    "compatibility_fields_unchanged": true,
+    "retrieval_result_signature_after": "bd3ec57d71c6e134ddcd01f4c477f3aaa18d283f57301af2ea6660b886f1796a",
+    "retrieval_result_signature_before": "bd3ec57d71c6e134ddcd01f4c477f3aaa18d283f57301af2ea6660b886f1796a",
+    "retrieval_results_unchanged": true,
+    "runtime_configuration_unchanged": true,
+    "smoke_result_signature_after": "e38ad1ad5977a6b76ee74b5e94fd72471fe257f9ce8de7ac1dc2d2e65a067700",
+    "smoke_result_signature_before": "e38ad1ad5977a6b76ee74b5e94fd72471fe257f9ce8de7ac1dc2d2e65a067700",
+    "smoke_results_unchanged": true
+  },
+  "schema_version": "current_retrieval_baseline.v1",
+  "skipped_evaluations": [],
+  "test_results": {
+    "focused_tests": {
+      "exit_code": 0,
+      "status": "passed"
+    },
+    "full_pytest": {
+      "exit_code": 0,
+      "status": "passed"
+    },
+    "python_compile_check": {
+      "exit_code": 0,
+      "status": "passed"
+    }
+  },
+  "warnings": []
+}
