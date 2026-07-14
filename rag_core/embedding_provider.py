@@ -19,6 +19,9 @@ class EmbeddingProvider(Protocol):
     def embed_queries(self, queries: Sequence[str], *, client=None) -> List[List[float]]:
         ...
 
+    def embed_documents(self, documents: Sequence[str], *, client=None) -> List[List[float]]:
+        ...
+
 
 def _load_sentence_transformer_class(provider_name: str):
     try:
@@ -72,9 +75,15 @@ class LocalEmbeddingProvider:
             "LOCAL_EMBED_MODEL", default="all-MiniLM-L6-v2"
         )
 
-    def embed_queries(self, queries: Sequence[str], *, client=None) -> List[List[float]]:
+    def _embed(self, texts: Sequence[str]) -> List[List[float]]:
         model = _get_local_model(str(self.model_name))
-        return model.encode(list(queries), normalize_embeddings=True).tolist()
+        return model.encode(list(texts), normalize_embeddings=True).tolist()
+
+    def embed_queries(self, queries: Sequence[str], *, client=None) -> List[List[float]]:
+        return self._embed(queries)
+
+    def embed_documents(self, documents: Sequence[str], *, client=None) -> List[List[float]]:
+        return self._embed(documents)
 
 
 class BgeM3EmbeddingProvider:
@@ -83,9 +92,15 @@ class BgeM3EmbeddingProvider:
     def __init__(self, model_name: str | None = None):
         self.model_name = model_name or BGE_M3_MODEL_NAME
 
-    def embed_queries(self, queries: Sequence[str], *, client=None) -> List[List[float]]:
+    def _embed(self, texts: Sequence[str]) -> List[List[float]]:
         model = _get_bge_m3_model(str(self.model_name))
-        return model.encode(list(queries), normalize_embeddings=True).tolist()
+        return model.encode(list(texts), normalize_embeddings=True).tolist()
+
+    def embed_queries(self, queries: Sequence[str], *, client=None) -> List[List[float]]:
+        return self._embed(queries)
+
+    def embed_documents(self, documents: Sequence[str], *, client=None) -> List[List[float]]:
+        return self._embed(documents)
 
 
 class OpenAIEmbeddingProvider:
@@ -96,13 +111,19 @@ class OpenAIEmbeddingProvider:
             "OPENAI_EMBED_MODEL", "EMBED_MODEL", default="text-embedding-3-small"
         )
 
-    def embed_queries(self, queries: Sequence[str], *, client=None) -> List[List[float]]:
+    def _embed(self, texts: Sequence[str], *, client=None) -> List[List[float]]:
         if client is None:
             client = _create_openai_client()
         if client is None:
             raise RuntimeError("OpenAI client is required for remote embeddings")
-        resp = client.embeddings.create(model=self.model_name, input=list(queries))
+        resp = client.embeddings.create(model=self.model_name, input=list(texts))
         return [item.embedding for item in resp.data]
+
+    def embed_queries(self, queries: Sequence[str], *, client=None) -> List[List[float]]:
+        return self._embed(queries, client=client)
+
+    def embed_documents(self, documents: Sequence[str], *, client=None) -> List[List[float]]:
+        return self._embed(documents, client=client)
 
 
 def default_provider_name() -> str:
@@ -145,3 +166,13 @@ def embed_queries(
 ) -> List[List[float]]:
     provider = get_embedding_provider(provider_name)
     return provider.embed_queries(queries, client=client)
+
+
+def embed_documents(
+    documents: Sequence[str],
+    *,
+    client=None,
+    provider_name: str | None = None,
+) -> List[List[float]]:
+    provider = get_embedding_provider(provider_name)
+    return provider.embed_documents(documents, client=client)

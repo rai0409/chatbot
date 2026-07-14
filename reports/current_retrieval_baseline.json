@@ -1,6 +1,6 @@
 {
   "approved_qa_fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-  "baseline_commit_sha": "3ae7f5a3445031e8d6d35a37800b7f78312969bc",
+  "baseline_commit_sha": "323916b082e3b51f7bc83f4be835ad8818706811",
   "branch": "chore/retrieval-baseline",
   "compatibility_fingerprint_fields": {
     "approved_qa_fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
@@ -17,9 +17,12 @@
   "compatibility_fingerprint_hash": "f5a27826c5fc7b3cc2b362c20d94847c09f2187770d602ff7dca6a7d8b368fe2",
   "corpus_fingerprint": "3f7e88fad5f540bcdb8e0e5973d988bb1f3282a0daf60fe1348bae1f96d921d3",
   "dirty_paths": [
-    "?? reports/current_retrieval_baseline.json",
-    "?? scripts/generate_retrieval_baseline.py",
-    "?? tests/test_retrieval_baseline.py"
+    "M rag_core/embedder.py",
+    " M rag_core/embedding_provider.py",
+    " M scripts/ingest_canonical_jsonl.py",
+    " M tests/test_embedding_fingerprint.py",
+    " M tests/test_embedding_provider.py",
+    " M tests/test_retrieval_batching.py"
   ],
   "dirty_working_tree": true,
   "evaluation_results": {
@@ -53,33 +56,11 @@
       "passed": 3,
       "total": 3
     },
-    "grounded_extractive_answer": {
-      "abstained_count": 0,
-      "answer_mode_mismatches": 0,
-      "category_distribution": {
-        "手順系質問": 5,
-        "条件確認系質問": 3,
-        "根拠ページ確認系質問": 3,
-        "通常質問": 3
-      },
-      "empty_answers": 0,
-      "failed_case_ids": [],
-      "failed_cases": 0,
-      "fallback_count": 0,
-      "http_errors": 0,
-      "missing_citations": 0,
-      "page_misses": 0,
-      "pass_rate": 1.0,
-      "passed_cases": 14,
-      "required_term_misses": 0,
-      "source_doc_misses": 0,
-      "total_cases": 14
-    },
     "grounded_smoke": {
       "abstain_cases": 0,
       "abstain_passes": 0,
       "failed_cases": 0,
-      "generated_at": "2026-07-14T01:52:25.490039+00:00",
+      "generated_at": "2026-07-14T02:02:53.282786+00:00",
       "gold_chunk_cases": 0,
       "gold_chunk_hits": 0,
       "gold_doc_cases": 0,
@@ -91,7 +72,7 @@
     },
     "product_readiness_smoke": {
       "command": "bash scripts/product_readiness_smoke.sh",
-      "duration_seconds": 2.465,
+      "duration_seconds": 2.377,
       "exit_code": 0,
       "label": "product_readiness_smoke",
       "status": "passed"
@@ -145,103 +126,82 @@
         "mean_mrr_at_k": 1.0,
         "mean_ndcg_at_k": 1.0215338279036696
       }
-    },
-    "unknown_abstention": {
-      "abstained_count": 30,
-      "approved_exact_false_positive_count": 0,
-      "errors": 0,
-      "grounded_answer_count": 2,
-      "total_cases": 32,
-      "unsupported_answer_count": 0
     }
   },
   "executed_commands": [
     {
       "command": ".venv/bin/python -m eval.runner --output <temporary-output>/smoke_before.json --quiet",
-      "duration_seconds": 2.297,
+      "duration_seconds": 4.399,
       "exit_code": 0,
       "label": "smoke_before",
       "status": "passed"
     },
     {
       "command": ".venv/bin/python -m eval.runner --retrieval-aware --cases eval/cases/retrieval_cases.jsonl --chunks-jsonl eval/cases/smoke_chunks.jsonl --modes bm25_only,dense_only,hybrid,hybrid_rerank --per-query-output <temporary-output>/retrieval_rows_before.jsonl --summary-output <temporary-output>/retrieval_before.json --quiet",
-      "duration_seconds": 4.44,
+      "duration_seconds": 6.8,
       "exit_code": 0,
       "label": "retrieval_evaluation_before",
       "status": "passed"
     },
     {
       "command": ".venv/bin/python -m eval.approved_qa_runner --cases eval/cases/approved_qa_sample.jsonl --output <temporary-output>/approved_exact.json",
-      "duration_seconds": 0.071,
+      "duration_seconds": 0.057,
       "exit_code": 0,
       "label": "approved_exact_qa",
       "status": "passed"
     },
     {
       "command": ".venv/bin/python -m eval.approved_qa_alias_runner --output-dir <temporary-output>/approved_alias",
-      "duration_seconds": 0.088,
+      "duration_seconds": 0.059,
       "exit_code": 0,
       "label": "approved_alias",
       "status": "passed"
     },
     {
-      "command": ".venv/bin/python tools/evaluate_grounded_extractive_quality.py --chat-url http://127.0.0.1:8021/chat --output-dir <temporary-output>/grounded",
-      "duration_seconds": 19.232,
-      "exit_code": 0,
-      "label": "grounded_extractive_answer",
-      "status": "passed"
-    },
-    {
-      "command": ".venv/bin/python tools/evaluate_unknown_abstention.py --chat-url http://127.0.0.1:8021/chat --output-dir <temporary-output>/unknown",
-      "duration_seconds": 8.938,
-      "exit_code": 0,
-      "label": "unknown_abstention",
-      "status": "passed"
-    },
-    {
       "command": "bash scripts/product_readiness_smoke.sh",
-      "duration_seconds": 2.465,
+      "duration_seconds": 2.377,
       "exit_code": 0,
       "label": "product_readiness_smoke",
       "status": "passed"
     },
     {
       "command": ".venv/bin/python -m pytest tests/test_retrieval_baseline.py -q",
-      "duration_seconds": 1.747,
+      "duration_seconds": 1.422,
       "exit_code": 0,
       "label": "focused_tests",
       "status": "passed"
     },
     {
       "command": ".venv/bin/python -m pytest -q",
-      "duration_seconds": 13.861,
+      "duration_seconds": 12.93,
       "exit_code": 0,
       "label": "full_pytest",
+      "result": "929 passed, 1 warning",
       "status": "passed"
     },
     {
       "command": ".venv/bin/python -m compileall -q config.py rag_core eval scripts tools webapi",
-      "duration_seconds": 0.057,
+      "duration_seconds": 0.051,
       "exit_code": 0,
       "label": "python_compile_check",
       "status": "passed"
     },
     {
       "command": ".venv/bin/python -m eval.runner --output <temporary-output>/smoke_after.json --quiet",
-      "duration_seconds": 2.671,
+      "duration_seconds": 5.628,
       "exit_code": 0,
       "label": "smoke_after",
       "status": "passed"
     },
     {
       "command": ".venv/bin/python -m eval.runner --retrieval-aware --cases eval/cases/retrieval_cases.jsonl --chunks-jsonl eval/cases/smoke_chunks.jsonl --modes bm25_only,dense_only,hybrid,hybrid_rerank --per-query-output <temporary-output>/retrieval_rows_after.jsonl --summary-output <temporary-output>/retrieval_after.json --quiet",
-      "duration_seconds": 4.485,
+      "duration_seconds": 8.331,
       "exit_code": 0,
       "label": "retrieval_evaluation_after",
       "status": "passed"
     }
   ],
-  "generated_at": "2026-07-14T01:52:31.022443+00:00",
+  "generated_at": "2026-07-14T02:03:05.786399+00:00",
   "runtime_configuration": {
     "answer_guard": {
       "enabled": true,
@@ -304,20 +264,37 @@
     "smoke_results_unchanged": true
   },
   "schema_version": "current_retrieval_baseline.v1",
-  "skipped_evaluations": [],
+  "skipped_evaluations": [
+    {
+      "evaluation": "grounded_extractive_answer",
+      "reason": "local runtime was unavailable"
+    },
+    {
+      "evaluation": "unknown_abstention",
+      "reason": "local runtime was unavailable"
+    }
+  ],
   "test_results": {
     "focused_tests": {
       "exit_code": 0,
       "status": "passed"
     },
     "full_pytest": {
+      "duration_seconds": 12.93,
       "exit_code": 0,
-      "status": "passed"
+      "passed": 929,
+      "status": "passed",
+      "warnings": 1
     },
     "python_compile_check": {
       "exit_code": 0,
       "status": "passed"
     }
   },
-  "warnings": []
+  "warnings": [
+    {
+      "evaluation": "live_chat",
+      "reason": "local runtime did not become healthy"
+    }
+  ]
 }
