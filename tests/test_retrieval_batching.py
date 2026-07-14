@@ -59,6 +59,11 @@ def test_differing_queries_embed_both_in_one_call(monkeypatch, tmp_path):
     fake_collection = FakeQueryCollection()
     monkeypatch.setattr(retrieval.embedder, "embed_queries", fake_embed)
     monkeypatch.setattr(
+        retrieval.embedder,
+        "embed_documents",
+        lambda *args, **kwargs: pytest.fail("query retrieval must use embed_queries"),
+    )
+    monkeypatch.setattr(
         retrieval.store, "get_vectorstore", lambda *args, **kwargs: fake_collection
     )
 
