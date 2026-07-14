@@ -57,6 +57,26 @@ def test_embed_queries_delegates_to_local_provider(monkeypatch):
     assert embedding_provider.embed_queries(["a", "b"]) == [[0.1, 0.2], [0.3, 0.4]]
 
 
+def test_embed_documents_delegates_to_local_provider_without_changing_settings(monkeypatch):
+    calls = []
+
+    class FakeModel:
+        def encode(self, texts, normalize_embeddings):
+            calls.append((list(texts), normalize_embeddings))
+
+            class Encoded:
+                def tolist(self):
+                    return [[float(index)] for index, _ in enumerate(texts)]
+
+            return Encoded()
+
+    monkeypatch.setenv("LOCAL_EMBED_MODEL", "fake-local-model")
+    monkeypatch.setattr(embedding_provider, "_get_local_model", lambda model_name: FakeModel())
+
+    assert embedding_provider.embed_documents(["doc-b", "doc-a"], provider_name="local") == [[0.0], [1.0]]
+    assert calls == [(["doc-b", "doc-a"], True)]
+
+
 def test_bge_m3_provider_resolves_by_name():
     provider = embedding_provider.get_embedding_provider("bge_m3")
 
@@ -87,6 +107,27 @@ def test_bge_m3_provider_delegates_to_expected_model(monkeypatch):
     provider = embedding_provider.get_embedding_provider("bge_m3")
 
     assert provider.embed_queries(["自由回答", "個人情報"]) == [[0.11, 0.22], [0.33, 0.44]]
+
+
+def test_bge_m3_documents_keep_model_order_and_normalization(monkeypatch):
+    calls = []
+
+    class FakeModel:
+        def encode(self, texts, normalize_embeddings):
+            calls.append((list(texts), normalize_embeddings))
+
+            class Encoded:
+                def tolist(self):
+                    return [[1.0], [2.0]]
+
+            return Encoded()
+
+    monkeypatch.setattr(embedding_provider, "_get_bge_m3_model", lambda model_name: FakeModel())
+
+    provider = embedding_provider.get_embedding_provider("bge_m3")
+    assert provider.embed_documents(["文書2", "文書1"]) == [[1.0], [2.0]]
+    assert provider.model_name == "BAAI/bge-m3"
+    assert calls == [(["文書2", "文書1"], True)]
 
 
 def test_bge_m3_missing_dependency_error_is_clear(monkeypatch):
@@ -124,6 +165,37 @@ def test_openai_provider_uses_explicit_client(monkeypatch):
 
     assert embeddings == [[0.1, 0.2], [0.3, 0.4]]
     assert client.calls == [{"model": "text-embedding-3-small", "input": ["a", "b"]}]
+
+
+def test_openai_documents_use_same_model_parameters_and_order(monkeypatch):
+    client = _FakeOpenAIClient([[0.3, 0.4], [0.1, 0.2]])
+    provider = embedding_provider.get_embedding_provider("openai")
+
+    embeddings = provider.embed_documents(["doc-b", "doc-a"], client=client)
+
+    assert embeddings == [[0.3, 0.4], [0.1, 0.2]]
+    assert client.calls == [{"model": provider.model_name, "input": ["doc-b", "doc-a"]}]
+
+
+@pytest.mark.parametrize("method_name", ["embed_queries", "embed_documents"])
+def test_empty_input_preserves_provider_delegation(method_name, monkeypatch):
+    calls = []
+
+    class FakeModel:
+        def encode(self, texts, normalize_embeddings):
+            calls.append((list(texts), normalize_embeddings))
+
+            class Encoded:
+                def tolist(self):
+                    return []
+
+            return Encoded()
+
+    monkeypatch.setattr(embedding_provider, "_get_local_model", lambda model_name: FakeModel())
+    provider = embedding_provider.LocalEmbeddingProvider("existing-model")
+
+    assert getattr(provider, method_name)([]) == []
+    assert calls == [([], True)]
 
 
 def test_openai_provider_creates_client_from_config_when_missing(monkeypatch):

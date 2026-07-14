@@ -20,6 +20,18 @@ def embed_queries(
     )
 
 
+def embed_documents(
+    documents: Sequence[str],
+    client=None,
+    provider_name: str | None = None,
+) -> List[List[float]]:
+    return embedding_provider.embed_documents(
+        documents,
+        client=client,
+        provider_name=provider_name,
+    )
+
+
 def get_embedding_provider(provider_name: str | None = None) -> embedding_provider.EmbeddingProvider:
     return embedding_provider.get_embedding_provider(provider_name)
 

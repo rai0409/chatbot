@@ -71,8 +71,13 @@ def test_ingest_stamps_collection_fingerprint(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         ingest_canonical_jsonl.embedder,
-        "embed_queries",
+        "embed_documents",
         lambda texts, client=None: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+    monkeypatch.setattr(
+        ingest_canonical_jsonl.embedder,
+        "embed_queries",
+        lambda *args, **kwargs: pytest.fail("ingestion must use embed_documents"),
     )
     monkeypatch.setattr(sys, "argv", ["ingest_canonical_jsonl.py", str(jsonl)])
 
