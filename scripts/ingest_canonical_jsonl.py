@@ -128,7 +128,7 @@ def ingest_canonical_rows(
         nonlocal ingested
         if not batch_ids:
             return
-        embeddings = embedder.embed_queries(batch_texts, client=client)
+        embeddings = embedder.embed_documents(batch_texts, client=client)
         if hasattr(collection, "upsert"):
             collection.upsert(
                 ids=batch_ids,
