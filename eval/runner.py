@@ -11,13 +11,18 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import config
 from rag_core import qa, retrieval
+from rag_core import embedder, embedding_provider, store
+from rag_core.embedding_fingerprint import embedding_dim_from_collection, source_jsonl_sha256
 from rag_core.retrieval import RetrievedChunk
 from rag_core.utils import ensure_openai_client
+from scripts.ingest_canonical_jsonl import ingest_canonical_rows
 
 SCHEMA_VERSION = "eval_runner.v1"
 RUNNER_VERSION = "pr5a-lightweight"
 _COMPACT_ID_LIMIT = 5
 _RETRIEVAL_MODES = ("bm25_only", "dense_only", "hybrid", "hybrid_rerank", "hybrid_rerank_ce")
+DEFAULT_EVAL_COLLECTION_NAME = "eval_smoke_chunks_real_vector_v1"
+DEFAULT_EVAL_TENANT_ID = "default"
 _EXPECTATION_FIELDS = (
     "expected_top_chunk_id",
     "expected_top_source_doc",
@@ -217,9 +222,14 @@ def _generation_mode_runtime(real_generation: bool):
 
 
 @contextmanager
-def _eval_runtime(chunks_jsonl: Optional[Path], stub_vector: bool):
+def _eval_runtime(
+    chunks_jsonl: Optional[Path],
+    stub_vector: bool,
+    eval_collection_name: Optional[str] = None,
+):
     prev_chunks_path = config.CHUNKS_JSONL_PATH
     prev_vector_retrieve = retrieval.vector_retrieve
+    prev_get_vectorstore = retrieval.store.get_vectorstore
 
     if chunks_jsonl is not None:
         config.CHUNKS_JSONL_PATH = str(chunks_jsonl.resolve())
@@ -231,22 +241,162 @@ def _eval_runtime(chunks_jsonl: Optional[Path], stub_vector: bool):
             return []
 
         retrieval.vector_retrieve = _vector_stub  # type: ignore[assignment]
+    elif eval_collection_name:
+        def _eval_vectorstore(*args, **kwargs):
+            requested = kwargs.pop("collection_name", None)
+            kwargs.pop("create_if_missing", None)
+            if requested not in (None, "", eval_collection_name):
+                raise RuntimeError(
+                    "real-vector evaluation attempted to access a collection outside its evaluation scope"
+                )
+            return prev_get_vectorstore(
+                collection_name=eval_collection_name,
+                create_if_missing=False,
+                **kwargs,
+            )
+
+        retrieval.store.get_vectorstore = _eval_vectorstore  # type: ignore[assignment]
 
     try:
         yield
     finally:
         retrieval.vector_retrieve = prev_vector_retrieve
+        retrieval.store.get_vectorstore = prev_get_vectorstore  # type: ignore[assignment]
         config.CHUNKS_JSONL_PATH = prev_chunks_path
         _reset_keyword_index_cache()
 
 
 def _build_eval_client(real_vector: bool, real_generation: bool):
+    if real_vector and not real_generation and embedder.is_local_provider():
+        # Local MiniLM embedding needs no remote client; retain deterministic chat.
+        return _StubClient()
     if real_vector or real_generation:
         client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
         if real_vector and not real_generation:
             return _ClientWithStubbedChat(client)
         return client
     return _StubClient()
+
+
+def _load_eval_corpus_rows(path: Path) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    ids: set[str] = set()
+    with path.open("r", encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            raw = line.strip()
+            if not raw:
+                continue
+            record = json.loads(raw)
+            if not isinstance(record, dict):
+                raise ValueError(f"corpus line {line_no}: expected JSON object")
+            chunk_id = str(record.get("id") or "").strip()
+            text = str(record.get("text") or "").strip()
+            if not chunk_id or not text:
+                raise ValueError(f"corpus line {line_no}: id and text are required")
+            if chunk_id in ids:
+                raise ValueError(f"corpus line {line_no}: duplicate chunk id: {chunk_id}")
+            ids.add(chunk_id)
+            rows.append(record)
+    if not rows:
+        raise ValueError("evaluation corpus contains no chunks")
+    return rows
+
+
+def _assert_eval_collection_name(collection_name: str) -> None:
+    production_name = config.resolve_chroma_collection_name()
+    if collection_name == production_name:
+        raise ValueError("evaluation collection must not be the production collection")
+
+
+def _validate_eval_inputs(
+    cases: Sequence[EvalCase], rows: Sequence[Dict[str, Any]], tenant_id: str
+) -> None:
+    corpus_chunk_ids = {str(row["id"]) for row in rows}
+    corpus_doc_ids = {str(row.get("doc_id") or row.get("source_doc") or "") for row in rows}
+    missing_chunks = sorted({gold for case in cases for gold in case.gold_chunk_ids if gold not in corpus_chunk_ids})
+    missing_docs = sorted({gold for case in cases for gold in case.gold_doc_ids if gold not in corpus_doc_ids})
+    if missing_chunks:
+        raise ValueError(f"gold chunk ids missing from evaluation corpus: {', '.join(missing_chunks)}")
+    if missing_docs:
+        raise ValueError(f"gold document ids missing from evaluation corpus: {', '.join(missing_docs)}")
+    normalized_tenant = str(tenant_id or DEFAULT_EVAL_TENANT_ID).strip() or DEFAULT_EVAL_TENANT_ID
+    visible = [
+        row for row in rows
+        if str(row.get("tenant_id") or DEFAULT_EVAL_TENANT_ID).strip() == normalized_tenant
+    ]
+    if not visible:
+        raise ValueError(f"tenant filter excludes every evaluation corpus record: {normalized_tenant}")
+
+
+def build_real_vector_eval_collection(
+    *,
+    chunks_jsonl: Path,
+    cases_path: Path,
+    collection_name: str = DEFAULT_EVAL_COLLECTION_NAME,
+    tenant_id: str = DEFAULT_EVAL_TENANT_ID,
+    client=None,
+) -> Dict[str, Any]:
+    """Rebuild an isolated Chroma collection used only by --real-vector eval."""
+    collection_name = str(collection_name).strip() or DEFAULT_EVAL_COLLECTION_NAME
+    _assert_eval_collection_name(collection_name)
+    rows = _load_eval_corpus_rows(chunks_jsonl)
+    cases = load_cases(cases_path)
+    _validate_eval_inputs(cases, rows, tenant_id)
+
+    ingest_canonical_rows(
+        rows,
+        collection_name=collection_name,
+        reset=True,
+        source_jsonl_path=str(chunks_jsonl),
+        client=client,
+    )
+    collection = store.get_vectorstore(
+        collection_name=collection_name,
+        verify_embedding_fingerprint=False,
+        create_if_missing=False,
+    )
+    inserted_count = int(collection.count())
+    if inserted_count != len(rows):
+        raise RuntimeError(
+            f"evaluation collection count mismatch: corpus={len(rows)} vectors={inserted_count}"
+        )
+    collection_dimension = embedding_dim_from_collection(collection)
+    metadata = dict(getattr(collection, "metadata", None) or {})
+    metadata_dimension = metadata.get("embedding_dim")
+    try:
+        stamped_dimension = int(metadata_dimension)
+    except (TypeError, ValueError):
+        stamped_dimension = None
+    if collection_dimension is None or stamped_dimension != int(collection_dimension):
+        raise RuntimeError("evaluation collection embedding dimension metadata does not match stored vectors")
+    if not cases:
+        raise ValueError("evaluation cases contain no records")
+    query_dimension = len(embedder.embed_queries([cases[0].query], client=client)[0])
+    if query_dimension != collection_dimension:
+        raise RuntimeError(
+            f"query embedding dimension mismatch: query={query_dimension} collection={collection_dimension}"
+        )
+
+    fingerprint = embedding_provider.active_fingerprint()
+    eval_metadata = {
+        "embedding_provider": fingerprint["embed_provider"],
+        "embedding_model": fingerprint["embed_model"],
+        "embedding_dimension": collection_dimension,
+        "normalization": (
+            "l2"
+            if fingerprint["embed_provider"] in {embedding_provider.LOCAL_PROVIDER, embedding_provider.BGE_M3_PROVIDER}
+            else "provider_default"
+        ),
+        "corpus_fingerprint": source_jsonl_sha256(chunks_jsonl),
+        "collection_name": collection_name,
+        "inserted_record_count": inserted_count,
+    }
+    mutable_metadata = {
+        key: value for key, value in metadata.items() if not str(key).startswith("hnsw:")
+    }
+    mutable_metadata.update(eval_metadata)
+    collection.modify(metadata=mutable_metadata)
+    return eval_metadata
 
 
 @contextmanager
@@ -576,21 +726,29 @@ def _mrr_at_k(best_rank: Optional[int], k: int) -> Optional[float]:
     return 1.0 / float(best_rank)
 
 
-def _ndcg_at_k(ranked_ids: Sequence[str], gold_ids: Sequence[str], k: int) -> Optional[float]:
-    targets = [str(x) for x in gold_ids if str(x)]
-    if not targets:
-        return None
-    target_set = set(targets)
-    if not target_set:
-        return None
+def _binary_relevance_gain(value: str, relevant_ids: set[str]) -> float:
+    return 1.0 if value in relevant_ids else 0.0
+
+
+def _dcg_at_k(ranked_ids: Sequence[str], relevant_ids: set[str], k: int) -> float:
     dcg = 0.0
-    for i, value in enumerate(ranked_ids[:k], start=1):
-        if value in target_set:
-            dcg += 1.0 / math.log2(i + 1.0)
-    ideal_hits = min(len(target_set), k)
-    if ideal_hits <= 0:
+    seen_relevant_ids: set[str] = set()
+    for rank, value in enumerate(ranked_ids[:k], start=1):
+        if value in seen_relevant_ids:
+            continue
+        gain = _binary_relevance_gain(value, relevant_ids)
+        if gain:
+            seen_relevant_ids.add(value)
+            dcg += gain / math.log2(rank + 1.0)
+    return dcg
+
+
+def _ndcg_at_k(ranked_ids: Sequence[str], gold_ids: Sequence[str], k: int) -> Optional[float]:
+    relevant_ids = {str(value) for value in gold_ids if str(value)}
+    if not relevant_ids or k <= 0:
         return None
-    idcg = sum(1.0 / math.log2(i + 1.0) for i in range(1, ideal_hits + 1))
+    dcg = _dcg_at_k(ranked_ids, relevant_ids, k)
+    idcg = _dcg_at_k(list(relevant_ids), relevant_ids, k)
     if idcg <= 0:
         return None
     return dcg / idcg
@@ -606,9 +764,23 @@ def run_eval(
     top_n: int,
     real_vector: bool,
     real_generation: bool,
+    eval_collection_name: str = DEFAULT_EVAL_COLLECTION_NAME,
+    tenant_id: str = DEFAULT_EVAL_TENANT_ID,
     quiet: bool = False,
 ) -> Dict[str, Any]:
     cases = load_cases(cases_path)
+    eval_collection_metadata = None
+    client = _build_eval_client(real_vector=real_vector, real_generation=real_generation)
+    if real_vector:
+        if chunks_jsonl is None:
+            raise ValueError("--real-vector requires --chunks-jsonl")
+        eval_collection_metadata = build_real_vector_eval_collection(
+            chunks_jsonl=chunks_jsonl,
+            cases_path=cases_path,
+            collection_name=eval_collection_name,
+            tenant_id=tenant_id,
+            client=client,
+        )
     mode = {
         "intent": "real",
         "query_rewrite": "real",
@@ -626,12 +798,15 @@ def run_eval(
         "generation": "real" if real_generation else "stubbed_deterministic",
     }
 
-    client = _build_eval_client(real_vector=real_vector, real_generation=real_generation)
     results: List[Dict[str, Any]] = []
 
     with (
         _generation_mode_runtime(real_generation=real_generation),
-        _eval_runtime(chunks_jsonl=chunks_jsonl, stub_vector=not real_vector),
+        _eval_runtime(
+            chunks_jsonl=chunks_jsonl,
+            stub_vector=not real_vector,
+            eval_collection_name=eval_collection_metadata["collection_name"] if eval_collection_metadata else None,
+        ),
     ):
         for case in cases:
             answer, trace = qa.answer_query_with_trace(
@@ -640,6 +815,7 @@ def run_eval(
                 top_k=top_k,
                 max_context_chars=max_context_chars,
                 intent_override=case.intent_override,
+                tenant_id=tenant_id,
             )
             before_raw = _trace_chunk_list(trace, "before_rerank")
             after_raw = _trace_chunk_list(trace, "after_rerank")
@@ -742,6 +918,8 @@ def run_eval(
         "summary": summary,
         "cases": results,
     }
+    if eval_collection_metadata:
+        payload["evaluation_collection"] = eval_collection_metadata
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -765,6 +943,8 @@ def run_retrieval_aware_eval(
     max_context_chars: int,
     real_vector: bool,
     real_generation: bool,
+    eval_collection_name: str = DEFAULT_EVAL_COLLECTION_NAME,
+    tenant_id: str = DEFAULT_EVAL_TENANT_ID,
     eval_k: int = 5,
     quiet: bool = False,
 ) -> Dict[str, Any]:
@@ -775,11 +955,26 @@ def run_retrieval_aware_eval(
     if invalid:
         raise ValueError(f"unsupported retrieval modes: {', '.join(invalid)}")
 
-    cases = load_cases(cases_path)
     client = _build_eval_client(real_vector=real_vector, real_generation=real_generation)
+    eval_collection_metadata = None
+    if real_vector:
+        if chunks_jsonl is None:
+            raise ValueError("--real-vector requires --chunks-jsonl")
+        eval_collection_metadata = build_real_vector_eval_collection(
+            chunks_jsonl=chunks_jsonl,
+            cases_path=cases_path,
+            collection_name=eval_collection_name,
+            tenant_id=tenant_id,
+            client=client,
+        )
+    cases = load_cases(cases_path)
     rows: List[Dict[str, Any]] = []
 
-    with _eval_runtime(chunks_jsonl=chunks_jsonl, stub_vector=not real_vector):
+    with _eval_runtime(
+        chunks_jsonl=chunks_jsonl,
+        stub_vector=not real_vector,
+        eval_collection_name=eval_collection_metadata["collection_name"] if eval_collection_metadata else None,
+    ):
         for mode in mode_list:
             with _retrieval_mode_runtime(mode):
                 for case in cases:
@@ -789,6 +984,7 @@ def run_retrieval_aware_eval(
                         top_k=top_k,
                         max_context_chars=max_context_chars,
                         intent_override=case.intent_override,
+                        tenant_id=tenant_id,
                     )
                     before_raw = _trace_chunk_list(trace, "before_rerank")
                     after_raw = _trace_chunk_list(trace, "after_rerank")
@@ -902,6 +1098,16 @@ def run_retrieval_aware_eval(
         "total_rows": len(rows),
         "by_mode": summary_by_mode,
     }
+    if eval_collection_metadata:
+        summary["evaluation_collection"] = eval_collection_metadata
+
+    dense_rows = [row for row in rows if row["mode"] == "dense_only"]
+    dense_only_all_empty = bool(real_vector and dense_rows and all(not row["before_rerank_ids"] for row in dense_rows))
+    if dense_only_all_empty:
+        summary["status"] = "error"
+        summary["error"] = "dense_only real-vector retrieval returned no candidates for every case"
+    else:
+        summary["status"] = "ok"
 
     per_query_output_path.parent.mkdir(parents=True, exist_ok=True)
     with per_query_output_path.open("w", encoding="utf-8") as f:
@@ -910,6 +1116,8 @@ def run_retrieval_aware_eval(
     summary_output_path.parent.mkdir(parents=True, exist_ok=True)
     summary_output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    if dense_only_all_empty:
+        raise RuntimeError(summary["error"])
     return {"summary": summary, "rows": rows}
 
 
@@ -958,6 +1166,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--per-query-output", default="")
     parser.add_argument("--summary-output", default="")
     parser.add_argument("--eval-k", type=int, default=5)
+    parser.add_argument(
+        "--eval-collection",
+        default=DEFAULT_EVAL_COLLECTION_NAME,
+        help="Isolated collection rebuilt for --real-vector evaluation only.",
+    )
+    parser.add_argument("--tenant-id", default=DEFAULT_EVAL_TENANT_ID)
     return parser
 
 
@@ -990,6 +1204,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             max_context_chars=args.max_context_chars,
             real_vector=bool(args.real_vector),
             real_generation=bool(args.real_generation),
+            eval_collection_name=str(args.eval_collection),
+            tenant_id=str(args.tenant_id),
             eval_k=int(args.eval_k),
             quiet=bool(args.quiet),
         )
@@ -1007,6 +1223,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             top_n=args.top_n,
             real_vector=bool(args.real_vector),
             real_generation=bool(args.real_generation),
+            eval_collection_name=str(args.eval_collection),
+            tenant_id=str(args.tenant_id),
             quiet=bool(args.quiet),
         )
     return 0
