@@ -1,0 +1,2437 @@
+{
+  "audit_scope": "approved-QA-related JSONL datasets; read-only source audit",
+  "cross_file_analysis": {
+    "counts_22_96_118": {
+      "040219_source_documents": [
+        "040219e-biscfaq.pdf"
+      ],
+      "canonical_040219_records": 96,
+      "canonical_and_ingest_same_normalized_qa_pairs": false,
+      "canonical_and_ingest_same_qa_id_set": true,
+      "conclusion": "22 is tourism; 96 is a distinct 040219e-biscfaq.pdf set represented twice as derived search-pair artifacts; 118 is their exact QA-ID and normalized-QA-pair union, saved as a runtime record artifact.",
+      "default_approved_qa_records": 22,
+      "default_source_documents": [
+        "58887_95105_misc.pdf"
+      ],
+      "runtime_equals_default_union_040219_by_normalized_qa_pair": true,
+      "runtime_equals_default_union_040219_by_qa_id": true,
+      "runtime_records": 118
+    },
+    "entries_not_represented_in_default": {
+      "approved_qa_ingest_96_count": 96,
+      "approved_qa_ingest_96_entries": [
+        {
+          "normalized_question": "調達案件一覧にある「企業プロパティ」とはどんな機能ですか。",
+          "qa_id": "biscfaq_00aa8911db545c5c",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "各資料や書類の受付票、通知書はいつ届くのですか。 調達案件一覧、入札状況一覧に表示ボタンが出てきません。",
+          "qa_id": "biscfaq_05449670cdc3321f",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "環境設定ツールは e-bisc センターホームページにある国土交通省の 4 つの url の他に、地方整備局の url も設定する必要がありますか。",
+          "qa_id": "biscfaq_09db5d998b1100ab",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "本番用利用者登録は何度実施すればいいのですか。",
+          "qa_id": "biscfaq_0ad65bc440932100",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "「ic カード更新」機能で旧カードを先にセットする所を、新カードを先にセットし、新カードから旧カードへ更新処理を行なってしまいました。新カードは使用出来ますか。",
+          "qa_id": "biscfaq_0e5ac8ee18c0c8a2",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "チュートリアルにて pin 番号を入力したが「チュートリアルエラーメッセージ入力に誤りがあります。 内容をもう一度確認して入力し直してください。」と表示されました。",
+          "qa_id": "biscfaq_0fee0ee275dc9c78",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "チュートリアルの pin 番号入力ダイアログには「担当者」を入力する欄がありますが、本番の pin 番号入力ダイアログには pin 番号入力欄しかありません。",
+          "qa_id": "biscfaq_10c86f4484dc4bd4",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "入札情報サービス(ppi)とは何ですか。",
+          "qa_id": "biscfaq_16d616799d9d5065",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認メインメニュー画面にて、「java plug-in アプレットインストールの警告」画面が表示されます。",
+          "qa_id": "biscfaq_1ecfab3fa1096877",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システム(本番)のサーバ稼動時間を教えて下さい。",
+          "qa_id": "biscfaq_22eb7fa8312aa169",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "1 台の pc にブラウザ internet explorer と netscape の両方を起動して操作を行っても、動作に問題はないですか。",
+          "qa_id": "biscfaq_25d22311a39605ae",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ブリッジ認証局とはなんでしょうか。",
+          "qa_id": "biscfaq_25e8188ca49b0229",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "競争参加資格確認申請書、技術資料、技術提案書、 参加表明書、提出意思確認書提出の際に誤って jv 参加として提出した。それぞれ再提出の際に jv 参加の設定をはずして単体企業として入札に参加することは可能ですか。※競争参加資格確認申請書、技術資料、技術提案書、参加表明書は再提出の際、発注者の許可が必要です。",
+          "qa_id": "biscfaq_26668121a4a5b2ff",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札システム利用者登録手順書」 はどこにありますか。",
+          "qa_id": "biscfaq_2c0168f9a523dc4e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録の利用者登録画面で「ascii 文字を入力して下さい。」というエラーが出ました。ascii 文字とは何ですか。",
+          "qa_id": "biscfaq_3083dac6f523d28b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録をする際,調達機関はどこを選択すればいいのですか。",
+          "qa_id": "biscfaq_359b6b6c5e34af94",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ldap の通信確認において「指定されたディレクトリサービスに接続出来ませんでした。サービスが使用できないか、サーバ名が正しくない可能性があります。」と表示されます。",
+          "qa_id": "biscfaq_37a06a9914ea9189",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認はどこから入れますか。",
+          "qa_id": "biscfaq_41a1d853fb79cc9c",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードは何枚必要ですか。",
+          "qa_id": "biscfaq_41cd19b9ec11865e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "本番利用者登録を実施しましたが、企業 id や登録した内容を再確認するにはどうしたらいいですか。",
+          "qa_id": "biscfaq_44cc84ac61026b8d",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 1-1 に「紙入札方式参加承諾願(様式 1)が提出されたときは」という一文があるが、紙入札で参加を希望する場合、紙入札方式承諾書は、必ず提出しなければならないのですか。",
+          "qa_id": "biscfaq_47fc0c49d86ff3f3",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認利用者登録にて pin 番号を入力し、「ok」ボタンを押下すると「乱数署名が行なわれていません」 と表示されます。",
+          "qa_id": "biscfaq_49817203c2dc5c50",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録の登録(変更)内容確認画面にある、証明書シリアル番号とは何ですか。",
+          "qa_id": "biscfaq_4b9bb10aa8a258ba",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "地方整備局によっては電子入札運用基準が「港湾空港関係」、「港湾空港関係を除く」に分かれています。 これはなぜですか。",
+          "qa_id": "biscfaq_4ea6e071acc9bc7d",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "入札書に入力した金額が、右側の表示欄に表示されない。",
+          "qa_id": "biscfaq_509353cf855829ba",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」はどこにありますか。",
+          "qa_id": "biscfaq_5137f03bbda8aba7",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札専用ソフトアンインストール手順書」はどこにありますか。",
+          "qa_id": "biscfaq_563abe9a1596d1a8",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "受付票や通知書が到着すると「受付票(通知書)到着のお知らせ」メールが届きますが、このメールは発注者から送信されるのですか。",
+          "qa_id": "biscfaq_572f69c02ca9276a",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録を行なう際、役職、部署名、商号(連絡先名称)、連絡先氏名、連絡先住所の欄に(50 文字以内) などと入力可能な文字数が書かれていますが、全角、 半角のどちらを指すのでしょうか。",
+          "qa_id": "biscfaq_57d925fc80996fba",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認にて pin 番号を入力し「ok」ボタンを押下すると「ログインに失敗しました」と表示されます。",
+          "qa_id": "biscfaq_57f4751d0048a716",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録にて利用者登録において「登録」ボタンを押下しても認証ダイアログが表示されません。",
+          "qa_id": "biscfaq_58f22d22bd77c5fb",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードを複数の認証局から購入し、電子入札用の pc 端末も複数台用意しています。1 社の認証局から配布されたソフトを他の認証局のカードを使用する端末にインストールし、電子入札システムを使用することは出来ますか。",
+          "qa_id": "biscfaq_5b25b2790a5da7f0",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "代表者が ic カードを購入し、支店長が契約を行う事は可能ですか。",
+          "qa_id": "biscfaq_5c5992ca9e1d886b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録時、登録完了画面を印刷し忘れてしまいました。どうしたらいいですか。",
+          "qa_id": "biscfaq_5d953a3a629be91c",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「インターネット環境確認手順書」はどこにありますか。",
+          "qa_id": "biscfaq_5e5a1f00080218ca",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "質問要求で標準プロポーザル方式の案件を検索したが、案件名称が表示されない。",
+          "qa_id": "biscfaq_5fa3fde60a8aba9b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録の内容を変更する手順を教えて下さい。",
+          "qa_id": "biscfaq_606d89edf45bdcd6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードは名義本人でないと操作出来ませんか",
+          "qa_id": "biscfaq_67a401d0aca0db1e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "「ic カード更新」機能で旧カードの情報を新カードに書き換えた場合、企業 id は変わりますか。",
+          "qa_id": "biscfaq_6aa6dc71f9fac4be",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "幹事会社以外の構成会社の ic カードによる、経常 jv での入札参加は可能ですか。",
+          "qa_id": "biscfaq_6c6dc147ade93482",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「旧バージョン jre アンインストール手順書」はどこにありますか。",
+          "qa_id": "biscfaq_6e964389d2cc1a66",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認利用者登録にて pin 番号を入力し「ok」ボタンを押下すると「署名検証が失敗しました」と表示され、「了解」ボタンを押下すると「署名検証が行なわれませんでした。java.lang.runtimeexception: 署名検証が不正に終了」と表示されます。",
+          "qa_id": "biscfaq_72a6766a5dc0fda7",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "通常指名競争入札にて、指名通知書が発行されたかどうかはどのように確認すればいいですか。",
+          "qa_id": "biscfaq_7a0184f29dcd2984",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "チュートリアルの利用者登録で利用者登録画面に自社情報を入力したが、登録内容確認画面には違う情報が表示された。",
+          "qa_id": "biscfaq_7a2c9e1122dfdd01",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "バックアップ用端末でも接続確認を行う必要がありますか。",
+          "qa_id": "biscfaq_7b030229b9a6ff64",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "発注者から各通知書や受付票が到着した際、到着のお知らせメールも届きます。毎回、メールの到着を確認してから電子入札システムにて該当の通知書や受付票を確認していますが、メールの到着が遅れた場合はどうなりますか。",
+          "qa_id": "biscfaq_7bc0c852308f5c4b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札メインメニューで調達機関に海難審判庁を選択し「電子入札システム」を押下した所「サーバエラーが発生しました。({4})再度処理を行って下さい。エラーが連続する場合は、システム管理者に連絡ください」と赤文字で表示されました。",
+          "qa_id": "biscfaq_7d96f8051117ef55",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "案件に参加している途中で、別の ic カードに変更することは出来ますか。",
+          "qa_id": "biscfaq_7e2064a11dba00c6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "落札結果はメールで届くのでしょうか。",
+          "qa_id": "biscfaq_80bc5d32337939df",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認利用者登録を実施したがメールが届きません。",
+          "qa_id": "biscfaq_81553421b68e0ca6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認利用者登録にて、pin 番号を入力し「ok」 ボタンを押下すると「デバイスが使用できません」 と表示されます。",
+          "qa_id": "biscfaq_817abb383f12bf45",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "説明要求の「入札説明書及び案件内容」に関する質問及び回答は、入札に参加していない企業も閲覧可能でしょうか。",
+          "qa_id": "biscfaq_859013e1a3519648",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システムの検証機能は ic カードリーダーが無くても操作することが出来ますか。",
+          "qa_id": "biscfaq_882ddc68b4f43d08",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 8-1 にある年間委任状とは何ですか。",
+          "qa_id": "biscfaq_89317317c71f182d",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システムにて画面を表示したまま放置し、1 時間後に操作しようとした所「ログインされていないかセッションタイムアウトしました。再度処理を行いますか」と表示されました。",
+          "qa_id": "biscfaq_8d218b2fbca5fc81",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "環境設定ツールで設定するアドレスを教えて下さい。",
+          "qa_id": "biscfaq_90a25af4d3b743c3",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認にて検索条件を設定し、調達案件一覧ボタンを押下したところ、「署名検証が失敗しました」と表示されます。",
+          "qa_id": "biscfaq_90d988915a1bd2a6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認環境にて pin 番号を入力し「ok」ボタンを押下すると、画面が利用者登録メニュー画面へ戻ってしまいます。",
+          "qa_id": "biscfaq_939d8e5414c7d343",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 3-1、3-2、4-1、 4-2 に指定されたアプリケーションソフトの名称、 ファイル形式、圧縮方法が記載されているが、指定されたもの以外は使用できませんか。",
+          "qa_id": "biscfaq_946952090019d5ba",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 8-1 の「4.提出方法」にある「ic カードの企業情報登録画面」とはどこの画面のことですか。",
+          "qa_id": "biscfaq_9b08bdbb6aa55487",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認にて技術資料に添付するファイルは何を用意すればいいですか。",
+          "qa_id": "biscfaq_9bcdbe5bd6d896c5",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録にて「java アプレット読み込み中」のまま時刻表示されない。",
+          "qa_id": "biscfaq_9f1316fa927c0a0f",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "技術資料や参加表明書など、ファイルを添付する書類がありますが、ファイルの内容はどのように作成すればいいですか。",
+          "qa_id": "biscfaq_a3e170d95c7d4f92",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "案件概要にて「内訳書無し」とされている案件の場合、内訳書欄にファイルを添付せずに、入札書を提出することが出来るのですか。",
+          "qa_id": "biscfaq_a5fbfe74a62f687b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 5-2 に開札が長引いた場合、 「入札参加者に電子入札システムにより状況の情報提供を行なうものとする」とあるが、 提供された情報は電子入札システム上でどのように確認するのですか。",
+          "qa_id": "biscfaq_a82d1c965f727a47",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "各資料を提出した際に表示される「ステップ 1、ステップ 2・・・」という表示は何ですか。",
+          "qa_id": "biscfaq_ade630377bc6733b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "入札へは紙で参加しているが、各通知書の到着を知らせるメールが届いた。電子入札システム上で通知書を確認することは出来ますか。",
+          "qa_id": "biscfaq_aeb548069bfe7c43",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "各通知書の表示は出来るが、印刷ボタンや保存ボタンを押下しても画面が変わらない。",
+          "qa_id": "biscfaq_b5bbf8331c9a2c89",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "検証機能とは何ですか。",
+          "qa_id": "biscfaq_b79ff3bf36ca09e3",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ldap の通信確認で指定の url を入力すると「ページが表示されません」と表示される。",
+          "qa_id": "biscfaq_b811c6b76b98f625",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システム(本番)の操作マニュアル(新電子入札システム操作マニュアル-受注者編-)はどこにありますか。",
+          "qa_id": "biscfaq_b86f5df8adbd0bc1",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録の部署名より下の項目には何を入力するのですか。",
+          "qa_id": "biscfaq_ba5b04efe28152e4",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録を実施した場合は、毎回、「利用者登録のお知らせ」メールが到着しますか?",
+          "qa_id": "biscfaq_c108334943956154",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "府省認証局とはなんですか。",
+          "qa_id": "biscfaq_c34ad53e8e51dc7e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札システム接続確認手順書」はどこにありますか。",
+          "qa_id": "biscfaq_c592df8bc4d49053",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "pin 認証時、pin 番号を 3 回連続入力間違いをしてしまうとカードは失効してしまうのでしょうか。",
+          "qa_id": "biscfaq_c6694010804e20ff",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "e-bisc センターホームページの「接続確認(受注者用)サイトはこちら」の click ボタンを押下すると 「ページが表示出来ません」と表示されます。",
+          "qa_id": "biscfaq_cc0690f4b047259b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "「環境設定ツールについて」メニューで表示される <参考資料1>の 4 つのアドレスをクリックしてもそれぞれの環境へ接続できません。",
+          "qa_id": "biscfaq_cc64245c3d99a98a",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "入札書又は見積書を提出した後に辞退届けを提出することは可能でしょうか。",
+          "qa_id": "biscfaq_cfaed3ca51710f4e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "技術資料を再提出することは出来ますか。",
+          "qa_id": "biscfaq_dc084be1674f1e61",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "本番利用者登録を実施したが、利用者登録完了のお知らせメールが届きません。",
+          "qa_id": "biscfaq_dd7a1c25570ae001",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システムの準備が間に合わず、入札には紙で参加した場合、落札結果はどのようにして確認出来ますか。",
+          "qa_id": "biscfaq_de86b740a7e2a929",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "チュートリアルの利用者登録操作ガイドでは役職欄に「営業部課長」と担当者の役職が書いてあるが、 本番の手順書には「代表取締役社長」と ic カード取得者の役職が書いてある。実際にはどちらを登録すればいいですか。",
+          "qa_id": "biscfaq_e0eca9c426f0f2f6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録で「ic カード更新」ボタンがあります。 これはどの様な機能でしょうか。",
+          "qa_id": "biscfaq_e1ba6debd130d883",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認環境にて pin 番号を入力し「ok」ボタンを押下すると「システムエラーが発生しました。再度処理を行なって下さい」と表示されます。",
+          "qa_id": "biscfaq_e6a30b601eb04a44",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードの購入を検討しているが、民間認証局各社を選択する基準はありますか。",
+          "qa_id": "biscfaq_e82dee2276e6cd37",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "e-bisc センターホームページ左の 1.インターネット環境の確認メニューから(1)新システムへの接続確認(http,https の確認)を選択し、「接続確認(受注者用)サイトはこちら」の click ボタンを押下すると 「ページが表示出来ません」と表示されます。",
+          "qa_id": "biscfaq_e8b85166fdc83b6d",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "指名通知書発行の際に必要となる「企業 id」とはどの番号のことですか。",
+          "qa_id": "biscfaq_e9d29c0f04e28624",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードを破損した場合に、新しいカードに情報を写す方法はありませんか。「ic カード更新」機能はこの目的に利用出来ますか。",
+          "qa_id": "biscfaq_eb1c66f9ec2ed34c",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ldap の通過確認はどの様に行えば良いでしょうか。",
+          "qa_id": "biscfaq_ebe1286a5e24dca4",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "環境設定ツールで指定する 4 つのアドレスにはどんな意味がありますか。",
+          "qa_id": "biscfaq_eda76c5dc3c1d9a8",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "平成 14 年度までの電子入札システムでは文字入力切替がキーボード上からしか行なえませんでしたが、平成 15 年度からのコアシステムでは、ms-ime ツールバーからも文字入力の切り替えをすることが出来ますか。",
+          "qa_id": "biscfaq_f0494cb9746668b7",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録操作手順を教えて下さい。",
+          "qa_id": "biscfaq_f2c4df1729374bb7",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録にて複数のメールアドレスを登録することは出来ますか。",
+          "qa_id": "biscfaq_f30e973540ae0ca8",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システム(本番)へはどこから入れますか。",
+          "qa_id": "biscfaq_f4135dbc314d9291",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "社内で認証局が異なる ic カードを持っていますが、 それぞれに利用者登録を行なった場合、企業 id はどのように採番されますか。",
+          "qa_id": "biscfaq_fabed40c82e3cdfb",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        }
+      ],
+      "canonical_96_count": 96,
+      "canonical_96_entries": [
+        {
+          "normalized_question": "調達案件一覧にある「企業プロパティ」とはどんな機能ですか。",
+          "qa_id": "biscfaq_00aa8911db545c5c",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "各資料や書類の受付票、通知書はいつ届くのですか。 調達案件一覧、入札状況一覧に表示ボタンが出てきません。",
+          "qa_id": "biscfaq_05449670cdc3321f",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "環境設定ツールは e-bisc センターホームページにある国土交通省の 4 つの url の他に、地方整備局の url も設定する必要がありますか。",
+          "qa_id": "biscfaq_09db5d998b1100ab",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "本番用利用者登録は何度実施すればいいのですか。",
+          "qa_id": "biscfaq_0ad65bc440932100",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "「ic カード更新」機能で旧カードを先にセットする所を、新カードを先にセットし、新カードから旧カードへ更新処理を行なってしまいました。新カードは使用出来ますか。",
+          "qa_id": "biscfaq_0e5ac8ee18c0c8a2",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "チュートリアルにて pin 番号を入力したが「チュートリアルエラーメッセージ入力に誤りがあります。 内容をもう一度確認して入力し直してください。」と表示されました。",
+          "qa_id": "biscfaq_0fee0ee275dc9c78",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "チュートリアルの pin 番号入力ダイアログには「担当者」を入力する欄がありますが、本番の pin 番号入力ダイアログには pin 番号入力欄しかありません。",
+          "qa_id": "biscfaq_10c86f4484dc4bd4",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "入札情報サービス(ppi)とは何ですか。",
+          "qa_id": "biscfaq_16d616799d9d5065",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認メインメニュー画面にて、「java plug-in アプレットインストールの警告」画面が表示されます。",
+          "qa_id": "biscfaq_1ecfab3fa1096877",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システム(本番)のサーバ稼動時間を教えて下さい。",
+          "qa_id": "biscfaq_22eb7fa8312aa169",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "1 台の pc にブラウザ internet explorer と netscape の両方を起動して操作を行っても、動作に問題はないですか。",
+          "qa_id": "biscfaq_25d22311a39605ae",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ブリッジ認証局とはなんでしょうか。",
+          "qa_id": "biscfaq_25e8188ca49b0229",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "競争参加資格確認申請書、技術資料、技術提案書、 参加表明書、提出意思確認書提出の際に誤って jv 参加として提出した。それぞれ再提出の際に jv 参加の設定をはずして単体企業として入札に参加することは可能ですか。※競争参加資格確認申請書、技術資料、技術提案書、参加表明書は再提出の際、発注者の許可が必要です。",
+          "qa_id": "biscfaq_26668121a4a5b2ff",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札システム利用者登録手順書」 はどこにありますか。",
+          "qa_id": "biscfaq_2c0168f9a523dc4e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録の利用者登録画面で「ascii 文字を入力して下さい。」というエラーが出ました。ascii 文字とは何ですか。",
+          "qa_id": "biscfaq_3083dac6f523d28b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録をする際,調達機関はどこを選択すればいいのですか。",
+          "qa_id": "biscfaq_359b6b6c5e34af94",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ldap の通信確認において「指定されたディレクトリサービスに接続出来ませんでした。サービスが使用できないか、サーバ名が正しくない可能性があります。」と表示されます。",
+          "qa_id": "biscfaq_37a06a9914ea9189",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認はどこから入れますか。",
+          "qa_id": "biscfaq_41a1d853fb79cc9c",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードは何枚必要ですか。",
+          "qa_id": "biscfaq_41cd19b9ec11865e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "本番利用者登録を実施しましたが、企業 id や登録した内容を再確認するにはどうしたらいいですか。",
+          "qa_id": "biscfaq_44cc84ac61026b8d",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 1-1 に「紙入札方式参加承諾願(様式 1)が提出されたときは」という一文があるが、紙入札で参加を希望する場合、紙入札方式承諾書は、必ず提出しなければならないのですか。",
+          "qa_id": "biscfaq_47fc0c49d86ff3f3",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認利用者登録にて pin 番号を入力し、「ok」ボタンを押下すると「乱数署名が行なわれていません」 と表示されます。",
+          "qa_id": "biscfaq_49817203c2dc5c50",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録の登録(変更)内容確認画面にある、証明書シリアル番号とは何ですか。",
+          "qa_id": "biscfaq_4b9bb10aa8a258ba",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "地方整備局によっては電子入札運用基準が「港湾空港関係」、「港湾空港関係を除く」に分かれています。 これはなぜですか。",
+          "qa_id": "biscfaq_4ea6e071acc9bc7d",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "入札書に入力した金額が、右側の表示欄に表示されない。",
+          "qa_id": "biscfaq_509353cf855829ba",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」はどこにありますか。",
+          "qa_id": "biscfaq_5137f03bbda8aba7",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札専用ソフトアンインストール手順書」はどこにありますか。",
+          "qa_id": "biscfaq_563abe9a1596d1a8",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "受付票や通知書が到着すると「受付票(通知書)到着のお知らせ」メールが届きますが、このメールは発注者から送信されるのですか。",
+          "qa_id": "biscfaq_572f69c02ca9276a",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録を行なう際、役職、部署名、商号(連絡先名称)、連絡先氏名、連絡先住所の欄に(50 文字以内) などと入力可能な文字数が書かれていますが、全角、 半角のどちらを指すのでしょうか。",
+          "qa_id": "biscfaq_57d925fc80996fba",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認にて pin 番号を入力し「ok」ボタンを押下すると「ログインに失敗しました」と表示されます。",
+          "qa_id": "biscfaq_57f4751d0048a716",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録にて利用者登録において「登録」ボタンを押下しても認証ダイアログが表示されません。",
+          "qa_id": "biscfaq_58f22d22bd77c5fb",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードを複数の認証局から購入し、電子入札用の pc 端末も複数台用意しています。1 社の認証局から配布されたソフトを他の認証局のカードを使用する端末にインストールし、電子入札システムを使用することは出来ますか。",
+          "qa_id": "biscfaq_5b25b2790a5da7f0",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "代表者が ic カードを購入し、支店長が契約を行う事は可能ですか。",
+          "qa_id": "biscfaq_5c5992ca9e1d886b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録時、登録完了画面を印刷し忘れてしまいました。どうしたらいいですか。",
+          "qa_id": "biscfaq_5d953a3a629be91c",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「インターネット環境確認手順書」はどこにありますか。",
+          "qa_id": "biscfaq_5e5a1f00080218ca",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "質問要求で標準プロポーザル方式の案件を検索したが、案件名称が表示されない。",
+          "qa_id": "biscfaq_5fa3fde60a8aba9b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録の内容を変更する手順を教えて下さい。",
+          "qa_id": "biscfaq_606d89edf45bdcd6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードは名義本人でないと操作出来ませんか",
+          "qa_id": "biscfaq_67a401d0aca0db1e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "「ic カード更新」機能で旧カードの情報を新カードに書き換えた場合、企業 id は変わりますか。",
+          "qa_id": "biscfaq_6aa6dc71f9fac4be",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "幹事会社以外の構成会社の ic カードによる、経常 jv での入札参加は可能ですか。",
+          "qa_id": "biscfaq_6c6dc147ade93482",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「旧バージョン jre アンインストール手順書」はどこにありますか。",
+          "qa_id": "biscfaq_6e964389d2cc1a66",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認利用者登録にて pin 番号を入力し「ok」ボタンを押下すると「署名検証が失敗しました」と表示され、「了解」ボタンを押下すると「署名検証が行なわれませんでした。java.lang.runtimeexception: 署名検証が不正に終了」と表示されます。",
+          "qa_id": "biscfaq_72a6766a5dc0fda7",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "通常指名競争入札にて、指名通知書が発行されたかどうかはどのように確認すればいいですか。",
+          "qa_id": "biscfaq_7a0184f29dcd2984",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "チュートリアルの利用者登録で利用者登録画面に自社情報を入力したが、登録内容確認画面には違う情報が表示された。",
+          "qa_id": "biscfaq_7a2c9e1122dfdd01",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "バックアップ用端末でも接続確認を行う必要がありますか。",
+          "qa_id": "biscfaq_7b030229b9a6ff64",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "発注者から各通知書や受付票が到着した際、到着のお知らせメールも届きます。毎回、メールの到着を確認してから電子入札システムにて該当の通知書や受付票を確認していますが、メールの到着が遅れた場合はどうなりますか。",
+          "qa_id": "biscfaq_7bc0c852308f5c4b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札メインメニューで調達機関に海難審判庁を選択し「電子入札システム」を押下した所「サーバエラーが発生しました。({4})再度処理を行って下さい。エラーが連続する場合は、システム管理者に連絡ください」と赤文字で表示されました。",
+          "qa_id": "biscfaq_7d96f8051117ef55",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "案件に参加している途中で、別の ic カードに変更することは出来ますか。",
+          "qa_id": "biscfaq_7e2064a11dba00c6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "落札結果はメールで届くのでしょうか。",
+          "qa_id": "biscfaq_80bc5d32337939df",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認利用者登録を実施したがメールが届きません。",
+          "qa_id": "biscfaq_81553421b68e0ca6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認利用者登録にて、pin 番号を入力し「ok」 ボタンを押下すると「デバイスが使用できません」 と表示されます。",
+          "qa_id": "biscfaq_817abb383f12bf45",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "説明要求の「入札説明書及び案件内容」に関する質問及び回答は、入札に参加していない企業も閲覧可能でしょうか。",
+          "qa_id": "biscfaq_859013e1a3519648",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システムの検証機能は ic カードリーダーが無くても操作することが出来ますか。",
+          "qa_id": "biscfaq_882ddc68b4f43d08",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 8-1 にある年間委任状とは何ですか。",
+          "qa_id": "biscfaq_89317317c71f182d",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システムにて画面を表示したまま放置し、1 時間後に操作しようとした所「ログインされていないかセッションタイムアウトしました。再度処理を行いますか」と表示されました。",
+          "qa_id": "biscfaq_8d218b2fbca5fc81",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "環境設定ツールで設定するアドレスを教えて下さい。",
+          "qa_id": "biscfaq_90a25af4d3b743c3",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認にて検索条件を設定し、調達案件一覧ボタンを押下したところ、「署名検証が失敗しました」と表示されます。",
+          "qa_id": "biscfaq_90d988915a1bd2a6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認環境にて pin 番号を入力し「ok」ボタンを押下すると、画面が利用者登録メニュー画面へ戻ってしまいます。",
+          "qa_id": "biscfaq_939d8e5414c7d343",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 3-1、3-2、4-1、 4-2 に指定されたアプリケーションソフトの名称、 ファイル形式、圧縮方法が記載されているが、指定されたもの以外は使用できませんか。",
+          "qa_id": "biscfaq_946952090019d5ba",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 8-1 の「4.提出方法」にある「ic カードの企業情報登録画面」とはどこの画面のことですか。",
+          "qa_id": "biscfaq_9b08bdbb6aa55487",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認にて技術資料に添付するファイルは何を用意すればいいですか。",
+          "qa_id": "biscfaq_9bcdbe5bd6d896c5",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録にて「java アプレット読み込み中」のまま時刻表示されない。",
+          "qa_id": "biscfaq_9f1316fa927c0a0f",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "技術資料や参加表明書など、ファイルを添付する書類がありますが、ファイルの内容はどのように作成すればいいですか。",
+          "qa_id": "biscfaq_a3e170d95c7d4f92",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "案件概要にて「内訳書無し」とされている案件の場合、内訳書欄にファイルを添付せずに、入札書を提出することが出来るのですか。",
+          "qa_id": "biscfaq_a5fbfe74a62f687b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 5-2 に開札が長引いた場合、「入札参加者に電子入札システムにより状況の情報提供を行なうものとする」とあるが、 提供された情報は電子入札システム上でどのように確認するのですか。",
+          "qa_id": "biscfaq_a82d1c965f727a47",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "各資料を提出した際に表示される「ステップ 1、ステップ 2・・・」という表示は何ですか。",
+          "qa_id": "biscfaq_ade630377bc6733b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "入札へは紙で参加しているが、各通知書の到着を知らせるメールが届いた。電子入札システム上で通知書を確認することは出来ますか。",
+          "qa_id": "biscfaq_aeb548069bfe7c43",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "各通知書の表示は出来るが、印刷ボタンや保存ボタンを押下しても画面が変わらない。",
+          "qa_id": "biscfaq_b5bbf8331c9a2c89",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "検証機能とは何ですか。",
+          "qa_id": "biscfaq_b79ff3bf36ca09e3",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ldap の通信確認で指定の url を入力すると「ページが表示されません」と表示される。",
+          "qa_id": "biscfaq_b811c6b76b98f625",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システム(本番)の操作マニュアル(新電子入札システム操作マニュアル-受注者編-)はどこにありますか。",
+          "qa_id": "biscfaq_b86f5df8adbd0bc1",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録の部署名より下の項目には何を入力するのですか。",
+          "qa_id": "biscfaq_ba5b04efe28152e4",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録を実施した場合は、毎回、「利用者登録のお知らせ」メールが到着しますか?",
+          "qa_id": "biscfaq_c108334943956154",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "府省認証局とはなんですか。",
+          "qa_id": "biscfaq_c34ad53e8e51dc7e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札システム接続確認手順書」はどこにありますか。",
+          "qa_id": "biscfaq_c592df8bc4d49053",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "pin 認証時、pin 番号を 3 回連続入力間違いをしてしまうとカードは失効してしまうのでしょうか。",
+          "qa_id": "biscfaq_c6694010804e20ff",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "e-bisc センターホームページの「接続確認(受注者用)サイトはこちら」の click ボタンを押下すると「ページが表示出来ません」と表示されます。",
+          "qa_id": "biscfaq_cc0690f4b047259b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "「環境設定ツールについて」メニューで表示される <参考資料1>の 4 つのアドレスをクリックしてもそれぞれの環境へ接続できません。",
+          "qa_id": "biscfaq_cc64245c3d99a98a",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "入札書又は見積書を提出した後に辞退届けを提出することは可能でしょうか。",
+          "qa_id": "biscfaq_cfaed3ca51710f4e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "技術資料を再提出することは出来ますか。",
+          "qa_id": "biscfaq_dc084be1674f1e61",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "本番利用者登録を実施したが、利用者登録完了のお知らせメールが届きません。",
+          "qa_id": "biscfaq_dd7a1c25570ae001",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システムの準備が間に合わず、入札には紙で参加した場合、落札結果はどのようにして確認出来ますか。",
+          "qa_id": "biscfaq_de86b740a7e2a929",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "チュートリアルの利用者登録操作ガイドでは役職欄に「営業部課長」と担当者の役職が書いてあるが、 本番の手順書には「代表取締役社長」と ic カード取得者の役職が書いてある。実際にはどちらを登録すればいいですか。",
+          "qa_id": "biscfaq_e0eca9c426f0f2f6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録で「ic カード更新」ボタンがあります。 これはどの様な機能でしょうか。",
+          "qa_id": "biscfaq_e1ba6debd130d883",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認環境にて pin 番号を入力し「ok」ボタンを押下すると「システムエラーが発生しました。再度処理を行なって下さい」と表示されます。",
+          "qa_id": "biscfaq_e6a30b601eb04a44",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードの購入を検討しているが、民間認証局各社を選択する基準はありますか。",
+          "qa_id": "biscfaq_e82dee2276e6cd37",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "e-bisc センターホームページ左の 1.インターネット環境の確認メニューから(1)新システムへの接続確認(http,https の確認)を選択し、「接続確認(受注者用)サイトはこちら」の click ボタンを押下すると「ページが表示出来ません」と表示されます。",
+          "qa_id": "biscfaq_e8b85166fdc83b6d",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "指名通知書発行の際に必要となる「企業 id」とはどの番号のことですか。",
+          "qa_id": "biscfaq_e9d29c0f04e28624",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードを破損した場合に、新しいカードに情報を写す方法はありませんか。「ic カード更新」機能はこの目的に利用出来ますか。",
+          "qa_id": "biscfaq_eb1c66f9ec2ed34c",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ldap の通過確認はどの様に行えば良いでしょうか。",
+          "qa_id": "biscfaq_ebe1286a5e24dca4",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "環境設定ツールで指定する 4 つのアドレスにはどんな意味がありますか。",
+          "qa_id": "biscfaq_eda76c5dc3c1d9a8",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "平成 14 年度までの電子入札システムでは文字入力切替がキーボード上からしか行なえませんでしたが、平成 15 年度からのコアシステムでは、ms-ime ツールバーからも文字入力の切り替えをすることが出来ますか。",
+          "qa_id": "biscfaq_f0494cb9746668b7",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録操作手順を教えて下さい。",
+          "qa_id": "biscfaq_f2c4df1729374bb7",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録にて複数のメールアドレスを登録することは出来ますか。",
+          "qa_id": "biscfaq_f30e973540ae0ca8",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システム(本番)へはどこから入れますか。",
+          "qa_id": "biscfaq_f4135dbc314d9291",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "社内で認証局が異なる ic カードを持っていますが、 それぞれに利用者登録を行なった場合、企業 id はどのように採番されますか。",
+          "qa_id": "biscfaq_fabed40c82e3cdfb",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        }
+      ],
+      "runtime_118_count": 96,
+      "runtime_entries_not_in_default": [
+        {
+          "normalized_question": "調達案件一覧にある「企業プロパティ」とはどんな機能ですか。",
+          "qa_id": "biscfaq_00aa8911db545c5c",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "各資料や書類の受付票、通知書はいつ届くのですか。 調達案件一覧、入札状況一覧に表示ボタンが出てきません。",
+          "qa_id": "biscfaq_05449670cdc3321f",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "環境設定ツールは e-bisc センターホームページにある国土交通省の 4 つの url の他に、地方整備局の url も設定する必要がありますか。",
+          "qa_id": "biscfaq_09db5d998b1100ab",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "本番用利用者登録は何度実施すればいいのですか。",
+          "qa_id": "biscfaq_0ad65bc440932100",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "「ic カード更新」機能で旧カードを先にセットする所を、新カードを先にセットし、新カードから旧カードへ更新処理を行なってしまいました。新カードは使用出来ますか。",
+          "qa_id": "biscfaq_0e5ac8ee18c0c8a2",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "チュートリアルにて pin 番号を入力したが「チュートリアルエラーメッセージ入力に誤りがあります。 内容をもう一度確認して入力し直してください。」と表示されました。",
+          "qa_id": "biscfaq_0fee0ee275dc9c78",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "チュートリアルの pin 番号入力ダイアログには「担当者」を入力する欄がありますが、本番の pin 番号入力ダイアログには pin 番号入力欄しかありません。",
+          "qa_id": "biscfaq_10c86f4484dc4bd4",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "入札情報サービス(ppi)とは何ですか。",
+          "qa_id": "biscfaq_16d616799d9d5065",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認メインメニュー画面にて、「java plug-in アプレットインストールの警告」画面が表示されます。",
+          "qa_id": "biscfaq_1ecfab3fa1096877",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システム(本番)のサーバ稼動時間を教えて下さい。",
+          "qa_id": "biscfaq_22eb7fa8312aa169",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "1 台の pc にブラウザ internet explorer と netscape の両方を起動して操作を行っても、動作に問題はないですか。",
+          "qa_id": "biscfaq_25d22311a39605ae",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ブリッジ認証局とはなんでしょうか。",
+          "qa_id": "biscfaq_25e8188ca49b0229",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "競争参加資格確認申請書、技術資料、技術提案書、 参加表明書、提出意思確認書提出の際に誤って jv 参加として提出した。それぞれ再提出の際に jv 参加の設定をはずして単体企業として入札に参加することは可能ですか。※競争参加資格確認申請書、技術資料、技術提案書、参加表明書は再提出の際、発注者の許可が必要です。",
+          "qa_id": "biscfaq_26668121a4a5b2ff",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札システム利用者登録手順書」 はどこにありますか。",
+          "qa_id": "biscfaq_2c0168f9a523dc4e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録の利用者登録画面で「ascii 文字を入力して下さい。」というエラーが出ました。ascii 文字とは何ですか。",
+          "qa_id": "biscfaq_3083dac6f523d28b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録をする際,調達機関はどこを選択すればいいのですか。",
+          "qa_id": "biscfaq_359b6b6c5e34af94",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ldap の通信確認において「指定されたディレクトリサービスに接続出来ませんでした。サービスが使用できないか、サーバ名が正しくない可能性があります。」と表示されます。",
+          "qa_id": "biscfaq_37a06a9914ea9189",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認はどこから入れますか。",
+          "qa_id": "biscfaq_41a1d853fb79cc9c",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードは何枚必要ですか。",
+          "qa_id": "biscfaq_41cd19b9ec11865e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "本番利用者登録を実施しましたが、企業 id や登録した内容を再確認するにはどうしたらいいですか。",
+          "qa_id": "biscfaq_44cc84ac61026b8d",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 1-1 に「紙入札方式参加承諾願(様式 1)が提出されたときは」という一文があるが、紙入札で参加を希望する場合、紙入札方式承諾書は、必ず提出しなければならないのですか。",
+          "qa_id": "biscfaq_47fc0c49d86ff3f3",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認利用者登録にて pin 番号を入力し、「ok」ボタンを押下すると「乱数署名が行なわれていません」 と表示されます。",
+          "qa_id": "biscfaq_49817203c2dc5c50",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録の登録(変更)内容確認画面にある、証明書シリアル番号とは何ですか。",
+          "qa_id": "biscfaq_4b9bb10aa8a258ba",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "地方整備局によっては電子入札運用基準が「港湾空港関係」、「港湾空港関係を除く」に分かれています。 これはなぜですか。",
+          "qa_id": "biscfaq_4ea6e071acc9bc7d",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "入札書に入力した金額が、右側の表示欄に表示されない。",
+          "qa_id": "biscfaq_509353cf855829ba",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」はどこにありますか。",
+          "qa_id": "biscfaq_5137f03bbda8aba7",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札専用ソフトアンインストール手順書」はどこにありますか。",
+          "qa_id": "biscfaq_563abe9a1596d1a8",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "受付票や通知書が到着すると「受付票(通知書)到着のお知らせ」メールが届きますが、このメールは発注者から送信されるのですか。",
+          "qa_id": "biscfaq_572f69c02ca9276a",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録を行なう際、役職、部署名、商号(連絡先名称)、連絡先氏名、連絡先住所の欄に(50 文字以内) などと入力可能な文字数が書かれていますが、全角、 半角のどちらを指すのでしょうか。",
+          "qa_id": "biscfaq_57d925fc80996fba",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認にて pin 番号を入力し「ok」ボタンを押下すると「ログインに失敗しました」と表示されます。",
+          "qa_id": "biscfaq_57f4751d0048a716",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録にて利用者登録において「登録」ボタンを押下しても認証ダイアログが表示されません。",
+          "qa_id": "biscfaq_58f22d22bd77c5fb",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードを複数の認証局から購入し、電子入札用の pc 端末も複数台用意しています。1 社の認証局から配布されたソフトを他の認証局のカードを使用する端末にインストールし、電子入札システムを使用することは出来ますか。",
+          "qa_id": "biscfaq_5b25b2790a5da7f0",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "代表者が ic カードを購入し、支店長が契約を行う事は可能ですか。",
+          "qa_id": "biscfaq_5c5992ca9e1d886b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録時、登録完了画面を印刷し忘れてしまいました。どうしたらいいですか。",
+          "qa_id": "biscfaq_5d953a3a629be91c",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「インターネット環境確認手順書」はどこにありますか。",
+          "qa_id": "biscfaq_5e5a1f00080218ca",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "質問要求で標準プロポーザル方式の案件を検索したが、案件名称が表示されない。",
+          "qa_id": "biscfaq_5fa3fde60a8aba9b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録の内容を変更する手順を教えて下さい。",
+          "qa_id": "biscfaq_606d89edf45bdcd6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードは名義本人でないと操作出来ませんか",
+          "qa_id": "biscfaq_67a401d0aca0db1e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "「ic カード更新」機能で旧カードの情報を新カードに書き換えた場合、企業 id は変わりますか。",
+          "qa_id": "biscfaq_6aa6dc71f9fac4be",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "幹事会社以外の構成会社の ic カードによる、経常 jv での入札参加は可能ですか。",
+          "qa_id": "biscfaq_6c6dc147ade93482",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「旧バージョン jre アンインストール手順書」はどこにありますか。",
+          "qa_id": "biscfaq_6e964389d2cc1a66",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認利用者登録にて pin 番号を入力し「ok」ボタンを押下すると「署名検証が失敗しました」と表示され、「了解」ボタンを押下すると「署名検証が行なわれませんでした。java.lang.runtimeexception: 署名検証が不正に終了」と表示されます。",
+          "qa_id": "biscfaq_72a6766a5dc0fda7",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "通常指名競争入札にて、指名通知書が発行されたかどうかはどのように確認すればいいですか。",
+          "qa_id": "biscfaq_7a0184f29dcd2984",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "チュートリアルの利用者登録で利用者登録画面に自社情報を入力したが、登録内容確認画面には違う情報が表示された。",
+          "qa_id": "biscfaq_7a2c9e1122dfdd01",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "バックアップ用端末でも接続確認を行う必要がありますか。",
+          "qa_id": "biscfaq_7b030229b9a6ff64",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "発注者から各通知書や受付票が到着した際、到着のお知らせメールも届きます。毎回、メールの到着を確認してから電子入札システムにて該当の通知書や受付票を確認していますが、メールの到着が遅れた場合はどうなりますか。",
+          "qa_id": "biscfaq_7bc0c852308f5c4b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札メインメニューで調達機関に海難審判庁を選択し「電子入札システム」を押下した所「サーバエラーが発生しました。({4})再度処理を行って下さい。エラーが連続する場合は、システム管理者に連絡ください」と赤文字で表示されました。",
+          "qa_id": "biscfaq_7d96f8051117ef55",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "案件に参加している途中で、別の ic カードに変更することは出来ますか。",
+          "qa_id": "biscfaq_7e2064a11dba00c6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "落札結果はメールで届くのでしょうか。",
+          "qa_id": "biscfaq_80bc5d32337939df",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認利用者登録を実施したがメールが届きません。",
+          "qa_id": "biscfaq_81553421b68e0ca6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認利用者登録にて、pin 番号を入力し「ok」 ボタンを押下すると「デバイスが使用できません」 と表示されます。",
+          "qa_id": "biscfaq_817abb383f12bf45",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "説明要求の「入札説明書及び案件内容」に関する質問及び回答は、入札に参加していない企業も閲覧可能でしょうか。",
+          "qa_id": "biscfaq_859013e1a3519648",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システムの検証機能は ic カードリーダーが無くても操作することが出来ますか。",
+          "qa_id": "biscfaq_882ddc68b4f43d08",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 8-1 にある年間委任状とは何ですか。",
+          "qa_id": "biscfaq_89317317c71f182d",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システムにて画面を表示したまま放置し、1 時間後に操作しようとした所「ログインされていないかセッションタイムアウトしました。再度処理を行いますか」と表示されました。",
+          "qa_id": "biscfaq_8d218b2fbca5fc81",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "環境設定ツールで設定するアドレスを教えて下さい。",
+          "qa_id": "biscfaq_90a25af4d3b743c3",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認にて検索条件を設定し、調達案件一覧ボタンを押下したところ、「署名検証が失敗しました」と表示されます。",
+          "qa_id": "biscfaq_90d988915a1bd2a6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認環境にて pin 番号を入力し「ok」ボタンを押下すると、画面が利用者登録メニュー画面へ戻ってしまいます。",
+          "qa_id": "biscfaq_939d8e5414c7d343",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 3-1、3-2、4-1、 4-2 に指定されたアプリケーションソフトの名称、 ファイル形式、圧縮方法が記載されているが、指定されたもの以外は使用できませんか。",
+          "qa_id": "biscfaq_946952090019d5ba",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 8-1 の「4.提出方法」にある「ic カードの企業情報登録画面」とはどこの画面のことですか。",
+          "qa_id": "biscfaq_9b08bdbb6aa55487",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認にて技術資料に添付するファイルは何を用意すればいいですか。",
+          "qa_id": "biscfaq_9bcdbe5bd6d896c5",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録にて「java アプレット読み込み中」のまま時刻表示されない。",
+          "qa_id": "biscfaq_9f1316fa927c0a0f",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "技術資料や参加表明書など、ファイルを添付する書類がありますが、ファイルの内容はどのように作成すればいいですか。",
+          "qa_id": "biscfaq_a3e170d95c7d4f92",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "案件概要にて「内訳書無し」とされている案件の場合、内訳書欄にファイルを添付せずに、入札書を提出することが出来るのですか。",
+          "qa_id": "biscfaq_a5fbfe74a62f687b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札運用基準」の 5-2 に開札が長引いた場合、 「入札参加者に電子入札システムにより状況の情報提供を行なうものとする」とあるが、 提供された情報は電子入札システム上でどのように確認するのですか。",
+          "qa_id": "biscfaq_a82d1c965f727a47",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "各資料を提出した際に表示される「ステップ 1、ステップ 2・・・」という表示は何ですか。",
+          "qa_id": "biscfaq_ade630377bc6733b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "入札へは紙で参加しているが、各通知書の到着を知らせるメールが届いた。電子入札システム上で通知書を確認することは出来ますか。",
+          "qa_id": "biscfaq_aeb548069bfe7c43",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "各通知書の表示は出来るが、印刷ボタンや保存ボタンを押下しても画面が変わらない。",
+          "qa_id": "biscfaq_b5bbf8331c9a2c89",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "検証機能とは何ですか。",
+          "qa_id": "biscfaq_b79ff3bf36ca09e3",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ldap の通信確認で指定の url を入力すると「ページが表示されません」と表示される。",
+          "qa_id": "biscfaq_b811c6b76b98f625",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システム(本番)の操作マニュアル(新電子入札システム操作マニュアル-受注者編-)はどこにありますか。",
+          "qa_id": "biscfaq_b86f5df8adbd0bc1",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録の部署名より下の項目には何を入力するのですか。",
+          "qa_id": "biscfaq_ba5b04efe28152e4",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録を実施した場合は、毎回、「利用者登録のお知らせ」メールが到着しますか?",
+          "qa_id": "biscfaq_c108334943956154",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "府省認証局とはなんですか。",
+          "qa_id": "biscfaq_c34ad53e8e51dc7e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "マニュアル「電子入札システム接続確認手順書」はどこにありますか。",
+          "qa_id": "biscfaq_c592df8bc4d49053",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "pin 認証時、pin 番号を 3 回連続入力間違いをしてしまうとカードは失効してしまうのでしょうか。",
+          "qa_id": "biscfaq_c6694010804e20ff",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "e-bisc センターホームページの「接続確認(受注者用)サイトはこちら」の click ボタンを押下すると 「ページが表示出来ません」と表示されます。",
+          "qa_id": "biscfaq_cc0690f4b047259b",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "「環境設定ツールについて」メニューで表示される <参考資料1>の 4 つのアドレスをクリックしてもそれぞれの環境へ接続できません。",
+          "qa_id": "biscfaq_cc64245c3d99a98a",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "入札書又は見積書を提出した後に辞退届けを提出することは可能でしょうか。",
+          "qa_id": "biscfaq_cfaed3ca51710f4e",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "技術資料を再提出することは出来ますか。",
+          "qa_id": "biscfaq_dc084be1674f1e61",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "本番利用者登録を実施したが、利用者登録完了のお知らせメールが届きません。",
+          "qa_id": "biscfaq_dd7a1c25570ae001",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システムの準備が間に合わず、入札には紙で参加した場合、落札結果はどのようにして確認出来ますか。",
+          "qa_id": "biscfaq_de86b740a7e2a929",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "チュートリアルの利用者登録操作ガイドでは役職欄に「営業部課長」と担当者の役職が書いてあるが、 本番の手順書には「代表取締役社長」と ic カード取得者の役職が書いてある。実際にはどちらを登録すればいいですか。",
+          "qa_id": "biscfaq_e0eca9c426f0f2f6",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録で「ic カード更新」ボタンがあります。 これはどの様な機能でしょうか。",
+          "qa_id": "biscfaq_e1ba6debd130d883",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "接続確認環境にて pin 番号を入力し「ok」ボタンを押下すると「システムエラーが発生しました。再度処理を行なって下さい」と表示されます。",
+          "qa_id": "biscfaq_e6a30b601eb04a44",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードの購入を検討しているが、民間認証局各社を選択する基準はありますか。",
+          "qa_id": "biscfaq_e82dee2276e6cd37",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "e-bisc センターホームページ左の 1.インターネット環境の確認メニューから(1)新システムへの接続確認(http,https の確認)を選択し、「接続確認(受注者用)サイトはこちら」の click ボタンを押下すると 「ページが表示出来ません」と表示されます。",
+          "qa_id": "biscfaq_e8b85166fdc83b6d",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "指名通知書発行の際に必要となる「企業 id」とはどの番号のことですか。",
+          "qa_id": "biscfaq_e9d29c0f04e28624",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ic カードを破損した場合に、新しいカードに情報を写す方法はありませんか。「ic カード更新」機能はこの目的に利用出来ますか。",
+          "qa_id": "biscfaq_eb1c66f9ec2ed34c",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "ldap の通過確認はどの様に行えば良いでしょうか。",
+          "qa_id": "biscfaq_ebe1286a5e24dca4",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "環境設定ツールで指定する 4 つのアドレスにはどんな意味がありますか。",
+          "qa_id": "biscfaq_eda76c5dc3c1d9a8",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "平成 14 年度までの電子入札システムでは文字入力切替がキーボード上からしか行なえませんでしたが、平成 15 年度からのコアシステムでは、ms-ime ツールバーからも文字入力の切り替えをすることが出来ますか。",
+          "qa_id": "biscfaq_f0494cb9746668b7",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録操作手順を教えて下さい。",
+          "qa_id": "biscfaq_f2c4df1729374bb7",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "利用者登録にて複数のメールアドレスを登録することは出来ますか。",
+          "qa_id": "biscfaq_f30e973540ae0ca8",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "電子入札システム(本番)へはどこから入れますか。",
+          "qa_id": "biscfaq_f4135dbc314d9291",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        },
+        {
+          "normalized_question": "社内で認証局が異なる ic カードを持っていますが、 それぞれに利用者登録を行なった場合、企業 id はどのように採番されますか。",
+          "qa_id": "biscfaq_fabed40c82e3cdfb",
+          "source_documents": [
+            "040219e-biscfaq.pdf"
+          ]
+        }
+      ],
+      "runtime_entries_represented_in_default_count": 22
+    },
+    "evaluation_alignment": {
+      "fixed_cases_normalized_qa_pairs_equal_runtime": true,
+      "fixed_qa_cases_count": 118,
+      "real_corpus_cases_count": 51,
+      "real_corpus_chunk_non_qa_records": 8,
+      "real_corpus_chunk_qa_ids_equal_default": true
+    },
+    "production_authority": {
+      "blocking_issues_before_production_corpus_build": [
+        "No audited record contains source_fingerprint or source_jsonl_sha256.",
+        "The 96-record source exists only in artifacts; its canonical variant has no explicit status field (quality=approved only).",
+        "No single governed source-of-truth file authorizes the 118-record corpus.",
+        "Evaluation cases and runtime/search-pair files are derived outputs, not content authority."
+      ],
+      "default_jsonl_safe_as_current_source_of_truth": "yes, for its verified 22-record tourism scope only; it is not a complete authority for the separate 96-record 040219 corpus.",
+      "deterministic_transformation_required": [
+        "Read only approved records from governed source files; reject missing or duplicate qa_id values.",
+        "Require non-empty approved question/answer/citations, tenant_id, doc_version, source document, and source pages.",
+        "Emit one qa_pair record per qa_id: id=\"approved_qa_pair:\" + qa_id; approved_qa_id=qa_id; qa_id=qa_id; chunk_type=\"qa_pair\"; type=\"approved_qa\"; doc_type=\"approved_qa_pair\"; searchable_text/text/display_text=\"Q: {question}\\nA: {approved_answer}\".",
+        "Copy citation, source document/page, tenant, version, review metadata, and deterministic source-file SHA-256; sort by qa_id.",
+        "Fail before ingestion on duplicate emitted id/qa_id or normalized-question/QA-ID answer conflicts."
+      ],
+      "must_never_be_used_directly_as_production_authority": [
+        "artifacts/fixed_qa_eval/ingest/040219_canonical_qa_pairs.jsonl",
+        "artifacts/fixed_qa_eval/ingest/040219_approved_qa_ingest.jsonl",
+        "artifacts/free_extractive_chat_mode/approved_qa_118_runtime.jsonl",
+        "artifacts/fixed_qa_eval/fixed_qa_cases.jsonl",
+        "eval/cases/real_corpus_chunks.jsonl",
+        "eval/cases/real_corpus_cases.jsonl"
+      ],
+      "recommended_source_of_truth": "data/approved_qa/default.jsonl is the only audited production-authority candidate. Before a 118-record production corpus is built, promote the 96 records into a separately governed data/approved_qa source (or authoritative manifest), not an artifact."
+    }
+  },
+  "files": [
+    {
+      "classification": "source-of-truth",
+      "duplicate_normalized_question_answer_pairs": [],
+      "duplicate_normalized_questions": [],
+      "effective_governance_status_counts": {
+        "approved": 22,
+        "draft": 0,
+        "missing": 0,
+        "rejected": 0
+      },
+      "exists": true,
+      "identical_normalized_questions_with_different_answers": [],
+      "identical_qa_ids_with_different_answers": [],
+      "logical_qa_id": {
+        "missing_count": 0,
+        "strategy": "qa_id or approved_qa_id; evaluation cases do not claim a QA ID",
+        "unique_count": 22
+      },
+      "missing_citations_count": 0,
+      "missing_source_fingerprint_count": 22,
+      "missing_source_pages_count": 0,
+      "missing_tenant_count": 0,
+      "missing_version_count": 0,
+      "parse": {
+        "malformed_json_lines": 0,
+        "non_empty_records": 22
+      },
+      "path": "data/approved_qa/default.jsonl",
+      "record_id": {
+        "duplicate_ids": [],
+        "missing_count": 0,
+        "strategy": "id, then case_id, then qa_id, then approved_qa_id",
+        "unique_count": 22
+      },
+      "record_type_counts": {
+        "approved_qa": 22
+      },
+      "sha256": "c14fbb7d080a39af0c109415c172fc259c5c4c3a0d1df16c2c24ac056c4ba4e8",
+      "source_document_counts": {
+        "58887_95105_misc.pdf": 22
+      },
+      "status_counts": {
+        "approved": 22,
+        "draft": 0,
+        "missing": 0,
+        "rejected": 0
+      }
+    },
+    {
+      "classification": "derived-search-pair",
+      "duplicate_normalized_question_answer_pairs": [],
+      "duplicate_normalized_questions": [],
+      "effective_governance_status_counts": {
+        "approved": 96,
+        "draft": 0,
+        "missing": 0,
+        "rejected": 0
+      },
+      "exists": true,
+      "identical_normalized_questions_with_different_answers": [],
+      "identical_qa_ids_with_different_answers": [],
+      "logical_qa_id": {
+        "missing_count": 0,
+        "strategy": "qa_id or approved_qa_id; evaluation cases do not claim a QA ID",
+        "unique_count": 96
+      },
+      "missing_citations_count": 0,
+      "missing_source_fingerprint_count": 96,
+      "missing_source_pages_count": 0,
+      "missing_tenant_count": 0,
+      "missing_version_count": 0,
+      "parse": {
+        "malformed_json_lines": 0,
+        "non_empty_records": 96
+      },
+      "path": "artifacts/fixed_qa_eval/ingest/040219_canonical_qa_pairs.jsonl",
+      "record_id": {
+        "duplicate_ids": [],
+        "missing_count": 0,
+        "strategy": "id, then case_id, then qa_id, then approved_qa_id",
+        "unique_count": 96
+      },
+      "record_type_counts": {
+        "approved_qa": 96
+      },
+      "sha256": "98190b4c8678b11c725a9f4841b887c3b3ddedbabf01815f2b1b4d9941b75175",
+      "source_document_counts": {
+        "040219e-biscfaq.pdf": 96
+      },
+      "status_counts": {
+        "approved": 0,
+        "draft": 0,
+        "missing": 96,
+        "rejected": 0
+      }
+    },
+    {
+      "classification": "derived-search-pair",
+      "duplicate_normalized_question_answer_pairs": [],
+      "duplicate_normalized_questions": [],
+      "effective_governance_status_counts": {
+        "approved": 96,
+        "draft": 0,
+        "missing": 0,
+        "rejected": 0
+      },
+      "exists": true,
+      "identical_normalized_questions_with_different_answers": [],
+      "identical_qa_ids_with_different_answers": [],
+      "logical_qa_id": {
+        "missing_count": 0,
+        "strategy": "qa_id or approved_qa_id; evaluation cases do not claim a QA ID",
+        "unique_count": 96
+      },
+      "missing_citations_count": 0,
+      "missing_source_fingerprint_count": 96,
+      "missing_source_pages_count": 0,
+      "missing_tenant_count": 0,
+      "missing_version_count": 0,
+      "parse": {
+        "malformed_json_lines": 0,
+        "non_empty_records": 96
+      },
+      "path": "artifacts/fixed_qa_eval/ingest/040219_approved_qa_ingest.jsonl",
+      "record_id": {
+        "duplicate_ids": [],
+        "missing_count": 0,
+        "strategy": "id, then case_id, then qa_id, then approved_qa_id",
+        "unique_count": 96
+      },
+      "record_type_counts": {
+        "approved_qa": 96
+      },
+      "sha256": "2416a27712c03dd2390d45285e5fb1d2904e5bb6a1c5b645554b154fb114e09f",
+      "source_document_counts": {
+        "040219e-biscfaq.pdf": 96
+      },
+      "status_counts": {
+        "approved": 96,
+        "draft": 0,
+        "missing": 0,
+        "rejected": 0
+      }
+    },
+    {
+      "classification": "runtime-record",
+      "duplicate_normalized_question_answer_pairs": [],
+      "duplicate_normalized_questions": [],
+      "effective_governance_status_counts": {
+        "approved": 118,
+        "draft": 0,
+        "missing": 0,
+        "rejected": 0
+      },
+      "exists": true,
+      "identical_normalized_questions_with_different_answers": [],
+      "identical_qa_ids_with_different_answers": [],
+      "logical_qa_id": {
+        "missing_count": 0,
+        "strategy": "qa_id or approved_qa_id; evaluation cases do not claim a QA ID",
+        "unique_count": 118
+      },
+      "missing_citations_count": 0,
+      "missing_source_fingerprint_count": 118,
+      "missing_source_pages_count": 0,
+      "missing_tenant_count": 0,
+      "missing_version_count": 0,
+      "parse": {
+        "malformed_json_lines": 0,
+        "non_empty_records": 118
+      },
+      "path": "artifacts/free_extractive_chat_mode/approved_qa_118_runtime.jsonl",
+      "record_id": {
+        "duplicate_ids": [],
+        "missing_count": 0,
+        "strategy": "id, then case_id, then qa_id, then approved_qa_id",
+        "unique_count": 118
+      },
+      "record_type_counts": {
+        "approved_qa": 118
+      },
+      "sha256": "b66c49e8af86702134dd30c2654e30339987868d0a0ee6230e7dc93c1eb0381f",
+      "source_document_counts": {
+        "040219e-biscfaq.pdf": 96,
+        "58887_95105_misc.pdf": 22
+      },
+      "status_counts": {
+        "approved": 118,
+        "draft": 0,
+        "missing": 0,
+        "rejected": 0
+      }
+    },
+    {
+      "classification": "evaluation-case",
+      "duplicate_normalized_question_answer_pairs": [],
+      "duplicate_normalized_questions": [],
+      "effective_governance_status_counts": {
+        "approved": 0,
+        "draft": 0,
+        "missing": 118,
+        "rejected": 0
+      },
+      "exists": true,
+      "identical_normalized_questions_with_different_answers": [],
+      "identical_qa_ids_with_different_answers": [],
+      "logical_qa_id": {
+        "missing_count": 118,
+        "strategy": "qa_id or approved_qa_id; evaluation cases do not claim a QA ID",
+        "unique_count": 0
+      },
+      "missing_citations_count": 118,
+      "missing_source_fingerprint_count": 118,
+      "missing_source_pages_count": 0,
+      "missing_tenant_count": 118,
+      "missing_version_count": 118,
+      "parse": {
+        "malformed_json_lines": 0,
+        "non_empty_records": 118
+      },
+      "path": "artifacts/fixed_qa_eval/fixed_qa_cases.jsonl",
+      "record_id": {
+        "duplicate_ids": [],
+        "missing_count": 0,
+        "strategy": "id, then case_id, then qa_id, then approved_qa_id",
+        "unique_count": 118
+      },
+      "record_type_counts": {
+        "count_fact": 14,
+        "definition": 14,
+        "location": 10,
+        "procedure": 47,
+        "qa_fact": 12,
+        "troubleshooting": 21
+      },
+      "sha256": "9271d8f7fda258fbf02cedd7b6ed5fde7c87ad6a347168c5e69a224e2a070ef7",
+      "source_document_counts": {
+        "pdfs/040219e-biscfaq.pdf": 96,
+        "pdfs/58887_95105_misc.pdf": 22
+      },
+      "status_counts": {
+        "approved": 0,
+        "draft": 0,
+        "missing": 118,
+        "rejected": 0
+      }
+    },
+    {
+      "classification": "derived-search-pair",
+      "duplicate_normalized_question_answer_pairs": [],
+      "duplicate_normalized_questions": [],
+      "effective_governance_status_counts": {
+        "approved": 22,
+        "draft": 0,
+        "missing": 8,
+        "rejected": 0
+      },
+      "exists": true,
+      "identical_normalized_questions_with_different_answers": [],
+      "identical_qa_ids_with_different_answers": [],
+      "logical_qa_id": {
+        "missing_count": 8,
+        "strategy": "qa_id or approved_qa_id; evaluation cases do not claim a QA ID",
+        "unique_count": 22
+      },
+      "missing_citations_count": 8,
+      "missing_source_fingerprint_count": 30,
+      "missing_source_pages_count": 0,
+      "missing_tenant_count": 0,
+      "missing_version_count": 0,
+      "parse": {
+        "malformed_json_lines": 0,
+        "non_empty_records": 30
+      },
+      "path": "eval/cases/real_corpus_chunks.jsonl",
+      "record_id": {
+        "duplicate_ids": [],
+        "missing_count": 0,
+        "strategy": "id, then case_id, then qa_id, then approved_qa_id",
+        "unique_count": 30
+      },
+      "record_type_counts": {
+        "approved_qa": 22,
+        "pdf": 8
+      },
+      "sha256": "89621b9ed558c0746f13d71db6cdb8e10745a33371ed8a3bd2eb98db5df2ed11",
+      "source_document_counts": {
+        "58887_95105_misc.pdf": 30
+      },
+      "status_counts": {
+        "approved": 0,
+        "draft": 0,
+        "missing": 30,
+        "rejected": 0
+      }
+    },
+    {
+      "classification": "evaluation-case",
+      "duplicate_normalized_question_answer_pairs": [],
+      "duplicate_normalized_questions": [],
+      "effective_governance_status_counts": {
+        "approved": 0,
+        "draft": 0,
+        "missing": 51,
+        "rejected": 0
+      },
+      "exists": true,
+      "identical_normalized_questions_with_different_answers": [],
+      "identical_qa_ids_with_different_answers": [],
+      "logical_qa_id": {
+        "missing_count": 51,
+        "strategy": "qa_id or approved_qa_id; evaluation cases do not claim a QA ID",
+        "unique_count": 0
+      },
+      "missing_citations_count": 51,
+      "missing_source_fingerprint_count": 51,
+      "missing_source_pages_count": 51,
+      "missing_tenant_count": 51,
+      "missing_version_count": 51,
+      "parse": {
+        "malformed_json_lines": 0,
+        "non_empty_records": 51
+      },
+      "path": "eval/cases/real_corpus_cases.jsonl",
+      "record_id": {
+        "duplicate_ids": [],
+        "missing_count": 0,
+        "strategy": "id, then case_id, then qa_id, then approved_qa_id",
+        "unique_count": 51
+      },
+      "record_type_counts": {
+        "real abstain": 10,
+        "real approved answer-only term": 13,
+        "real approved stored question": 22,
+        "real paraphrase": 6
+      },
+      "sha256": "81989b276fb932aaeb396ef28f6956a688139c1a525da636d48e9a9ab38a31d5",
+      "source_document_counts": {},
+      "status_counts": {
+        "approved": 0,
+        "draft": 0,
+        "missing": 51,
+        "rejected": 0
+      }
+    }
+  ],
+  "normalization": {
+    "question_and_answer": "Unicode-preserving casefold plus whitespace collapse; normalized_question/question_text/question/query and approved_answer/answer_text/answer/expected_answer fallbacks"
+  },
+  "validation": {
+    "all_present_non_empty_lines_parsed_as_json_objects": true,
+    "audited_file_count": 7,
+    "duplicate_and_conflict_policy": "reported, not ignored",
+    "malformed_json_policy": "fail"
+  }
+}
