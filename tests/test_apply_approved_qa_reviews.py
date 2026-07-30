@@ -10,13 +10,14 @@ import pytest
 from scripts.apply_approved_qa_reviews import DECISIONS_PATH, LEGACY_PATH, MANIFEST_PATH, TOURISM_PATH, apply_reviews
 
 ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = ROOT / "tests/fixtures/approved_qa_review"
 
 
 def _root(tmp_path):
     for path in (LEGACY_PATH, TOURISM_PATH, MANIFEST_PATH):
         target = tmp_path / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / path, target)
+        shutil.copy2(FIXTURES / ("040219e-biscfaq.jsonl" if path == LEGACY_PATH else "manifest.json" if path == MANIFEST_PATH else "58887_95105_misc.jsonl"), target)
     decision = tmp_path / DECISIONS_PATH
     decision.parent.mkdir(parents=True, exist_ok=True)
     decision.write_bytes(b"")
