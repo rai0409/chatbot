@@ -29,5 +29,6 @@ jobs:
             tests/test_answer_cache.py \
             tests/test_confidence_guard.py -q
 
-      - name: Collect all tests
-        run: python -m pytest --collect-only -q
+      - name: Run full test suite
+        run: python -m pytest -q
+        timeout-minutes: 10
