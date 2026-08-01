@@ -164,14 +164,27 @@ def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> str:
     return _sha256_bytes(payload)
 
 
-def build_approved_qa_sources(*, root: Path = ROOT) -> dict[str, Any]:
+def _root_relative_path(root: Path, value: str) -> Path:
+    root_resolved = root.resolve()
+    candidate = (root_resolved / value).resolve()
+    try:
+        candidate.relative_to(root_resolved)
+    except ValueError as exc:
+        raise ValueError(f"source specification path escapes root: {value}") from exc
+    return candidate
+
+
+def build_approved_qa_sources(
+    *, root: Path = ROOT, source_specs: tuple[dict[str, Any], ...] | None = None
+) -> dict[str, Any]:
     global ROOT
     previous_root, ROOT = ROOT, root
     try:
         manifest_sources = []
         total = approved = review_required = 0
-        for spec in SOURCE_SPECS:
-            input_path, output_path = root / spec["input"], root / spec["output"]
+        for spec in source_specs if source_specs is not None else SOURCE_SPECS:
+            input_path = _root_relative_path(root, spec["input"])
+            output_path = _root_relative_path(root, spec["output"])
             input_bytes = input_path.read_bytes()
             records = _read_jsonl(input_path)
             source_fingerprint, method = _pdf_fingerprint(spec["source_document"])
@@ -183,7 +196,9 @@ def build_approved_qa_sources(*, root: Path = ROOT) -> dict[str, Any]:
             review_required += sum(bool(record["approval_review_required"]) for record in governed)
             manifest_sources.append({"name": spec["name"], "input_path": spec["input"], "input_sha256": _sha256_bytes(input_bytes), "output_path": spec["output"], "source_document": spec["source_document"], "source_fingerprint": source_fingerprint, "source_fingerprint_method": method, "source_jsonl_sha256": output_sha, "record_count": len(governed)})
         manifest = {"schema_version": SCHEMA_VERSION, "generated_by": GENERATED_BY, "sources": manifest_sources, "total_record_count": total, "fully_governed_approved_count": approved, "review_required_count": review_required}
-        (root / "data/approved_qa/manifest.json").write_bytes(_canonical_bytes(manifest))
+        manifest_path = _root_relative_path(root, "data/approved_qa/manifest.json")
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_bytes(_canonical_bytes(manifest))
         return manifest
     finally:
         ROOT = previous_root
