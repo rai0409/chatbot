@@ -730,7 +730,26 @@ def _binary_relevance_gain(value: str, relevant_ids: set[str]) -> float:
     return 1.0 if value in relevant_ids else 0.0
 
 
+def _validate_metric_k(k: int) -> None:
+    if isinstance(k, bool) or not isinstance(k, int) or k <= 0:
+        raise ValueError("metric k must be a positive integer")
+
+
+def _normalize_metric_ids(values: Sequence[str], field_name: str) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError(f"{field_name} must contain only string identifiers")
+        identifier = value.strip()
+        if not identifier:
+            raise ValueError(f"{field_name} must not contain empty identifiers")
+        normalized.append(identifier)
+    return tuple(normalized)
+
+
 def _dcg_at_k(ranked_ids: Sequence[str], relevant_ids: set[str], k: int) -> float:
+    """Binary DCG@k with duplicate retrieved identifiers receiving no extra credit."""
+    _validate_metric_k(k)
     dcg = 0.0
     seen_relevant_ids: set[str] = set()
     for rank, value in enumerate(ranked_ids[:k], start=1):
@@ -743,15 +762,22 @@ def _dcg_at_k(ranked_ids: Sequence[str], relevant_ids: set[str], k: int) -> floa
     return dcg
 
 
-def _ndcg_at_k(ranked_ids: Sequence[str], gold_ids: Sequence[str], k: int) -> Optional[float]:
-    relevant_ids = {str(value) for value in gold_ids if str(value)}
-    if not relevant_ids or k <= 0:
-        return None
-    dcg = _dcg_at_k(ranked_ids, relevant_ids, k)
-    idcg = _dcg_at_k(list(relevant_ids), relevant_ids, k)
+def _ndcg_at_k(ranked_ids: Sequence[str], gold_ids: Sequence[str], k: int) -> float:
+    """Binary nDCG@k in [0, 1]; queries without relevant IDs return 0.0."""
+    _validate_metric_k(k)
+    normalized_ranked_ids = _normalize_metric_ids(ranked_ids, "ranked_ids")
+    normalized_gold_ids = _normalize_metric_ids(gold_ids, "gold_ids")
+    relevant_ids = set(normalized_gold_ids)
+    if not relevant_ids:
+        return 0.0
+    dcg = _dcg_at_k(normalized_ranked_ids, relevant_ids, k)
+    idcg = _dcg_at_k(sorted(relevant_ids), relevant_ids, k)
     if idcg <= 0:
-        return None
-    return dcg / idcg
+        return 0.0
+    result = dcg / idcg
+    if not 0.0 <= result <= 1.0 + 1e-12:
+        raise AssertionError(f"nDCG@{k} outside [0, 1]: {result}")
+    return result
 
 
 def run_eval(
@@ -948,6 +974,7 @@ def run_retrieval_aware_eval(
     eval_k: int = 5,
     quiet: bool = False,
 ) -> Dict[str, Any]:
+    _validate_metric_k(eval_k)
     mode_list = [str(m).strip() for m in modes if str(m).strip()]
     if not mode_list:
         raise ValueError("at least one retrieval mode is required")
@@ -1074,8 +1101,9 @@ def run_retrieval_aware_eval(
     summary_by_mode: Dict[str, Dict[str, Any]] = {}
     for mode in mode_list:
         mode_rows = [r for r in rows if r["mode"] == mode]
-        mrr_vals = [float(v) for v in (r.get("mrr_at_k") for r in mode_rows) if isinstance(v, (int, float))]
-        ndcg_vals = [float(v) for v in (r.get("ndcg_at_k") for r in mode_rows) if isinstance(v, (int, float))]
+        metric_rows = [r for r in mode_rows if r.get("gold_chunk_ids") or r.get("gold_doc_ids")]
+        mrr_vals = [float(r["mrr_at_k"]) for r in metric_rows if isinstance(r.get("mrr_at_k"), (int, float))]
+        ndcg_vals = [float(r["ndcg_at_k"]) for r in metric_rows if isinstance(r.get("ndcg_at_k"), (int, float))]
         summary_by_mode[mode] = {
             "cases": len(mode_rows),
             "gold_chunk_cases": sum(1 for r in mode_rows if r.get("gold_chunk_ids")),
@@ -1085,6 +1113,8 @@ def run_retrieval_aware_eval(
             "abstain_labeled_cases": sum(1 for r in mode_rows if r.get("expected_abstain") is not None),
             "abstain_expected_cases": sum(1 for r in mode_rows if r.get("expected_abstain") is True),
             "abstain_passes": sum(1 for r in mode_rows if r.get("abstain_correct") is True),
+            "metric_support_count": len(metric_rows),
+            "metric_skipped_query_count": len(mode_rows) - len(metric_rows),
             "mean_mrr_at_k": (sum(mrr_vals) / len(mrr_vals)) if mrr_vals else None,
             "mean_ndcg_at_k": (sum(ndcg_vals) / len(ndcg_vals)) if ndcg_vals else None,
         }

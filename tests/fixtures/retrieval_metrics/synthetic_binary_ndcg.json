@@ -1,0 +1,12 @@
+{
+  "fixture": "synthetic binary retrieval metric cases; no production content",
+  "cases": [
+    {"name": "ideal", "ranked_ids": ["a", "b"], "gold_ids": ["a", "b"], "k": 2, "ndcg": 1.0},
+    {"name": "reverse", "ranked_ids": ["x", "b", "a"], "gold_ids": ["a", "b"], "k": 3, "ndcg": 0.6934264036172708},
+    {"name": "no_relevance", "ranked_ids": ["a"], "gold_ids": [], "k": 1, "ndcg": 0.0},
+    {"name": "empty_ranking", "ranked_ids": [], "gold_ids": ["a"], "k": 1, "ndcg": 0.0},
+    {"name": "k_larger_than_ranking", "ranked_ids": ["a"], "gold_ids": ["a", "b"], "k": 5, "ndcg": 0.6131471927654584},
+    {"name": "duplicate_retrieval", "ranked_ids": ["a", "a"], "gold_ids": ["a"], "k": 2, "ndcg": 1.0},
+    {"name": "duplicate_gold", "ranked_ids": ["a", "b"], "gold_ids": ["a", "a", "b"], "k": 2, "ndcg": 1.0}
+  ]
+}

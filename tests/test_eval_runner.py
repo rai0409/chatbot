@@ -28,6 +28,38 @@ def test_ndcg_at_k_uses_eval_k_for_dcg_and_idcg():
     assert runner._ndcg_at_k(["chunk-1", "chunk-2"], ["chunk-1", "chunk-2"], 1) == pytest.approx(1.0)
 
 
+def test_ndcg_at_k_synthetic_contract_fixture():
+    fixture_path = Path(__file__).parent / "fixtures" / "retrieval_metrics" / "synthetic_binary_ndcg.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    for case in fixture["cases"]:
+        assert runner._ndcg_at_k(case["ranked_ids"], case["gold_ids"], case["k"]) == pytest.approx(
+            case["ndcg"], abs=1e-12
+        )
+
+
+@pytest.mark.parametrize("k", [0, -1, True, 1.5])
+def test_ndcg_at_k_rejects_non_positive_or_non_integer_k(k):
+    with pytest.raises(ValueError, match="positive integer"):
+        runner._ndcg_at_k(["a"], ["a"], k)
+
+
+@pytest.mark.parametrize("ranked_ids,gold_ids", [(["a", ""], ["a"]), (["a"], ["a", None])])
+def test_ndcg_at_k_rejects_malformed_identifiers(ranked_ids, gold_ids):
+    with pytest.raises(ValueError):
+        runner._ndcg_at_k(ranked_ids, gold_ids, 1)
+
+
+def test_dcg_at_k_rejects_invalid_k_and_does_not_mutate_inputs():
+    ranked_ids = ["a", "a", "b"]
+    relevant_ids = {"a", "b"}
+    with pytest.raises(ValueError, match="positive integer"):
+        runner._dcg_at_k(ranked_ids, relevant_ids, 0)
+    assert runner._dcg_at_k(ranked_ids, relevant_ids, 3) == pytest.approx(1.5)
+    assert ranked_ids == ["a", "a", "b"]
+    assert relevant_ids == {"a", "b"}
+
+
 def test_retrieval_aware_eval_deduplicates_document_relevance_for_ndcg(tmp_path, monkeypatch):
     cases_path = tmp_path / "cases.jsonl"
     _write_jsonl(
@@ -747,6 +779,9 @@ def test_retrieval_cases_file_has_labels_and_abstain_coverage(tmp_path):
 
     mode_summary = payload["summary"]["by_mode"]["hybrid_rerank"]
     assert mode_summary["cases"] == len(cases)
+    expected_metric_support = sum(1 for case in cases if case.gold_chunk_ids or case.gold_doc_ids)
+    assert mode_summary["metric_support_count"] == expected_metric_support
+    assert mode_summary["metric_skipped_query_count"] == len(cases) - expected_metric_support
     assert (mode_summary["gold_chunk_cases"] > 0) or (mode_summary["gold_doc_cases"] > 0)
     assert mode_summary["abstain_labeled_cases"] > 0
     assert mode_summary["abstain_expected_cases"] > 0
