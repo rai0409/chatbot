@@ -1,0 +1,16 @@
+{
+  "contract_status": "source_metadata_fixed",
+  "embedding_dimension": 384,
+  "gated": false,
+  "license_identifier": "apache-2.0",
+  "license_review_status": "metadata_reviewed_legal_approval_pending",
+  "materialization_network_allowed": true,
+  "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "model_type": "sentence_transformer",
+  "profile": "retrieval_baseline",
+  "provider": "huggingface",
+  "revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+  "runtime_network_allowed": false,
+  "schema_version": "embedding_source_contract.v1",
+  "trust_remote_code": false
+}
