@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import inspect
 import json
+import sys
 
+import pytest
+
+from scripts import generate_retrieval_baseline
 from scripts.generate_retrieval_baseline import (
     approved_qa_fingerprint,
     compatibility_fingerprint,
@@ -82,3 +87,79 @@ def test_commit_sha_change_does_not_change_compatibility_fingerprint():
     report_two = {"commit_sha": "2", "compatibility": fields}
     assert report_one["commit_sha"] != report_two["commit_sha"]
     assert first == compatibility_fingerprint(report_two["compatibility"])
+
+
+def test_generator_uses_current_interpreter_and_normalizes_it_for_reports():
+    source = inspect.getsource(generate_retrieval_baseline)
+
+    assert '.venv/bin/python' not in source
+    assert "sys.executable" in source
+    assert generate_retrieval_baseline._display_command_arg(sys.executable) == "<current-python>"
+    assert generate_retrieval_baseline._display_command_arg("bash") == "bash"
+
+
+def test_embedding_runtime_metadata_contains_identity_not_external_path():
+    class Provider:
+        name = "local"
+        model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+        @staticmethod
+        def embedding_asset_metadata():
+            return {
+                "revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+                "runtime_files_sha256": "a" * 64,
+                "runtime_file_count": 13,
+            }
+
+    metadata = generate_retrieval_baseline._embedding_runtime_metadata(Provider())
+
+    assert metadata == {
+        "revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+        "asset_files_sha256": "a" * 64,
+        "asset_file_count": 13,
+        "runtime_network_allowed": False,
+        "trust_remote_code": False,
+    }
+    assert "/" not in json.dumps(metadata)
+
+
+def test_runtime_gate_rejects_missing_external_model_path(monkeypatch):
+    class Provider:
+        name = "local"
+        model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        model_path = None
+
+    monkeypatch.setattr(
+        generate_retrieval_baseline.embedding_provider,
+        "get_embedding_provider",
+        lambda: Provider(),
+    )
+    monkeypatch.setattr(
+        generate_retrieval_baseline.validate_embedding_source_contract,
+        "load_contract",
+        lambda _path: {"model_id": Provider.model_name},
+    )
+    monkeypatch.setattr(
+        generate_retrieval_baseline.validate_embedding_source_contract,
+        "validate_contract",
+        lambda _contract: None,
+    )
+
+    with pytest.raises(RuntimeError, match="requires an external embedding asset"):
+        generate_retrieval_baseline.verify_baseline_runtime()
+
+
+def test_runtime_gate_failure_occurs_before_any_evaluation_work(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        generate_retrieval_baseline,
+        "verify_baseline_runtime",
+        lambda: (_ for _ in ()).throw(RuntimeError("runtime gate failed")),
+    )
+    monkeypatch.setattr(
+        generate_retrieval_baseline.tempfile,
+        "mkdtemp",
+        lambda **_kwargs: pytest.fail("evaluation work must not start"),
+    )
+
+    with pytest.raises(RuntimeError, match="runtime gate failed"):
+        generate_retrieval_baseline.generate(tmp_path / "baseline.json")

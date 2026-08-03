@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import inspect
 import json
 import os
@@ -26,9 +27,13 @@ if str(ROOT) not in sys.path:
 import config  # noqa: E402
 from rag_core import embedding_provider, ja_text, reranker, retrieval, store  # noqa: E402
 from rag_core.question_normalization import normalize_question_for_exact_match  # noqa: E402
+from scripts import (  # noqa: E402
+    validate_embedding_asset_contract,
+    validate_embedding_source_contract,
+)
 
 
-SCHEMA_VERSION = "current_retrieval_baseline.v1"
+SCHEMA_VERSION = "current_retrieval_baseline.v2"
 INDEX_SCHEMA_VERSION = "canonical-jsonl+chroma.v1"
 SECRET_KEY_PARTS = ("api_key", "apikey", "password", "secret", "credential")
 CORPUS_METADATA_FIELDS = (
@@ -241,6 +246,78 @@ def _embedding_normalization(provider_name: str) -> str:
     return "l2" if provider_name in {"local", "bge_m3"} else "provider_default"
 
 
+def _embedding_runtime_metadata(provider: Any) -> dict[str, Any]:
+    metadata = getattr(provider, "embedding_asset_metadata", lambda: None)()
+    if not metadata:
+        return {}
+    return {
+        "revision": metadata["revision"],
+        "asset_files_sha256": metadata["runtime_files_sha256"],
+        "asset_file_count": metadata["runtime_file_count"],
+        "runtime_network_allowed": False,
+        "trust_remote_code": False,
+    }
+
+
+def verify_baseline_runtime() -> dict[str, Any]:
+    if sys.version_info[:2] != (3, 12):
+        raise RuntimeError("baseline runtime requires Python 3.12")
+    if not Path(sys.executable).is_file():
+        raise RuntimeError("current Python interpreter is unavailable")
+
+    source_contract_path = ROOT / "config/embedding_assets/retrieval_baseline.source.json"
+    asset_contract_path = ROOT / "config/embedding_assets/retrieval_baseline.asset.json"
+    source_contract = validate_embedding_source_contract.load_contract(source_contract_path)
+    validate_embedding_source_contract.validate_contract(source_contract)
+    provider = embedding_provider.get_embedding_provider()
+    if provider.name != "local":
+        raise RuntimeError("baseline runtime requires the local embedding provider")
+    if str(getattr(provider, "model_name", "")) != source_contract["model_id"]:
+        raise RuntimeError("baseline runtime model identity mismatch")
+    model_path = getattr(provider, "model_path", None)
+    if not model_path:
+        raise RuntimeError("baseline runtime requires an external embedding asset")
+
+    try:
+        asset = validate_embedding_asset_contract.validate_contract(
+            contract_path=asset_contract_path,
+            source_contract_path=source_contract_path,
+            asset_dir=Path(model_path),
+        )
+    except validate_embedding_asset_contract.ContractError as exc:
+        raise RuntimeError("baseline embedding asset validation failed") from exc
+    if asset["model_id"] != provider.model_name:
+        raise RuntimeError("baseline runtime asset identity mismatch")
+
+    expected_versions = {
+        "sentence-transformers": "5.2.2",
+        "torch": "2.10.0+cpu",
+    }
+    actual_versions = {
+        name: importlib.metadata.version(name)
+        for name in expected_versions
+    }
+    if actual_versions != expected_versions:
+        raise RuntimeError("baseline runtime dependency version mismatch")
+    try:
+        import torch
+    except Exception as exc:
+        raise RuntimeError("baseline runtime torch validation failed") from exc
+    if torch.__version__ != "2.10.0+cpu" or torch.version.cuda is not None or torch.cuda.is_available():
+        raise RuntimeError("baseline runtime is not CPU-only")
+    return {
+        "provider": provider.name,
+        "model": provider.model_name,
+        "revision": asset["revision"],
+        "dimension": asset["embedding_dimension"],
+        "normalization": "l2",
+        "asset_files_sha256": asset["runtime_files_sha256"],
+        "asset_file_count": asset["runtime_file_count"],
+        "runtime_network_allowed": False,
+        "trust_remote_code": False,
+    }
+
+
 def collect_runtime() -> tuple[dict[str, Any], dict[str, Any], str, str]:
     provider = embedding_provider.get_embedding_provider()
     collection_records, dimension, collection_count, collection_metadata = _collection_records()
@@ -250,12 +327,14 @@ def collect_runtime() -> tuple[dict[str, Any], dict[str, Any], str, str]:
     corpus_records.extend(dict(row, _source="vector_collection") for row in collection_records)
     corpus_hash = corpus_fingerprint(corpus_records)
     qa_hash = approved_qa_fingerprint(qa_records, runtime_enabled=config.APPROVED_QA_ENABLED)
+    asset_metadata = _embedding_runtime_metadata(provider)
     runtime = {
         "embedding": {
             "provider": provider.name,
             "model": str(getattr(provider, "model_name", "") or ""),
             "dimension": dimension,
             "normalization": _embedding_normalization(provider.name),
+            **asset_metadata,
         },
         "vector_collection": {
             "name": config.resolve_chroma_collection_name(),
@@ -303,6 +382,11 @@ def collect_runtime() -> tuple[dict[str, Any], dict[str, Any], str, str]:
         "embedding_model": str(getattr(provider, "model_name", "") or ""),
         "embedding_dimension": dimension,
         "embedding_normalization": _embedding_normalization(provider.name),
+        **{
+            f"embedding_{key}": value
+            for key, value in asset_metadata.items()
+            if key in {"revision", "asset_files_sha256"}
+        },
         "retrieval_mode": runtime["retrieval"]["mode"],
         "tokenizer_version": runtime["retrieval"]["keyword_tokenizer"],
         "corpus_fingerprint": corpus_hash,
@@ -357,6 +441,8 @@ def _run(
 
 def _display_command_arg(value: str) -> str:
     text = str(value)
+    if text == sys.executable:
+        return "<current-python>"
     root_prefix = str(ROOT) + os.sep
     if text.startswith(root_prefix):
         return text[len(root_prefix) :]
@@ -409,12 +495,16 @@ def _wait_for_health(url: str, timeout: float = 30.0) -> bool:
     return False
 
 
-def _run_live_evaluations(work: Path, commands: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+def _run_live_evaluations(
+    work: Path,
+    commands: list[dict[str, Any]],
+    python: str,
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
     warnings: list[dict[str, str]] = []
     log_path = work / "uvicorn.log"
     with log_path.open("w", encoding="utf-8") as log:
         server = subprocess.Popen(
-            [str(ROOT / ".venv/bin/python"), "-m", "uvicorn", "webapi.main:app", "--host", "127.0.0.1", "--port", "8021"],
+            [python, "-m", "uvicorn", "webapi.main:app", "--host", "127.0.0.1", "--port", "8021"],
             cwd=ROOT,
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -427,12 +517,12 @@ def _run_live_evaluations(work: Path, commands: list[dict[str, Any]]) -> tuple[d
             grounded_dir = work / "grounded"
             unknown_dir = work / "unknown"
             _run(
-                [str(ROOT / ".venv/bin/python"), "tools/evaluate_grounded_extractive_quality.py", "--chat-url", "http://127.0.0.1:8021/chat", "--output-dir", str(grounded_dir)],
+                [python, "tools/evaluate_grounded_extractive_quality.py", "--chat-url", "http://127.0.0.1:8021/chat", "--output-dir", str(grounded_dir)],
                 label="grounded_extractive_answer",
                 commands=commands,
             )
             _run(
-                [str(ROOT / ".venv/bin/python"), "tools/evaluate_unknown_abstention.py", "--chat-url", "http://127.0.0.1:8021/chat", "--output-dir", str(unknown_dir)],
+                [python, "tools/evaluate_unknown_abstention.py", "--chat-url", "http://127.0.0.1:8021/chat", "--output-dir", str(unknown_dir)],
                 label="unknown_abstention",
                 commands=commands,
             )
@@ -453,8 +543,9 @@ def generate(output_path: Path) -> tuple[dict[str, Any], bool]:
     commands: list[dict[str, Any]] = []
     warnings: list[Any] = []
     skipped: list[dict[str, str]] = []
+    verified_embedding_runtime = verify_baseline_runtime()
     work = Path(tempfile.mkdtemp(prefix="retrieval_baseline_eval_"))
-    python = str(ROOT / ".venv/bin/python")
+    python = sys.executable
 
     runtime_before, fields_before, corpus_hash, qa_hash = collect_runtime()
 
@@ -473,7 +564,7 @@ def generate(output_path: Path) -> tuple[dict[str, Any], bool]:
     _run([python, "-m", "eval.approved_qa_runner", "--cases", config.APPROVED_QA_PATH, "--output", str(exact_path)], label="approved_exact_qa", commands=commands)
     _run([python, "-m", "eval.approved_qa_alias_runner", "--output-dir", str(alias_dir)], label="approved_alias", commands=commands)
 
-    live_results, live_warnings = _run_live_evaluations(work, commands)
+    live_results, live_warnings = _run_live_evaluations(work, commands, python)
     warnings.extend(live_warnings)
     if not live_results:
         skipped.extend(
@@ -573,6 +664,7 @@ def generate(output_path: Path) -> tuple[dict[str, Any], bool]:
         "dirty_paths": dirty,
         "executed_commands": commands,
         "runtime_configuration": runtime_before,
+        "verified_embedding_runtime": verified_embedding_runtime,
         "compatibility_fingerprint_fields": fields_before,
         "compatibility_fingerprint_hash": compatibility_fingerprint(fields_before),
         "corpus_fingerprint": corpus_hash,
