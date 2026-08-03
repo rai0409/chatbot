@@ -98,6 +98,20 @@ def test_generator_uses_current_interpreter_and_normalizes_it_for_reports():
     assert generate_retrieval_baseline._display_command_arg("bash") == "bash"
 
 
+def test_product_readiness_command_uses_current_interpreter_and_sanitizes_it():
+    command = generate_retrieval_baseline._product_readiness_command(sys.executable)
+
+    assert command == [
+        "bash",
+        "scripts/product_readiness_smoke.sh",
+        "--python",
+        sys.executable,
+    ]
+    display = " ".join(generate_retrieval_baseline._display_command_arg(item) for item in command)
+    assert display == "bash scripts/product_readiness_smoke.sh --python <current-python>"
+    assert sys.executable not in display
+
+
 def test_embedding_runtime_metadata_contains_identity_not_external_path():
     class Provider:
         name = "local"

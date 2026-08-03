@@ -4,11 +4,57 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-if [[ -x ".venv/bin/python" ]]; then
-  PYTHON=".venv/bin/python"
+usage() {
+  cat <<'EOF'
+Usage: bash scripts/product_readiness_smoke.sh [--python <executable>]
+
+Run product-readiness checks with an explicit Python interpreter. Selection order:
+  1. --python <executable>
+  2. PRODUCT_READINESS_PYTHON
+  3. python3 on PATH
+  4. python on PATH
+EOF
+}
+
+die() {
+  echo "product readiness smoke: $*" >&2
+  exit 2
+}
+
+EXPLICIT_PYTHON=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --python)
+      [[ $# -ge 2 ]] || die "--python requires an executable"
+      EXPLICIT_PYTHON="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --*)
+      die "unknown option"
+      ;;
+    *)
+      die "positional arguments are not supported"
+      ;;
+  esac
+done
+
+if [[ -n "$EXPLICIT_PYTHON" ]]; then
+  PYTHON="$EXPLICIT_PYTHON"
+elif [[ -n "${PRODUCT_READINESS_PYTHON:-}" ]]; then
+  PYTHON="$PRODUCT_READINESS_PYTHON"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON="$(command -v python3)"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON="$(command -v python)"
 else
-  PYTHON="python"
+  die "no Python interpreter found"
 fi
+
+[[ -x "$PYTHON" ]] || die "selected Python interpreter is not executable"
 
 echo "== Product readiness smoke: pytest =="
 "$PYTHON" -m pytest \
@@ -40,7 +86,7 @@ echo "# Admin auth disabled"
 echo "curl -i -s http://127.0.0.1:8000/admin/review/items"
 echo
 echo "# Admin auth enabled without token should reject"
-echo "ADMIN_AUTH_ENABLED=true ADMIN_AUTH_TOKEN=local-admin-token $PYTHON -m uvicorn webapi.main:app --host 127.0.0.1 --port 8000"
+echo "ADMIN_AUTH_ENABLED=true ADMIN_AUTH_TOKEN=local-admin-token \${PRODUCT_READINESS_PYTHON:-python3} -m uvicorn webapi.main:app --host 127.0.0.1 --port 8000"
 echo "curl -i -s http://127.0.0.1:8000/admin/review/items"
 echo
 echo "# Admin auth enabled with token should allow"

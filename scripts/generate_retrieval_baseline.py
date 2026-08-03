@@ -451,6 +451,15 @@ def _display_command_arg(value: str) -> str:
     return text
 
 
+def _product_readiness_command(python: str) -> list[str]:
+    return [
+        "bash",
+        "scripts/product_readiness_smoke.sh",
+        "--python",
+        python,
+    ]
+
+
 def _load_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
@@ -574,7 +583,11 @@ def generate(output_path: Path) -> tuple[dict[str, Any], bool]:
             ]
         )
 
-    _run(["bash", "scripts/product_readiness_smoke.sh"], label="product_readiness_smoke", commands=commands)
+    _run(
+        _product_readiness_command(python),
+        label="product_readiness_smoke",
+        commands=commands,
+    )
     focused = _run([python, "-m", "pytest", "tests/test_retrieval_baseline.py", "-q"], label="focused_tests", commands=commands)
     full = _run(
         [python, "-m", "pytest", "-q"],
