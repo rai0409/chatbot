@@ -28,6 +28,8 @@ class _FakeOpenAIClient:
 
 def test_default_provider_resolves_to_local(monkeypatch):
     monkeypatch.delenv("EMBED_PROVIDER", raising=False)
+    monkeypatch.delenv("LOCAL_EMBED_MODEL", raising=False)
+    monkeypatch.delenv("LOCAL_EMBED_MODEL_PATH", raising=False)
 
     provider = embedding_provider.get_embedding_provider()
 
@@ -48,6 +50,7 @@ def test_embed_queries_delegates_to_local_provider(monkeypatch):
 
     monkeypatch.setenv("EMBED_PROVIDER", "local")
     monkeypatch.setenv("LOCAL_EMBED_MODEL", "fake-local-model")
+    monkeypatch.delenv("LOCAL_EMBED_MODEL_PATH", raising=False)
     monkeypatch.setattr(
         embedding_provider,
         "_get_local_model",
@@ -71,6 +74,7 @@ def test_embed_documents_delegates_to_local_provider_without_changing_settings(m
             return Encoded()
 
     monkeypatch.setenv("LOCAL_EMBED_MODEL", "fake-local-model")
+    monkeypatch.delenv("LOCAL_EMBED_MODEL_PATH", raising=False)
     monkeypatch.setattr(embedding_provider, "_get_local_model", lambda model_name: FakeModel())
 
     assert embedding_provider.embed_documents(["doc-b", "doc-a"], provider_name="local") == [[0.0], [1.0]]
@@ -271,6 +275,7 @@ def test_empty_input_preserves_provider_delegation(method_name, monkeypatch):
 
             return Encoded()
 
+    monkeypatch.delenv("LOCAL_EMBED_MODEL_PATH", raising=False)
     monkeypatch.setattr(embedding_provider, "_get_local_model", lambda model_name: FakeModel())
     provider = embedding_provider.LocalEmbeddingProvider("existing-model")
 
