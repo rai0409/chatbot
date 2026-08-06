@@ -405,6 +405,27 @@ def _git(*args: str) -> str:
     return subprocess.run(["git", *args], cwd=ROOT, text=True, capture_output=True, check=True).stdout.strip()
 
 
+def _git_status_short_lines() -> list[str]:
+    """Return porcelain v1 status lines without altering their XY columns."""
+    result = subprocess.run(
+        ["git", "status", "--short"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout.splitlines()
+
+
+def _dirty_working_tree_state(status_lines: Sequence[str]) -> dict[str, Any]:
+    """Build report fields directly from unmodified porcelain status lines."""
+    dirty_paths = list(status_lines)
+    return {
+        "dirty_working_tree": bool(dirty_paths),
+        "dirty_paths": dirty_paths,
+    }
+
+
 def _run(
     command: Sequence[str],
     *,
@@ -667,14 +688,13 @@ def generate(output_path: Path) -> tuple[dict[str, Any], bool]:
             "exit_code": compile_check.returncode,
         },
     }
-    dirty = _git("status", "--short").splitlines()
+    dirty_state = _dirty_working_tree_state(_git_status_short_lines())
     report = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "branch": _git("branch", "--show-current"),
         "baseline_commit_sha": _git("rev-parse", "HEAD"),
-        "dirty_working_tree": bool(dirty),
-        "dirty_paths": dirty,
+        **dirty_state,
         "executed_commands": commands,
         "runtime_configuration": runtime_before,
         "verified_embedding_runtime": verified_embedding_runtime,

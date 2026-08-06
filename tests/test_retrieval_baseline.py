@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import subprocess
 import sys
 
 import pytest
@@ -177,3 +178,65 @@ def test_runtime_gate_failure_occurs_before_any_evaluation_work(monkeypatch, tmp
 
     with pytest.raises(RuntimeError, match="runtime gate failed"):
         generate_retrieval_baseline.generate(tmp_path / "baseline.json")
+
+
+def test_git_status_short_lines_preserve_porcelain_columns_and_order(monkeypatch):
+    stdout = (
+        " M first.txt\n"
+        "M  second.txt\n"
+        "MM third.txt\n"
+        "?? fourth.txt\n"
+        " M path with spaces.txt\n"
+        "?? untracked file.txt\n"
+    )
+    monkeypatch.setattr(
+        generate_retrieval_baseline.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, stdout=stdout, stderr=""),
+    )
+
+    assert generate_retrieval_baseline._git_status_short_lines() == [
+        " M first.txt",
+        "M  second.txt",
+        "MM third.txt",
+        "?? fourth.txt",
+        " M path with spaces.txt",
+        "?? untracked file.txt",
+    ]
+
+
+def test_git_status_short_lines_empty_output_is_clean(monkeypatch):
+    monkeypatch.setattr(
+        generate_retrieval_baseline.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+    )
+
+    assert generate_retrieval_baseline._git_status_short_lines() == []
+
+
+def test_dirty_working_tree_state_uses_status_lines_without_normalizing_them():
+    status_lines = [" M first.txt", "M  second.txt", "MM third.txt", "?? untracked file.txt"]
+
+    assert generate_retrieval_baseline._dirty_working_tree_state(status_lines) == {
+        "dirty_working_tree": True,
+        "dirty_paths": status_lines,
+    }
+
+
+def test_dirty_working_tree_state_is_clean_when_status_has_no_lines():
+    assert generate_retrieval_baseline._dirty_working_tree_state([]) == {
+        "dirty_working_tree": False,
+        "dirty_paths": [],
+    }
+
+
+def test_generic_git_helper_keeps_single_value_behavior(monkeypatch):
+    monkeypatch.setattr(
+        generate_retrieval_baseline.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, stdout=" main\n", stderr=""),
+    )
+
+    assert generate_retrieval_baseline._git("branch", "--show-current") == "main"
+    assert generate_retrieval_baseline.SCHEMA_VERSION == "current_retrieval_baseline.v2"
