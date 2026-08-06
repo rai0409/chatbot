@@ -28,6 +28,8 @@ class _FakeOpenAIClient:
 
 def test_default_provider_resolves_to_local(monkeypatch):
     monkeypatch.delenv("EMBED_PROVIDER", raising=False)
+    monkeypatch.delenv("LOCAL_EMBED_MODEL", raising=False)
+    monkeypatch.delenv("LOCAL_EMBED_MODEL_PATH", raising=False)
 
     provider = embedding_provider.get_embedding_provider()
 
@@ -48,6 +50,7 @@ def test_embed_queries_delegates_to_local_provider(monkeypatch):
 
     monkeypatch.setenv("EMBED_PROVIDER", "local")
     monkeypatch.setenv("LOCAL_EMBED_MODEL", "fake-local-model")
+    monkeypatch.delenv("LOCAL_EMBED_MODEL_PATH", raising=False)
     monkeypatch.setattr(
         embedding_provider,
         "_get_local_model",
@@ -71,10 +74,91 @@ def test_embed_documents_delegates_to_local_provider_without_changing_settings(m
             return Encoded()
 
     monkeypatch.setenv("LOCAL_EMBED_MODEL", "fake-local-model")
+    monkeypatch.delenv("LOCAL_EMBED_MODEL_PATH", raising=False)
     monkeypatch.setattr(embedding_provider, "_get_local_model", lambda model_name: FakeModel())
 
     assert embedding_provider.embed_documents(["doc-b", "doc-a"], provider_name="local") == [[0.0], [1.0]]
     assert calls == [(["doc-b", "doc-a"], True)]
+
+
+def test_local_provider_uses_external_path_without_changing_canonical_identity(monkeypatch):
+    calls = {}
+
+    class FakeModel:
+        def encode(self, texts, normalize_embeddings):
+            assert texts == ["外部asset"]
+            assert normalize_embeddings is True
+
+            class Encoded:
+                def tolist(self):
+                    return [[0.1, 0.2]]
+
+            return Encoded()
+
+    monkeypatch.setenv(
+        "LOCAL_EMBED_MODEL",
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    )
+    monkeypatch.setenv("LOCAL_EMBED_MODEL_PATH", "/external/runtime-asset")
+    monkeypatch.setattr(
+        embedding_provider,
+        "validate_external_local_model_asset",
+        lambda model_name, model_path: calls.setdefault(
+            "validation",
+            {"model_name": model_name, "model_path": model_path, "revision": "revision"},
+        ),
+    )
+    monkeypatch.setattr(
+        embedding_provider,
+        "_get_external_local_model",
+        lambda model_path: calls.setdefault("load_path", model_path) and FakeModel(),
+    )
+
+    provider = embedding_provider.get_embedding_provider("local")
+
+    assert provider.model_name == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    assert provider.model_path == "/external/runtime-asset"
+    assert provider.embed_queries(["外部asset"]) == [[0.1, 0.2]]
+    assert calls["validation"]["model_name"] == provider.model_name
+    assert calls["load_path"] == "/external/runtime-asset"
+
+
+def test_external_local_model_enforces_offline_and_no_remote_code(monkeypatch):
+    embedding_provider._get_external_local_model.cache_clear()
+    calls = {}
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_path, **kwargs):
+            calls["model_path"] = model_path
+            calls["kwargs"] = kwargs
+
+    monkeypatch.setattr(
+        embedding_provider,
+        "_load_sentence_transformer_class",
+        lambda provider_name: FakeSentenceTransformer,
+    )
+
+    embedding_provider._get_external_local_model("/external/runtime-asset")
+
+    assert calls == {
+        "model_path": "/external/runtime-asset",
+        "kwargs": {"local_files_only": True, "trust_remote_code": False},
+    }
+
+
+def test_invalid_external_asset_is_rejected_without_exposing_path(monkeypatch):
+    monkeypatch.setenv("LOCAL_EMBED_MODEL_PATH", "/private/path")
+    provider = embedding_provider.LocalEmbeddingProvider("canonical-model")
+
+    def fail(*_args):
+        raise RuntimeError("external embedding asset validation failed")
+
+    monkeypatch.setattr(embedding_provider, "validate_external_local_model_asset", fail)
+
+    with pytest.raises(RuntimeError, match="external embedding asset validation failed") as exc_info:
+        provider.embedding_asset_metadata()
+
+    assert "/private/path" not in str(exc_info.value)
 
 
 def test_bge_m3_provider_resolves_by_name():
@@ -191,6 +275,7 @@ def test_empty_input_preserves_provider_delegation(method_name, monkeypatch):
 
             return Encoded()
 
+    monkeypatch.delenv("LOCAL_EMBED_MODEL_PATH", raising=False)
     monkeypatch.setattr(embedding_provider, "_get_local_model", lambda model_name: FakeModel())
     provider = embedding_provider.LocalEmbeddingProvider("existing-model")
 

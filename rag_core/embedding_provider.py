@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Dict, List, Protocol, Sequence
+from pathlib import Path
+from typing import Any, Dict, List, Protocol, Sequence
 
 import config
+from scripts import validate_embedding_asset_contract
 
 
 LOCAL_PROVIDER = "local"
@@ -44,6 +46,38 @@ def _get_local_model(model_name: str):
     return _get_sentence_transformer_model(model_name, LOCAL_PROVIDER)
 
 
+@lru_cache(maxsize=8)
+def _get_external_local_model(model_path: str):
+    sentence_transformer = _load_sentence_transformer_class(LOCAL_PROVIDER)
+    return sentence_transformer(
+        model_path,
+        local_files_only=True,
+        trust_remote_code=False,
+    )
+
+
+@lru_cache(maxsize=8)
+def validate_external_local_model_asset(
+    model_name: str,
+    model_path: str,
+) -> dict[str, Any]:
+    root = Path(__file__).resolve().parents[1]
+    contract = root / "config/embedding_assets/retrieval_baseline.asset.json"
+    source_contract = root / "config/embedding_assets/retrieval_baseline.source.json"
+    try:
+        result = validate_embedding_asset_contract.validate_contract(
+            contract_path=contract,
+            source_contract_path=source_contract,
+            asset_dir=Path(model_path),
+        )
+    except validate_embedding_asset_contract.ContractError as exc:
+        raise RuntimeError("external embedding asset validation failed") from exc
+
+    if result["model_id"] != model_name:
+        raise RuntimeError("external embedding asset model identity mismatch")
+    return result
+
+
 def _get_bge_m3_model(model_name: str = BGE_M3_MODEL_NAME):
     return _get_sentence_transformer_model(model_name, BGE_M3_PROVIDER)
 
@@ -74,9 +108,22 @@ class LocalEmbeddingProvider:
         self.model_name = model_name or config.getenv_first(
             "LOCAL_EMBED_MODEL", default="all-MiniLM-L6-v2"
         )
+        self.model_path = config.getenv_first("LOCAL_EMBED_MODEL_PATH", default=None)
+
+    def embedding_asset_metadata(self) -> dict[str, Any] | None:
+        if not self.model_path:
+            return None
+        return validate_external_local_model_asset(
+            str(self.model_name),
+            str(self.model_path),
+        )
 
     def _embed(self, texts: Sequence[str]) -> List[List[float]]:
-        model = _get_local_model(str(self.model_name))
+        if self.model_path:
+            self.embedding_asset_metadata()
+            model = _get_external_local_model(str(self.model_path))
+        else:
+            model = _get_local_model(str(self.model_name))
         return model.encode(list(texts), normalize_embeddings=True).tolist()
 
     def embed_queries(self, queries: Sequence[str], *, client=None) -> List[List[float]]:

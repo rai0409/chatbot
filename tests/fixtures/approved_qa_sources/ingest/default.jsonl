@@ -1,0 +1,2 @@
+{"approved_answer":"Synthetic answer for approved fixture one.","approved_citations":[{"source_doc":"fixture-approved.pdf","source_pages":[1]}],"qa_id":"fixture-approved-001","question":"Synthetic approved question one?","status":"approved","tenant_id":"fixture-tenant"}
+{"approved_answer":"Synthetic answer for approved fixture two.","approved_citations":[{"source_doc":"fixture-approved.pdf","source_pages":[2]}],"qa_id":"fixture-approved-002","question":"Synthetic approved question two?","status":"approved","tenant_id":"fixture-tenant"}
