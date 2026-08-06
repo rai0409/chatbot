@@ -781,6 +781,12 @@ PYTHONPATH=. .venv/bin/python -m eval.runner \
   --real-vector
 ```
 
+`--real-vector` rebuilds the isolated `eval_smoke_chunks_real_vector_v1` collection from
+`--chunks-jsonl` on every run. It never uses the production collection. Use
+`--eval-collection NAME` only to select a different evaluation-only collection; selecting
+the active production collection is rejected. The summary records the embedding provider,
+model, dimension, normalization, corpus fingerprint, collection name, and inserted count.
+
 ### Approved-QA regression
 
 Approved Q&A files must be checked with:

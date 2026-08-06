@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +78,93 @@ def test_smoke_script_does_not_start_server_or_require_running_server():
 
     assert '"$PYTHON" -m uvicorn' not in text
     assert "This script does not start uvicorn" in text
+
+
+def _fake_python(tmp_path: Path) -> tuple[Path, Path]:
+    log = tmp_path / "calls.log"
+    executable = tmp_path / "fake-python"
+    executable.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$FAKE_PYTHON_LOG\"\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable, log
+
+
+def _run_smoke(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(SMOKE_SCRIPT), *args],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+
+def test_smoke_script_uses_explicit_interpreter_for_pytest_and_compile(tmp_path):
+    executable, log = _fake_python(tmp_path)
+    env = {**os.environ, "FAKE_PYTHON_LOG": str(log)}
+
+    result = _run_smoke("--python", str(executable), env=env)
+
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 2
+    assert calls[0].startswith("-m pytest ")
+    assert calls[1].startswith("-m py_compile ")
+
+
+def test_explicit_interpreter_takes_priority_over_environment(tmp_path):
+    explicit, log = _fake_python(tmp_path)
+    environment = tmp_path / "environment-python"
+    environment.write_text("#!/usr/bin/env bash\nexit 99\n", encoding="utf-8")
+    environment.chmod(0o755)
+    env = {
+        **os.environ,
+        "FAKE_PYTHON_LOG": str(log),
+        "PRODUCT_READINESS_PYTHON": str(environment),
+    }
+
+    result = _run_smoke("--python", str(explicit), env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_environment_interpreter_is_used_when_explicit_is_absent(tmp_path):
+    executable, log = _fake_python(tmp_path)
+    env = {**os.environ, "FAKE_PYTHON_LOG": str(log), "PRODUCT_READINESS_PYTHON": str(executable)}
+
+    result = _run_smoke(env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 2
+
+
+@pytest.mark.parametrize(
+    ("args", "environment"),
+    [
+        (("--python", "/missing/python"), {}),
+        ((), {"PRODUCT_READINESS_PYTHON": "/missing/python"}),
+        (("--unknown",), {}),
+        (("--python",), {}),
+        (("unexpected",), {}),
+    ],
+)
+def test_smoke_script_rejects_invalid_cli_and_interpreters(args, environment):
+    result = _run_smoke(*args, env={**os.environ, **environment})
+
+    assert result.returncode != 0
+
+
+def test_smoke_script_help_and_portable_manual_example():
+    result = _run_smoke("--help")
+    text = SMOKE_SCRIPT.read_text(encoding="utf-8")
+
+    assert result.returncode == 0
+    assert "--python <executable>" in result.stdout
+    assert ".venv/bin/python" not in text
+    assert "${PRODUCT_READINESS_PYTHON:-python3}" in text
 
 
 def test_smoke_script_does_not_reference_pr43_files():

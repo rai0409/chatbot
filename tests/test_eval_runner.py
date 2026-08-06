@@ -19,6 +19,86 @@ def _write_jsonl(path: Path, rows):
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def test_ndcg_at_k_deduplicates_relevant_chunk_and_document_ids():
+    assert runner._ndcg_at_k(["chunk-1", "chunk-1"], ["chunk-1"], 2) == pytest.approx(1.0)
+    assert runner._ndcg_at_k(["document-1", "document-1"], ["document-1"], 2) == pytest.approx(1.0)
+
+
+def test_ndcg_at_k_uses_eval_k_for_dcg_and_idcg():
+    assert runner._ndcg_at_k(["chunk-1", "chunk-2"], ["chunk-1", "chunk-2"], 1) == pytest.approx(1.0)
+
+
+def test_ndcg_at_k_synthetic_contract_fixture():
+    fixture_path = Path(__file__).parent / "fixtures" / "retrieval_metrics" / "synthetic_binary_ndcg.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    for case in fixture["cases"]:
+        assert runner._ndcg_at_k(case["ranked_ids"], case["gold_ids"], case["k"]) == pytest.approx(
+            case["ndcg"], abs=1e-12
+        )
+
+
+@pytest.mark.parametrize("k", [0, -1, True, 1.5])
+def test_ndcg_at_k_rejects_non_positive_or_non_integer_k(k):
+    with pytest.raises(ValueError, match="positive integer"):
+        runner._ndcg_at_k(["a"], ["a"], k)
+
+
+@pytest.mark.parametrize("ranked_ids,gold_ids", [(["a", ""], ["a"]), (["a"], ["a", None])])
+def test_ndcg_at_k_rejects_malformed_identifiers(ranked_ids, gold_ids):
+    with pytest.raises(ValueError):
+        runner._ndcg_at_k(ranked_ids, gold_ids, 1)
+
+
+def test_dcg_at_k_rejects_invalid_k_and_does_not_mutate_inputs():
+    ranked_ids = ["a", "a", "b"]
+    relevant_ids = {"a", "b"}
+    with pytest.raises(ValueError, match="positive integer"):
+        runner._dcg_at_k(ranked_ids, relevant_ids, 0)
+    assert runner._dcg_at_k(ranked_ids, relevant_ids, 3) == pytest.approx(1.5)
+    assert ranked_ids == ["a", "a", "b"]
+    assert relevant_ids == {"a", "b"}
+
+
+def test_retrieval_aware_eval_deduplicates_document_relevance_for_ndcg(tmp_path, monkeypatch):
+    cases_path = tmp_path / "cases.jsonl"
+    _write_jsonl(
+        cases_path,
+        [{"case_id": "doc-case", "category": "retrieval", "query": "Q", "gold_doc_ids": ["doc-1"]}],
+    )
+    monkeypatch.setattr(
+        runner.qa,
+        "answer_query_with_trace",
+        lambda *args, **kwargs: (
+            SimpleNamespace(intent="other", guard_reason=None, used_fallback=False, answer_text="ok"),
+            {
+                "before_rerank": [],
+                "after_rerank": [
+                    RetrievedChunk(text="first", metadata={"id": "chunk-1", "source_doc": "doc-1"}, score=1.0),
+                    RetrievedChunk(text="second", metadata={"id": "chunk-2", "source_doc": "doc-1"}, score=0.9),
+                ],
+            },
+        ),
+    )
+
+    payload = runner.run_retrieval_aware_eval(
+        cases_path=cases_path,
+        chunks_jsonl=None,
+        per_query_output_path=tmp_path / "rows.jsonl",
+        summary_output_path=tmp_path / "summary.json",
+        modes=["bm25_only"],
+        top_k=2,
+        max_context_chars=100,
+        real_vector=False,
+        real_generation=False,
+        eval_k=2,
+        quiet=True,
+    )
+
+    assert payload["rows"][0]["ndcg_at_k"] == pytest.approx(1.0)
+    assert payload["summary"]["by_mode"]["bm25_only"]["mean_ndcg_at_k"] == pytest.approx(1.0)
+
+
 def test_load_cases_parses_fixture_rows(tmp_path):
     cases_path = tmp_path / "cases.jsonl"
     _write_jsonl(
@@ -699,6 +779,130 @@ def test_retrieval_cases_file_has_labels_and_abstain_coverage(tmp_path):
 
     mode_summary = payload["summary"]["by_mode"]["hybrid_rerank"]
     assert mode_summary["cases"] == len(cases)
+    expected_metric_support = sum(1 for case in cases if case.gold_chunk_ids or case.gold_doc_ids)
+    assert mode_summary["metric_support_count"] == expected_metric_support
+    assert mode_summary["metric_skipped_query_count"] == len(cases) - expected_metric_support
     assert (mode_summary["gold_chunk_cases"] > 0) or (mode_summary["gold_doc_cases"] > 0)
     assert mode_summary["abstain_labeled_cases"] > 0
     assert mode_summary["abstain_expected_cases"] > 0
+
+
+def test_real_vector_collection_rebuild_records_metadata_and_uses_document_and_query_embeddings(
+    tmp_path, monkeypatch
+):
+    chunks_path = tmp_path / "chunks.jsonl"
+    cases_path = tmp_path / "cases.jsonl"
+    _write_jsonl(chunks_path, [{"id": "c1", "text": "本文", "doc_id": "doc1"}])
+    _write_jsonl(cases_path, [{"case_id": "q1", "category": "c", "query": "質問", "gold_chunk_ids": ["c1"], "gold_doc_ids": ["doc1"]}])
+
+    calls = {"documents": 0, "queries": 0, "collections": []}
+
+    class _Collection:
+        name = "eval_test_collection"
+        metadata = {"embedding_dim": 2, "hnsw:space": "cosine"}
+
+        def count(self):
+            return 1
+
+        def get(self, include=None, limit=None):
+            return {"embeddings": [[0.1, 0.2]]}
+
+        def modify(self, metadata=None):
+            self.metadata = dict(metadata or {})
+
+    collection = _Collection()
+
+    def _fake_ingest(rows, **kwargs):
+        row_list = list(rows)
+        calls["documents"] += 1
+        assert runner.embedder.embed_documents([row["text"] for row in row_list], client=kwargs["client"]) == [[0.1, 0.2]]
+        return {"collection": collection.name, "ingested": len(row_list), "skipped": 0}
+
+    monkeypatch.setattr(runner, "ingest_canonical_rows", _fake_ingest)
+    monkeypatch.setattr(runner.store, "get_vectorstore", lambda **kwargs: collection)
+    monkeypatch.setattr(runner.embedder, "embed_documents", lambda texts, client=None: [[0.1, 0.2] for _ in texts])
+    monkeypatch.setattr(runner.embedder, "embed_queries", lambda texts, client=None: calls.update(queries=calls["queries"] + 1) or [[0.1, 0.2] for _ in texts])
+    monkeypatch.setattr(runner.embedding_provider, "active_fingerprint", lambda: {"embed_provider": "local", "embed_model": "MiniLM"})
+
+    metadata = runner.build_real_vector_eval_collection(
+        chunks_jsonl=chunks_path, cases_path=cases_path, collection_name=collection.name, client=object()
+    )
+
+    assert calls["documents"] == 1
+    assert calls["queries"] == 1
+    assert metadata == {
+        "embedding_provider": "local", "embedding_model": "MiniLM", "embedding_dimension": 2,
+        "normalization": "l2", "corpus_fingerprint": runner.source_jsonl_sha256(chunks_path),
+        "collection_name": "eval_test_collection", "inserted_record_count": 1,
+    }
+    assert collection.metadata["collection_name"] == "eval_test_collection"
+
+
+def test_real_vector_collection_rejects_missing_gold_and_production_collection(tmp_path, monkeypatch):
+    chunks_path = tmp_path / "chunks.jsonl"
+    cases_path = tmp_path / "cases.jsonl"
+    _write_jsonl(chunks_path, [{"id": "c1", "text": "本文", "doc_id": "doc1"}])
+    _write_jsonl(cases_path, [{"case_id": "q1", "category": "c", "query": "質問", "gold_chunk_ids": ["missing"]}])
+
+    with pytest.raises(ValueError, match="gold chunk ids missing"):
+        runner.build_real_vector_eval_collection(chunks_jsonl=chunks_path, cases_path=cases_path)
+
+    monkeypatch.delenv("CHROMA_COLLECTION", raising=False)
+    monkeypatch.setattr(config, "VECTORSTORE_COLLECTION_NAME", "production_collection")
+    with pytest.raises(ValueError, match="must not be the production"):
+        runner.build_real_vector_eval_collection(
+            chunks_jsonl=chunks_path, cases_path=cases_path, collection_name="production_collection"
+        )
+
+
+def test_eval_runtime_uses_stub_by_default_and_isolated_real_collection(monkeypatch):
+    class _Collection:
+        def query(self, **kwargs):
+            return {"documents": [["本文"]], "metadatas": [[{"id": "c1", "tenant_id": "default"}]], "distances": [[0.1]]}
+
+    seen = []
+    monkeypatch.setattr(runner.retrieval.embedder, "embed_queries", lambda texts, client=None: [[0.1] for _ in texts])
+    monkeypatch.setattr(
+        runner.retrieval.store,
+        "get_vectorstore",
+        lambda **kwargs: seen.append(kwargs) or _Collection(),
+    )
+
+    with runner._eval_runtime(chunks_jsonl=None, stub_vector=True):
+        assert runner.retrieval.vector_retrieve("質問", None, top_k=1) == []
+    with runner._eval_runtime(chunks_jsonl=None, stub_vector=False, eval_collection_name="eval_test_collection"):
+        hits = runner.retrieval.vector_retrieve("質問", None, top_k=1)
+
+    assert hits[0].metadata["id"] == "c1"
+    assert seen == [{"collection_name": "eval_test_collection", "create_if_missing": False}]
+
+
+def test_real_dense_only_all_empty_is_recorded_as_error(tmp_path, monkeypatch):
+    cases_path = tmp_path / "cases.jsonl"
+    _write_jsonl(cases_path, [{"case_id": "q1", "category": "c", "query": "質問"}])
+    output_rows = tmp_path / "rows.jsonl"
+    output_summary = tmp_path / "summary.json"
+    monkeypatch.setattr(
+        runner,
+        "build_real_vector_eval_collection",
+        lambda **kwargs: {"collection_name": "eval_test_collection", "inserted_record_count": 1},
+    )
+    monkeypatch.setattr(runner, "_build_eval_client", lambda **kwargs: object())
+    monkeypatch.setattr(
+        runner.qa,
+        "answer_query_with_trace",
+        lambda *args, **kwargs: (
+            SimpleNamespace(intent="other", guard_reason="no_results", used_fallback=True, answer_text="", rewritten_query="", augmented_query=""),
+            {"before_rerank": [], "after_rerank": []},
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="dense_only real-vector retrieval returned no candidates"):
+        runner.run_retrieval_aware_eval(
+            cases_path=cases_path, chunks_jsonl=tmp_path / "chunks.jsonl",
+            per_query_output_path=output_rows, summary_output_path=output_summary,
+            modes=["dense_only"], top_k=1, max_context_chars=100, real_vector=True,
+            real_generation=False, quiet=True,
+        )
+
+    assert json.loads(output_summary.read_text(encoding="utf-8"))["status"] == "error"
