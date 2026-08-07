@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Static, retrieval-free validation for the frozen semantic challenge set."""
 from __future__ import annotations
-import argparse, hashlib, json, re, sys, unicodedata
+import argparse, hashlib, json, math, re, sys, unicodedata
 from pathlib import Path
 from typing import Any
 ROOT=Path(__file__).resolve().parents[1]
@@ -27,40 +27,46 @@ def exact(value:Any, keys:set[str], label:str)->dict[str,Any]:
  if not isinstance(value,dict) or set(value)!=keys: raise InputError("malformed "+label)
  return value
 def number(v:Any,label:str)->float:
- if isinstance(v,bool) or not isinstance(v,(int,float)): raise InputError("invalid numeric "+label)
+ if isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v): raise InputError("invalid numeric "+label)
  return float(v)
 def validate_contract(c:dict[str,Any], cases:Path,chunks:Path)->None:
  exact(c,{"schema_version","profile","inputs","fixed_embedding","category_counts","construction_policy","future_acceptance_thresholds","promotion"},"contract")
  if c["schema_version"]!="semantic_challenge_set_contract.v1": raise InputError("schema")
- p=c["profile"]
- if not isinstance(p,dict) or (p.get("name"),p.get("design_status"),p.get("retrieval_outcomes_observed"),p.get("real_vector_executed"),p.get("real_generation"),p.get("ordinary_ci_required"),p.get("release_gate_required"))!=("retrieval_semantic_challenge_v1","frozen_pre_evaluation",False,False,False,False,True): raise PolicyError("profile policy")
- i=c["inputs"]
+ p=exact(c["profile"],{"name","purpose","design_status","retrieval_outcomes_observed","real_vector_executed","real_generation","ordinary_ci_required","release_gate_required"},"profile")
+ if (p["name"],p["purpose"],p["design_status"],p["retrieval_outcomes_observed"],p["real_vector_executed"],p["real_generation"],p["ordinary_ci_required"],p["release_gate_required"])!=("retrieval_semantic_challenge_v1","precommitted evaluation of incremental semantic retrieval value","frozen_pre_evaluation",False,False,False,False,True): raise PolicyError("profile policy")
+ i=exact(c["inputs"],{"cases_path","cases_sha256","chunks_path","chunks_sha256","expected_case_count","expected_answerable_count","expected_abstain_count","expected_chunk_count","expected_gold_chunk_count","expected_distractor_chunk_count","expected_mode_count","expected_row_count","top_k","eval_k","tenant_id","modes"},"inputs")
  expected={"expected_case_count":40,"expected_answerable_count":32,"expected_abstain_count":8,"expected_chunk_count":64,"expected_gold_chunk_count":32,"expected_distractor_chunk_count":32,"expected_mode_count":4,"expected_row_count":160,"top_k":20,"eval_k":5,"tenant_id":"default","modes":MODES}
  if not isinstance(i,dict) or any(i.get(k)!=v or isinstance(i.get(k),bool) and isinstance(v,int) for k,v in expected.items()): raise InputError("inputs")
  if i.get("cases_path")!="eval/cases/semantic_challenge_cases.jsonl" or i.get("chunks_path")!="eval/cases/semantic_challenge_chunks.jsonl" or digest(cases)!=i.get("cases_sha256") or digest(chunks)!=i.get("chunks_sha256"): raise InputError("input hash mismatch")
  if c.get("category_counts")!=CATEGORIES: raise InputError("category counts")
- e=c["fixed_embedding"]
- if not isinstance(e,dict) or (e.get("provider"),e.get("model"),e.get("revision"),e.get("dimension"),e.get("normalization"),e.get("asset_files_sha256"),e.get("runtime_network_allowed"),e.get("trust_remote_code"))!=("local","sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2","e8f8c211226b894fcb81acc59f3b34ba3efd5f42",384,"l2","cede7177dd492d9d7776484dce8d030f0cd127eae3297305991de91386394d5a",False,False): raise InputError("fixed embedding")
+ e=exact(c["fixed_embedding"],{"provider","model","revision","dimension","normalization","asset_files_sha256","runtime_network_allowed","trust_remote_code"},"fixed embedding")
+ if (e["provider"],e["model"],e["revision"],e["dimension"],e["normalization"],e["asset_files_sha256"],e["runtime_network_allowed"],e["trust_remote_code"])!=("local","sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2","e8f8c211226b894fcb81acc59f3b34ba3efd5f42",384,"l2","cede7177dd492d9d7776484dce8d030f0cd127eae3297305991de91386394d5a",False,False): raise InputError("fixed embedding")
  policy=c["construction_policy"]
- required={"authored_before_retrieval_execution":True,"model_output_used_for_selection":False,"exact_identifier_queries_allowed":False,"quoted_term_queries_allowed":False,"paired_high_overlap_distractor_required":True,"gold_surface_mismatch_required":True,"abstain_cases_required":True,"proprietary_content_allowed":False,"external_network_allowed":False,"post_observation_case_editing_allowed":False}
+ required={"authored_before_retrieval_execution":True,"model_output_used_for_selection":False,"exact_identifier_queries_allowed":False,"quoted_term_queries_allowed":False,"paired_high_overlap_distractor_required":True,"gold_surface_mismatch_required":True,"abstain_cases_required":True,"proprietary_content_allowed":False,"external_network_allowed":False,"post_observation_case_editing_allowed":False,"plausible_same_domain_distractor_required":True,"trivial_distractor_allowed":False}
  if policy!=required: raise PolicyError("construction policy")
  thresholds=c["future_acceptance_thresholds"]
  threshold_values={"metric_support_count":32,"abstain_expected_count":8,"dense_query_error_max":0,"dense_zero_candidate_max":0,"semantic_gain_case_min_at_5":8,"hybrid_unique_gain_case_min_at_5":6,"hybrid_regression_case_max_at_5":0,"hybrid_gold_hit_min_at_5":28,"hybrid_mean_mrr_min_at_5":.75,"hybrid_mean_ndcg_min_at_5":.8,"hybrid_mrr_delta_over_bm25_min":.1,"hybrid_ndcg_delta_over_bm25_min":.1,"hybrid_rerank_mrr_delta_over_hybrid_min":-.02,"hybrid_rerank_ndcg_delta_over_hybrid_min":-.02,"abstain_pass_min":6,"external_network_attempt_count":0}
- if not isinstance(thresholds,dict) or any(k not in thresholds or number(thresholds[k],k)!=v for k,v in threshold_values.items()) or not isinstance(thresholds.get("semantic_gain_definition"),str) or not isinstance(thresholds.get("hybrid_regression_definition"),str): raise InputError("future thresholds")
+ definitions={"semantic_gain_definition":"answerable metric-supported case where BM25 misses all declared gold IDs at eval_k and dense or hybrid hits a declared gold ID at eval_k","hybrid_regression_definition":"answerable metric-supported case where BM25 hits a declared gold ID at eval_k and hybrid misses all declared gold IDs at eval_k"}
+ if not isinstance(thresholds,dict) or set(thresholds)!=set(threshold_values)|set(definitions) or any(number(thresholds[k],k)!=v for k,v in threshold_values.items()) or any(thresholds[k]!=v for k,v in definitions.items()): raise InputError("future thresholds")
+ promotion=exact(c["promotion"],{"product_promotion_eligible","challenge_set_design_complete","challenge_set_evaluation_complete","semantic_incremental_value_status","next_required_evidence"},"promotion")
+ if promotion!={"product_promotion_eligible":False,"challenge_set_design_complete":True,"challenge_set_evaluation_complete":False,"semantic_incremental_value_status":"not_evaluated","next_required_evidence":"real_vector_challenge_evaluation"}: raise PolicyError("promotion")
 def validate_rows(c:dict[str,Any], cases:list[dict[str,Any]], chunks:list[dict[str,Any]])->dict[str,Any]:
  if len(cases)!=40 or len(chunks)!=64: raise PolicyError("count")
  if [x["case_id"] for x in cases]!=sorted(x.get("case_id","") for x in cases) or [x["id"] for x in chunks]!=sorted(x.get("id","") for x in chunks): raise PolicyError("sorting")
  if len({x.get("case_id") for x in cases})!=40 or any(not str(x.get("case_id","")).startswith("sc_") for x in cases): raise PolicyError("case identifiers")
  if len({x.get("id") for x in chunks})!=64 or len({x.get("doc_id") for x in chunks})!=64 or any(not str(x.get("id","")).startswith("sc_chunk_") for x in chunks): raise PolicyError("chunk identifiers")
- if any(x.get("source_doc")!=x.get("doc_id") or x.get("searchable")!=1 or not isinstance(x.get("source_pages"),list) or len(x["source_pages"])!=1 or not isinstance(x["source_pages"][0],int) or x["source_pages"][0]<=0 or x.get("challenge_role") not in {"gold","lexical_distractor"} for x in chunks): raise PolicyError("chunk schema")
+ chunk_keys={"id","text","source_doc","source_pages","doc_id","chunk_index","searchable","type","quality","challenge_pair_id","challenge_role","topic_id","support_fact_id"}
+ if any(set(x)!=chunk_keys or any(not isinstance(x.get(k),str) or not x[k] for k in {"id","text","source_doc","doc_id","type","quality","challenge_pair_id","challenge_role","topic_id","support_fact_id"}) or x.get("source_doc")!=x.get("doc_id") or x.get("searchable")!=1 or isinstance(x.get("searchable"),bool) or not isinstance(x.get("chunk_index"),int) or isinstance(x.get("chunk_index"),bool) or x["chunk_index"]<=0 or not isinstance(x.get("source_pages"),list) or len(x["source_pages"])!=1 or not isinstance(x["source_pages"][0],int) or isinstance(x["source_pages"][0],bool) or x["source_pages"][0]<=0 or x.get("challenge_role") not in {"gold","lexical_distractor"} for x in chunks): raise PolicyError("chunk schema")
  categories={k:sum(x.get("category")==k for x in cases) for k in CATEGORIES}
  if categories!=CATEGORIES: raise PolicyError("category distribution")
  by_id={x["id"]:x for x in chunks}; golds=[x for x in chunks if x["challenge_role"]=="gold"]; distractors=[x for x in chunks if x["challenge_role"]=="lexical_distractor"]
  if len(golds)!=32 or len(distractors)!=32: raise PolicyError("role count")
+ pairs={x["challenge_pair_id"] for x in chunks}
+ if len(pairs)!=32 or any(sum(x["challenge_pair_id"]==pair for x in chunks)!=2 or {x["challenge_role"] for x in chunks if x["challenge_pair_id"]==pair}!={"gold","lexical_distractor"} for pair in pairs): raise PolicyError("corpus pairs")
  query_set=set()
  for case in cases:
   q=norm(str(case.get("query","")))
-  if not q or q in query_set or any(token in q for token in ("sc_","chunk_","doc_")) or "\"" in str(case.get("query","")) or "「" in str(case.get("query","")): raise PolicyError("query policy")
+  if not q or q in query_set or any(token in q for token in ("sc_","chunk_","doc_",".pdf")) or re.search(r"\b[A-Za-z]+[-_]?[0-9]+\b",str(case.get("query",""))) or "\"" in str(case.get("query","")) or "「" in str(case.get("query","")): raise PolicyError("query policy")
   query_set.add(q)
   if case.get("answerable") is True:
    required={"case_id","category","challenge_category","query","query_type","topic_id","pair_id","gold_doc_ids","gold_chunk_ids","distractor_chunk_ids","expected_support_fact_id","answerable","expected_abstain","query_surface_terms","forbidden_gold_terms","required_gold_support_terms","required_distractor_overlap_terms","notes"}
@@ -74,7 +80,11 @@ def validate_rows(c:dict[str,Any], cases:list[dict[str,Any]], chunks:list[dict[s
   else:
    required={"case_id","category","challenge_category","query","query_type","topic_id","gold_doc_ids","gold_chunk_ids","distractor_chunk_ids","answerable","expected_abstain","notes"}
    if set(case)!=required or case["expected_abstain"] is not True or case["gold_doc_ids"] or case["gold_chunk_ids"] or case["distractor_chunk_ids"]: raise PolicyError("abstain schema")
- return {"case_count":len(cases),"answerable_count":sum(x["answerable"] for x in cases),"abstain_count":sum(not x["answerable"] for x in cases),"chunk_count":len(chunks),"gold_chunk_count":len(golds),"distractor_chunk_count":len(distractors),"category_counts":categories}
+ answerable=[x for x in cases if x.get("category") not in {"abstain_missing_fact","abstain_ambiguous_scope"}]
+ abstain=[x for x in cases if x.get("category") in {"abstain_missing_fact","abstain_ambiguous_scope"}]
+ if len(answerable)!=32 or len(abstain)!=8 or any(x.get("answerable") is not True or x.get("expected_abstain") is not False for x in answerable) or any(x.get("answerable") is not False or x.get("expected_abstain") is not True for x in abstain) or any(len({x[k] for x in answerable})!=32 for k in ("pair_id","topic_id","expected_support_fact_id")): raise PolicyError("case global invariants")
+ if {x["pair_id"] for x in answerable}!=pairs: raise PolicyError("orphan pair")
+ return {"case_count":len(cases),"answerable_count":len(answerable),"abstain_count":len(abstain),"chunk_count":len(chunks),"gold_chunk_count":len(golds),"distractor_chunk_count":len(distractors),"category_counts":categories}
 def source_fingerprints()->list[dict[str,str]]:
  return [{"path":p,"sha256":digest(ROOT/p)} for p in ["scripts/validate_semantic_challenge_set.py","tests/test_semantic_challenge_set.py"]]
 def report(c:dict[str,Any],cp:Path,cases:Path,chunks:Path,stats:dict[str,Any])->dict[str,Any]:

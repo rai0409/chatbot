@@ -25,3 +25,18 @@ def test_report_has_no_retrieval_metrics(tmp_path):
 def test_implementation_fingerprints(): assert all(x["sha256"]==v.digest(ROOT/x["path"]) for x in v.source_fingerprints())
 def test_baselines_unchanged(): assert v.digest(ROOT/"reports/current_retrieval_baseline.json")=="24d160979b05f2383db11033f1d830ca5e943bb75629a341fe9832ce2fc5672d"
 def test_roadmap_mentions_frozen_challenge(): assert "semantic challenge" in (ROOT/"docs/roadmaps/commercial-product-roadmap.md").read_text().lower()
+
+@pytest.mark.parametrize("query",["ABC123 の仕様を教えて","INV-12345 を確認したい","PR20 の扱いは","QX12 を探して","ID_987 を確認","「用語」を教えて","sc_chunk_01_gold を教えて"])
+def test_general_identifier_and_quoted_queries_fail(query):
+ c,a,b=data();a[0]={**a[0],"query":query}
+ with pytest.raises(v.PolicyError):v.validate_rows(c,a,b)
+
+@pytest.mark.parametrize("section,key,value",[("profile","extra",True),("inputs","extra",1),("fixed_embedding","extra",1),("construction_policy","extra",True),("promotion","extra",True),("future_acceptance_thresholds","extra",1),("future_acceptance_thresholds","metric_support_count",float("nan")),("future_acceptance_thresholds","metric_support_count",float("inf")),("future_acceptance_thresholds","metric_support_count",True)])
+def test_nested_contract_fail_closed(section,key,value):
+ c,a,b=data();c[section][key]=value
+ with pytest.raises((v.InputError,v.PolicyError)):v.validate_contract(c,CASES,CHUNKS)
+
+@pytest.mark.parametrize("field,value",[("source_pages",[True]),("source_pages",[0]),("chunk_index",True),("chunk_index",0),("searchable",True),("text","")])
+def test_chunk_schema_values_fail(field,value):
+ c,a,b=data();b[0]={**b[0],field:value}
+ with pytest.raises(v.PolicyError):v.validate_rows(c,a,b)

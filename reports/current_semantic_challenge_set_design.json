@@ -14,7 +14,7 @@
     "procedure_paraphrase": 6
   },
   "chunk_count": 64,
-  "contract_sha256": "95409affd2847a9297c2253aff65470b77f60e01fee8dd16a618605bcbf29e18",
+  "contract_sha256": "10173ee51297ad2b70045965cf8fe3fa120172e6d48fda98ccb158751949aa93",
   "design_status": "frozen_pre_evaluation",
   "distractor_chunk_count": 32,
   "external_network_attempt_count": 0,
@@ -53,18 +53,18 @@
   "implementation_sources": [
     {
       "path": "scripts/validate_semantic_challenge_set.py",
-      "sha256": "1a3e725e308095af1f2e796683116390b5da038a58cbd4b4a44f0feea1917e94"
+      "sha256": "01ad4b21aa2bef80519505d96907e614287650c6eda147b58dec515eff86a008"
     },
     {
       "path": "tests/test_semantic_challenge_set.py",
-      "sha256": "f4215351b68f0abc50dfaa98d37d6f5ba00b5a4716df1fdea6325b9ba149b052"
+      "sha256": "48f52540abd93effb834b422c21effe88e249607cfed559f9e46370184f9bcd4"
     }
   ],
   "inputs": {
     "cases_path": "eval/cases/semantic_challenge_cases.jsonl",
     "cases_sha256": "0d60e800c5de261ad8eb30855b31818d5c0c735f023818281210647f28a254cd",
     "chunks_path": "eval/cases/semantic_challenge_chunks.jsonl",
-    "chunks_sha256": "0b748f33dd57387e8fb53f00629e36bdc60bfed62fb382fc14664c5588966a0c"
+    "chunks_sha256": "9f2ec7aae8e74042e52362cb4c8e634867caf62af2db6629a294be4dfa34cab0"
   },
   "lexical_mismatch_validation_status": "passed",
   "model_loaded": false,
