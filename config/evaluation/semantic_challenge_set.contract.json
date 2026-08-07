@@ -14,7 +14,7 @@
     "cases_path": "eval/cases/semantic_challenge_cases.jsonl",
     "cases_sha256": "0d60e800c5de261ad8eb30855b31818d5c0c735f023818281210647f28a254cd",
     "chunks_path": "eval/cases/semantic_challenge_chunks.jsonl",
-    "chunks_sha256": "be9253661a05fd93989312724a04662367818786523653ae348e38f3bb7cbb84",
+    "chunks_sha256": "94882a25a8dbe3a6e5e13a20eb370d3ac2b2ff7c171bd8476746fa7afe4cbaba",
     "expected_case_count": 40,
     "expected_answerable_count": 32,
     "expected_abstain_count": 8,

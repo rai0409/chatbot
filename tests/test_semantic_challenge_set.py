@@ -40,3 +40,24 @@ def test_nested_contract_fail_closed(section,key,value):
 def test_chunk_schema_values_fail(field,value):
  c,a,b=data();b[0]={**b[0],field:value}
  with pytest.raises(v.PolicyError):v.validate_rows(c,a,b)
+
+@pytest.mark.parametrize("quote",['"用語"',"'用語'","「用語」","『用語』"])
+def test_all_exact_search_quote_pairs_fail(quote):
+ c,a,b=data();a[0]={**a[0],"query":quote}
+ with pytest.raises(v.PolicyError):v.validate_rows(c,a,b)
+@pytest.mark.parametrize("field",["pair_id","topic_id","expected_support_fact_id"])
+def test_answerable_global_identifiers_are_unique(field):
+ c,a,b=data();a[1]={**a[1],field:a[0][field]}
+ with pytest.raises(v.PolicyError):v.validate_rows(c,a,b)
+def test_abstain_challenge_category_must_match():
+ c,a,b=data();a[32]={**a[32],"challenge_category":"lexical_paraphrase"}
+ with pytest.raises(v.PolicyError):v.validate_rows(c,a,b)
+def test_report_contains_exact_construction_policy(tmp_path):
+ c,a,b=data();p=tmp_path/'report';r=v.run(C,CASES,CHUNKS,p);assert r['construction_policy']==c['construction_policy']
+def test_all_immutable_baselines():
+ expected={'reports/current_retrieval_baseline.json':'24d160979b05f2383db11033f1d830ca5e943bb75629a341fe9832ce2fc5672d','config/evaluation/real_vector_quality_baseline.contract.json':'31709e7351e7055d68a50e07c5ad9e8120b8e4b9b9009c91286a1b7778690d17','reports/current_real_vector_quality_baseline.json':'82eb9254751f6973c08b2b76dc55972b69abf5b62287471950b116f4cfcbc449','eval/cases/retrieval_cases.jsonl':'0ca8662bddaac728aa3b91791923cc7a7f1ff105e6b5c657669cb5413f75d30e','eval/cases/smoke_chunks.jsonl':'74a890a597b8b6a84f5f437f5c37ad932a371d0c3e067e3807eeb94f338d7550'}
+ assert all(v.digest(ROOT/p)==h for p,h in expected.items())
+@pytest.mark.parametrize("value",[True,False,None])
+def test_numeric_threshold_rejects_non_numbers(value):
+ c,a,b=data();c['future_acceptance_thresholds']['dense_query_error_max']=value
+ with pytest.raises(v.InputError):v.validate_contract(c,CASES,CHUNKS)

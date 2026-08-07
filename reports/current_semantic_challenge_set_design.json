@@ -28,7 +28,7 @@
     "quoted_term_queries_allowed": false,
     "trivial_distractor_allowed": false
   },
-  "contract_sha256": "31963256016f124443ac4b11f16b5e108bfaf5a9b3dea7e642d96455ae90043e",
+  "contract_sha256": "cffbacb9f725e1330afe27681d7c7b7c0e7ee877db95e7044275b724377abc8f",
   "design_status": "frozen_pre_evaluation",
   "distractor_chunk_count": 32,
   "external_network_attempt_count": 0,
@@ -71,14 +71,14 @@
     },
     {
       "path": "tests/test_semantic_challenge_set.py",
-      "sha256": "48f52540abd93effb834b422c21effe88e249607cfed559f9e46370184f9bcd4"
+      "sha256": "68d4a5ef4a32847ebfe5f6f82dda83fedee288dc1adf225831b7a7dd7a2b88f4"
     }
   ],
   "inputs": {
     "cases_path": "eval/cases/semantic_challenge_cases.jsonl",
     "cases_sha256": "0d60e800c5de261ad8eb30855b31818d5c0c735f023818281210647f28a254cd",
     "chunks_path": "eval/cases/semantic_challenge_chunks.jsonl",
-    "chunks_sha256": "be9253661a05fd93989312724a04662367818786523653ae348e38f3bb7cbb84"
+    "chunks_sha256": "94882a25a8dbe3a6e5e13a20eb370d3ac2b2ff7c171bd8476746fa7afe4cbaba"
   },
   "lexical_mismatch_validation_status": "passed",
   "model_loaded": false,
