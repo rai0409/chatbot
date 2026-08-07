@@ -25,6 +25,7 @@
 - deterministic regression baseline と real-vector quality baseline は別契約であり、前者はlive dense-search品質の証拠ではない。
 - fixed local assetによるreal dense pathは確認済み。現fixtureではdense gold hit@5は20/20、MRR@5は0.9375、nDCG@5は0.9530803155822426、hybrid/hybrid-rerankはともに1.0。
 - ただしBM25 missをdense/hybridが固有回復するcaseはなく、semantic incremental contributionは未実証。lexical-mismatch/paraphraseを含むsemantic challenge setで無回帰の利益を示すまで、production promotionは主張しない。
+- semantic challenge set の設計は凍結済みで、既存 deterministic / real-vector baseline fixture から独立している。lexical-mismatch、高重複distractor、abstain case と将来の受入閾値を検索実行前に固定した。challenge-set の検索結果は未観測で、semantic incremental value は未証明、product promotion は引き続きblockedである。次段階は凍結済みchallenge setに対する隔離real-vector実行である。
 
 ### 実装はあるが運用未実証
 
