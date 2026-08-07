@@ -1,0 +1,86 @@
+{
+  "abstain_count": 8,
+  "answerable_count": 32,
+  "case_count": 40,
+  "category_counts": {
+    "abbreviation_expansion": 4,
+    "abstain_ambiguous_scope": 4,
+    "abstain_missing_fact": 4,
+    "business_jargon_plain_language": 6,
+    "concept_description": 4,
+    "condition_outcome_paraphrase": 3,
+    "lexical_paraphrase": 6,
+    "negation_exception": 3,
+    "procedure_paraphrase": 6
+  },
+  "chunk_count": 64,
+  "contract_sha256": "95409affd2847a9297c2253aff65470b77f60e01fee8dd16a618605bcbf29e18",
+  "design_status": "frozen_pre_evaluation",
+  "distractor_chunk_count": 32,
+  "external_network_attempt_count": 0,
+  "fixed_embedding": {
+    "asset_files_sha256": "cede7177dd492d9d7776484dce8d030f0cd127eae3297305991de91386394d5a",
+    "dimension": 384,
+    "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "normalization": "l2",
+    "provider": "local",
+    "revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+    "runtime_network_allowed": false,
+    "trust_remote_code": false
+  },
+  "future_acceptance_thresholds": {
+    "abstain_expected_count": 8,
+    "abstain_pass_min": 6,
+    "dense_query_error_max": 0,
+    "dense_zero_candidate_max": 0,
+    "external_network_attempt_count": 0,
+    "hybrid_gold_hit_min_at_5": 28,
+    "hybrid_mean_mrr_min_at_5": 0.75,
+    "hybrid_mean_ndcg_min_at_5": 0.8,
+    "hybrid_mrr_delta_over_bm25_min": 0.1,
+    "hybrid_ndcg_delta_over_bm25_min": 0.1,
+    "hybrid_regression_case_max_at_5": 0,
+    "hybrid_regression_definition": "answerable metric-supported case where BM25 hits a declared gold ID at eval_k and hybrid misses all declared gold IDs at eval_k",
+    "hybrid_rerank_mrr_delta_over_hybrid_min": -0.02,
+    "hybrid_rerank_ndcg_delta_over_hybrid_min": -0.02,
+    "hybrid_unique_gain_case_min_at_5": 6,
+    "metric_support_count": 32,
+    "semantic_gain_case_min_at_5": 8,
+    "semantic_gain_definition": "answerable metric-supported case where BM25 misses all declared gold IDs at eval_k and dense or hybrid hits a declared gold ID at eval_k"
+  },
+  "gold_chunk_count": 32,
+  "high_overlap_distractor_validation_status": "passed",
+  "implementation_sources": [
+    {
+      "path": "scripts/validate_semantic_challenge_set.py",
+      "sha256": "1a3e725e308095af1f2e796683116390b5da038a58cbd4b4a44f0feea1917e94"
+    },
+    {
+      "path": "tests/test_semantic_challenge_set.py",
+      "sha256": "f4215351b68f0abc50dfaa98d37d6f5ba00b5a4716df1fdea6325b9ba149b052"
+    }
+  ],
+  "inputs": {
+    "cases_path": "eval/cases/semantic_challenge_cases.jsonl",
+    "cases_sha256": "0d60e800c5de261ad8eb30855b31818d5c0c735f023818281210647f28a254cd",
+    "chunks_path": "eval/cases/semantic_challenge_chunks.jsonl",
+    "chunks_sha256": "0b748f33dd57387e8fb53f00629e36bdc60bfed62fb382fc14664c5588966a0c"
+  },
+  "lexical_mismatch_validation_status": "passed",
+  "model_loaded": false,
+  "pair_integrity_status": "passed",
+  "profile_name": "retrieval_semantic_challenge_v1",
+  "promotion": {
+    "challenge_set_design_complete": true,
+    "challenge_set_evaluation_complete": false,
+    "next_required_evidence": "real_vector_challenge_evaluation",
+    "product_promotion_eligible": false,
+    "semantic_incremental_value_status": "not_evaluated"
+  },
+  "real_generation": false,
+  "real_vector_executed": false,
+  "retrieval_outcomes_observed": false,
+  "schema_version": "semantic_challenge_set_design.v1",
+  "validation_errors": [],
+  "validation_status": "passed"
+}

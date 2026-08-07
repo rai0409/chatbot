@@ -1,0 +1,96 @@
+{
+  "schema_version": "semantic_challenge_set_contract.v1",
+  "profile": {
+    "name": "retrieval_semantic_challenge_v1",
+    "purpose": "precommitted evaluation of incremental semantic retrieval value",
+    "design_status": "frozen_pre_evaluation",
+    "retrieval_outcomes_observed": false,
+    "real_vector_executed": false,
+    "real_generation": false,
+    "ordinary_ci_required": false,
+    "release_gate_required": true
+  },
+  "inputs": {
+    "cases_path": "eval/cases/semantic_challenge_cases.jsonl",
+    "cases_sha256": "0d60e800c5de261ad8eb30855b31818d5c0c735f023818281210647f28a254cd",
+    "chunks_path": "eval/cases/semantic_challenge_chunks.jsonl",
+    "chunks_sha256": "0b748f33dd57387e8fb53f00629e36bdc60bfed62fb382fc14664c5588966a0c",
+    "expected_case_count": 40,
+    "expected_answerable_count": 32,
+    "expected_abstain_count": 8,
+    "expected_chunk_count": 64,
+    "expected_gold_chunk_count": 32,
+    "expected_distractor_chunk_count": 32,
+    "expected_mode_count": 4,
+    "expected_row_count": 160,
+    "top_k": 20,
+    "eval_k": 5,
+    "tenant_id": "default",
+    "modes": [
+      "bm25_only",
+      "dense_only",
+      "hybrid",
+      "hybrid_rerank"
+    ]
+  },
+  "fixed_embedding": {
+    "provider": "local",
+    "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+    "dimension": 384,
+    "normalization": "l2",
+    "asset_files_sha256": "cede7177dd492d9d7776484dce8d030f0cd127eae3297305991de91386394d5a",
+    "runtime_network_allowed": false,
+    "trust_remote_code": false
+  },
+  "category_counts": {
+    "lexical_paraphrase": 6,
+    "business_jargon_plain_language": 6,
+    "procedure_paraphrase": 6,
+    "abbreviation_expansion": 4,
+    "concept_description": 4,
+    "negation_exception": 3,
+    "condition_outcome_paraphrase": 3,
+    "abstain_missing_fact": 4,
+    "abstain_ambiguous_scope": 4
+  },
+  "construction_policy": {
+    "authored_before_retrieval_execution": true,
+    "model_output_used_for_selection": false,
+    "exact_identifier_queries_allowed": false,
+    "quoted_term_queries_allowed": false,
+    "paired_high_overlap_distractor_required": true,
+    "gold_surface_mismatch_required": true,
+    "abstain_cases_required": true,
+    "proprietary_content_allowed": false,
+    "external_network_allowed": false,
+    "post_observation_case_editing_allowed": false
+  },
+  "future_acceptance_thresholds": {
+    "metric_support_count": 32,
+    "abstain_expected_count": 8,
+    "dense_query_error_max": 0,
+    "dense_zero_candidate_max": 0,
+    "semantic_gain_case_min_at_5": 8,
+    "hybrid_unique_gain_case_min_at_5": 6,
+    "hybrid_regression_case_max_at_5": 0,
+    "hybrid_gold_hit_min_at_5": 28,
+    "hybrid_mean_mrr_min_at_5": 0.75,
+    "hybrid_mean_ndcg_min_at_5": 0.8,
+    "hybrid_mrr_delta_over_bm25_min": 0.1,
+    "hybrid_ndcg_delta_over_bm25_min": 0.1,
+    "hybrid_rerank_mrr_delta_over_hybrid_min": -0.02,
+    "hybrid_rerank_ndcg_delta_over_hybrid_min": -0.02,
+    "abstain_pass_min": 6,
+    "external_network_attempt_count": 0,
+    "semantic_gain_definition": "answerable metric-supported case where BM25 misses all declared gold IDs at eval_k and dense or hybrid hits a declared gold ID at eval_k",
+    "hybrid_regression_definition": "answerable metric-supported case where BM25 hits a declared gold ID at eval_k and hybrid misses all declared gold IDs at eval_k"
+  },
+  "promotion": {
+    "product_promotion_eligible": false,
+    "challenge_set_design_complete": true,
+    "challenge_set_evaluation_complete": false,
+    "semantic_incremental_value_status": "not_evaluated",
+    "next_required_evidence": "real_vector_challenge_evaluation"
+  }
+}
