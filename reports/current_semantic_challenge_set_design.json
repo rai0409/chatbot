@@ -14,7 +14,21 @@
     "procedure_paraphrase": 6
   },
   "chunk_count": 64,
-  "contract_sha256": "10173ee51297ad2b70045965cf8fe3fa120172e6d48fda98ccb158751949aa93",
+  "construction_policy": {
+    "abstain_cases_required": true,
+    "authored_before_retrieval_execution": true,
+    "exact_identifier_queries_allowed": false,
+    "external_network_allowed": false,
+    "gold_surface_mismatch_required": true,
+    "model_output_used_for_selection": false,
+    "paired_high_overlap_distractor_required": true,
+    "plausible_same_domain_distractor_required": true,
+    "post_observation_case_editing_allowed": false,
+    "proprietary_content_allowed": false,
+    "quoted_term_queries_allowed": false,
+    "trivial_distractor_allowed": false
+  },
+  "contract_sha256": "31963256016f124443ac4b11f16b5e108bfaf5a9b3dea7e642d96455ae90043e",
   "design_status": "frozen_pre_evaluation",
   "distractor_chunk_count": 32,
   "external_network_attempt_count": 0,
@@ -53,7 +67,7 @@
   "implementation_sources": [
     {
       "path": "scripts/validate_semantic_challenge_set.py",
-      "sha256": "01ad4b21aa2bef80519505d96907e614287650c6eda147b58dec515eff86a008"
+      "sha256": "3be0ddc1fde7a9b1ad2530ce77a44c741a2758e5ff0bd1a778bc6b6f54f803de"
     },
     {
       "path": "tests/test_semantic_challenge_set.py",
@@ -64,7 +78,7 @@
     "cases_path": "eval/cases/semantic_challenge_cases.jsonl",
     "cases_sha256": "0d60e800c5de261ad8eb30855b31818d5c0c735f023818281210647f28a254cd",
     "chunks_path": "eval/cases/semantic_challenge_chunks.jsonl",
-    "chunks_sha256": "9f2ec7aae8e74042e52362cb4c8e634867caf62af2db6629a294be4dfa34cab0"
+    "chunks_sha256": "be9253661a05fd93989312724a04662367818786523653ae348e38f3bb7cbb84"
   },
   "lexical_mismatch_validation_status": "passed",
   "model_loaded": false,

@@ -66,7 +66,8 @@ def validate_rows(c:dict[str,Any], cases:list[dict[str,Any]], chunks:list[dict[s
  query_set=set()
  for case in cases:
   q=norm(str(case.get("query","")))
-  if not q or q in query_set or any(token in q for token in ("sc_","chunk_","doc_",".pdf")) or re.search(r"\b[A-Za-z]+[-_]?[0-9]+\b",str(case.get("query",""))) or "\"" in str(case.get("query","")) or "「" in str(case.get("query","")): raise PolicyError("query policy")
+  raw=str(case.get("query",""))
+  if not q or q in query_set or any(token in q for token in ("sc_","chunk_","doc_",".pdf")) or re.search(r"\b[A-Za-z]+[-_]?[0-9]+\b",raw) or re.search(r"(?:\"[^\"]+\"|'[^']+'|「[^」]+」|『[^』]+』|“[^”]+”|‘[^’]+’)",raw): raise PolicyError("query policy")
   query_set.add(q)
   if case.get("answerable") is True:
    required={"case_id","category","challenge_category","query","query_type","topic_id","pair_id","gold_doc_ids","gold_chunk_ids","distractor_chunk_ids","expected_support_fact_id","answerable","expected_abstain","query_surface_terms","forbidden_gold_terms","required_gold_support_terms","required_distractor_overlap_terms","notes"}
@@ -79,7 +80,7 @@ def validate_rows(c:dict[str,Any], cases:list[dict[str,Any]], chunks:list[dict[s
    if any(not norm(x) or norm(x) not in q for x in surface) or any(norm(x) in gt for x in forbidden) or any(norm(x) not in gt or norm(x) in q or norm(x) in dt for x in support) or any(norm(x) not in q or norm(x) not in dt for x in overlap) or not any(norm(x) in dt for x in surface): raise PolicyError("lexical mismatch: "+case["case_id"])
   else:
    required={"case_id","category","challenge_category","query","query_type","topic_id","gold_doc_ids","gold_chunk_ids","distractor_chunk_ids","answerable","expected_abstain","notes"}
-   if set(case)!=required or case["expected_abstain"] is not True or case["gold_doc_ids"] or case["gold_chunk_ids"] or case["distractor_chunk_ids"]: raise PolicyError("abstain schema")
+   if set(case)!=required or case["challenge_category"]!=case["category"] or case["expected_abstain"] is not True or case["gold_doc_ids"] or case["gold_chunk_ids"] or case["distractor_chunk_ids"]: raise PolicyError("abstain schema")
  answerable=[x for x in cases if x.get("category") not in {"abstain_missing_fact","abstain_ambiguous_scope"}]
  abstain=[x for x in cases if x.get("category") in {"abstain_missing_fact","abstain_ambiguous_scope"}]
  if len(answerable)!=32 or len(abstain)!=8 or any(x.get("answerable") is not True or x.get("expected_abstain") is not False for x in answerable) or any(x.get("answerable") is not False or x.get("expected_abstain") is not True for x in abstain) or any(len({x[k] for x in answerable})!=32 for k in ("pair_id","topic_id","expected_support_fact_id")): raise PolicyError("case global invariants")
@@ -88,7 +89,7 @@ def validate_rows(c:dict[str,Any], cases:list[dict[str,Any]], chunks:list[dict[s
 def source_fingerprints()->list[dict[str,str]]:
  return [{"path":p,"sha256":digest(ROOT/p)} for p in ["scripts/validate_semantic_challenge_set.py","tests/test_semantic_challenge_set.py"]]
 def report(c:dict[str,Any],cp:Path,cases:Path,chunks:Path,stats:dict[str,Any])->dict[str,Any]:
- return {"schema_version":"semantic_challenge_set_design.v1","profile_name":c["profile"]["name"],"design_status":"frozen_pre_evaluation","retrieval_outcomes_observed":False,"real_vector_executed":False,"model_loaded":False,"real_generation":False,"external_network_attempt_count":0,"contract_sha256":digest(cp),"inputs":{"cases_path":c["inputs"]["cases_path"],"cases_sha256":digest(cases),"chunks_path":c["inputs"]["chunks_path"],"chunks_sha256":digest(chunks)},**stats,"pair_integrity_status":"passed","lexical_mismatch_validation_status":"passed","high_overlap_distractor_validation_status":"passed","fixed_embedding":c["fixed_embedding"],"future_acceptance_thresholds":c["future_acceptance_thresholds"],"promotion":c["promotion"],"implementation_sources":source_fingerprints(),"validation_status":"passed","validation_errors":[]}
+ return {"schema_version":"semantic_challenge_set_design.v1","profile_name":c["profile"]["name"],"design_status":"frozen_pre_evaluation","retrieval_outcomes_observed":False,"real_vector_executed":False,"model_loaded":False,"real_generation":False,"external_network_attempt_count":0,"contract_sha256":digest(cp),"inputs":{"cases_path":c["inputs"]["cases_path"],"cases_sha256":digest(cases),"chunks_path":c["inputs"]["chunks_path"],"chunks_sha256":digest(chunks)},**stats,"pair_integrity_status":"passed","lexical_mismatch_validation_status":"passed","high_overlap_distractor_validation_status":"passed","construction_policy":c["construction_policy"],"fixed_embedding":c["fixed_embedding"],"future_acceptance_thresholds":c["future_acceptance_thresholds"],"promotion":c["promotion"],"implementation_sources":source_fingerprints(),"validation_status":"passed","validation_errors":[]}
 def run(contract:Path,cases:Path,chunks:Path,output:Path|None)->dict[str,Any]:
  c=load_json(contract); validate_contract(c,cases,chunks); stats=validate_rows(c,load_lines(cases),load_lines(chunks)); result=report(c,contract,cases,chunks,stats)
  if output: output.write_text(json.dumps(result,ensure_ascii=False,sort_keys=True,indent=2)+"\n",encoding="utf-8")
