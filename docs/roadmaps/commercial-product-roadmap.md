@@ -20,6 +20,12 @@
 - review workflow対象3テストは27 passed（直近確認）。
 - 全pytestは現在のPython asyncio cross-thread wakeup障害により未完走である。
 
+### real-vector品質baseline（契約分離）
+
+- deterministic regression baseline と real-vector quality baseline は別契約であり、前者はlive dense-search品質の証拠ではない。
+- fixed local assetによるreal dense pathは確認済み。現fixtureではdense gold hit@5は20/20、MRR@5は0.9375、nDCG@5は0.9530803155822426、hybrid/hybrid-rerankはともに1.0。
+- ただしBM25 missをdense/hybridが固有回復するcaseはなく、semantic incremental contributionは未実証。lexical-mismatch/paraphraseを含むsemantic challenge setで無回帰の利益を示すまで、production promotionは主張しない。
+
 ### 実装はあるが運用未実証
 
 - auth、tenant、audit、review queue、ingestion/promotion、chat UI、OIDC関連実装。
