@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, Sequence
 
 from eval import approved_similar_candidate_runner
 from rag_core import approved_similar

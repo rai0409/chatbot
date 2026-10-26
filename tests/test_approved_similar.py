@@ -493,7 +493,7 @@ def test_search_debug_exposes_candidates_without_chat_routing(monkeypatch):
     from webapi import main
 
     monkeypatch.setattr(main, "_embedding_client", lambda: None)
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda query: None)
+    monkeypatch.setattr(main, "_approved_qa_lookup", lambda query, **kwargs: None)
     monkeypatch.setattr(main, "append_audit_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         main,

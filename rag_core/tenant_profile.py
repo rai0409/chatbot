@@ -95,6 +95,10 @@ def validate_tenant_profile_mapping(
             for allowed in allowed_profiles:
                 if available and allowed not in available:
                     errors.append(f"tenants.{key}.allowed_profiles contains unknown profile: {allowed}")
+                if status in {"active", "pilot"} and allowed in _UNSAFE_DEFAULT_PROFILES:
+                    errors.append(
+                        f"tenants.{key}.allowed_profiles must not include dev_debug or evaluation for runtime tenants"
+                    )
             if profile and profile not in allowed_profiles:
                 errors.append(f"tenants.{key}.profile must be included in allowed_profiles")
         if status in {"active", "pilot"} and profile in _UNSAFE_DEFAULT_PROFILES:
@@ -177,7 +181,11 @@ def resolve_tenant_product_profile(
         return base
 
     if requested:
-        if requested in allowed_profiles and _profile_is_available_or_unchecked(requested, available):
+        if (
+            requested in allowed_profiles
+            and requested not in _UNSAFE_DEFAULT_PROFILES
+            and _profile_is_available_or_unchecked(requested, available)
+        ):
             base["resolved_profile"] = requested
             base["decision"] = "resolved"
             base["reasons"] = ["requested_profile_allowed"]

@@ -6,6 +6,12 @@
 # and appends a size-rotated log line. Exits with the alert checker's code
 # (0 OK / 1 WARN / 2 CRITICAL) so systemd/cron can react.
 #
+# Optional (stage 9): KURADEN_METRICS_TOKEN (or METRICS_TOKEN) is sent as a
+# bearer header (production /metrics requires it); KURADEN_FRESHNESS_MANIFEST
+# runs scripts/check_freshness.py (action needed -> WARN); KURADEN_VERIFY_AUDIT
+# =true runs scripts/verify_audit_chain.py (broken chain -> CRITICAL). The
+# exit code is the worst of all checks.
+#
 # Local-only: no Docker, no deploy, no external network beyond the local
 # /metrics endpoint. Never reads .env; never prints secrets (the snapshot and
 # checker output carry only safe aggregate metrics).
@@ -47,7 +53,13 @@ SNAP_FILE="$OUT_DIR/snapshots/snapshot_${TS}_${RANDOM}${RANDOM}.json"
 if [[ -n "$SNAPSHOT" ]]; then
   cp "$SNAPSHOT" "$SNAP_FILE"
 else
-  if ! curl -fsS "$METRICS_URL" -o "$SNAP_FILE" 2>/dev/null; then
+  METRICS_BEARER="${KURADEN_METRICS_TOKEN:-${METRICS_TOKEN:-}}"
+  CURL_CONFIG=""
+  if [[ -n "$METRICS_BEARER" ]]; then
+    # Passed on stdin, not argv, so the token never shows in the process list.
+    CURL_CONFIG="header = \"Authorization: Bearer ${METRICS_BEARER}\""
+  fi
+  if ! printf '%s\n' "$CURL_CONFIG" | curl -K - -fsS "$METRICS_URL" -o "$SNAP_FILE" 2>/dev/null; then
     echo "${TS} ERROR could_not_fetch_metrics" >> "$OUT_DIR/monitor.log"
     exit 2
   fi
@@ -64,6 +76,20 @@ set +e
 "$PYTHON" scripts/alert_check.py "$SNAP_FILE" > "$OUT_DIR/last_result.txt" 2>&1
 CODE=$?
 set -e
+
+# Optional extra checks; their output goes to last_result.txt (no secrets).
+if [[ -n "${KURADEN_FRESHNESS_MANIFEST:-}" ]]; then
+  if ! "$PYTHON" scripts/check_freshness.py --manifest "$KURADEN_FRESHNESS_MANIFEST" >> "$OUT_DIR/last_result.txt" 2>&1; then
+    echo "EXTRA: freshness WARN" >> "$OUT_DIR/last_result.txt"
+    if (( CODE < 1 )); then CODE=1; fi
+  fi
+fi
+if [[ "${KURADEN_VERIFY_AUDIT:-}" == "true" ]]; then
+  if ! "$PYTHON" scripts/verify_audit_chain.py >> "$OUT_DIR/last_result.txt" 2>&1; then
+    echo "EXTRA: audit_chain CRITICAL" >> "$OUT_DIR/last_result.txt"
+    CODE=2
+  fi
+fi
 
 OVERALL="$(grep -m1 '^OVERALL:' "$OUT_DIR/last_result.txt" | awk '{print $2}' || echo UNKNOWN)"
 

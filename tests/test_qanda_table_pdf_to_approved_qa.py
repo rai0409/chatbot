@@ -92,7 +92,7 @@ def test_deterministic_qa_id_and_default_status():
     assert one["qa_id"] == two["qa_id"]
     assert one["status"] == "draft"
     assert one["normalized_question"] == "「佐渡市が指定するアンケートシステム」はどのようなシステムでしょうか。"
-    assert one["approved_citations"][0]["chunk_id"] == "tourism_q006"
+    assert one["approved_citations"][0]["chunk_id"] == "qanda_q006"
     assert one["source_question_no"] == 6
     assert one["question_item"] == "仕様書 4.内容 (2)調査手法"
 

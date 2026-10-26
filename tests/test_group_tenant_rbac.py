@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 import config
 from rag_core import answer_cache
 from webapi import main, metrics_registry, oidc_auth, rbac
-from webapi.api_auth import ApiAuthContext, enforce_tenant_authorization
+from webapi.api_auth import ApiAuthContext
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")

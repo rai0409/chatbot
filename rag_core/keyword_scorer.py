@@ -51,7 +51,11 @@ _PROCEDURE_TERMS = {
     "申請",
     "更新",
 }
-_FAQ_TERMS = {"ですか", "ますか", "どうしたら", "何ですか", "なぜ", "いつ", "どこ"}
+_FAQ_TERMS = {
+    "ですか", "ますか", "どうしたら", "何ですか", "なぜ", "いつ", "どこ",
+    # colloquial question forms
+    "って何", "ってなに", "とは", "教えて", "知りたい", "かな", "だっけ", "どうなる", "どうすれば",
+}
 
 
 def _normalize(text: Any) -> str:
@@ -94,8 +98,20 @@ def _extract_code_like_tokens(text: str) -> List[str]:
     return _unique_preserve(tokens)
 
 
+_COUNTER_SUFFIX_RE = re.compile(r"\d+(?:年度?|月|日|時|分|円|件|人|名|個|回|%|歳|日間|ヶ月|か月)$")
+
+
 def _identifier_terms(text: str) -> List[str]:
-    return [tok for tok in _extract_code_like_tokens(text) if re.search(r"\d", tok)]
+    # An identifier mixes letters and digits (PR2, ABC-1234). Plain numbers,
+    # years and counted amounts (2024年, 15件, 3日) are not identifiers.
+    out = []
+    for tok in _extract_code_like_tokens(text):
+        if not (re.search(r"\d", tok) and re.search(r"[a-z]", tok)):
+            continue
+        if _COUNTER_SUFFIX_RE.fullmatch(tok):
+            continue
+        out.append(tok)
+    return out
 
 
 def _field_text(value: Any) -> str:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -11,7 +10,6 @@ import config
 from rag_core import answer_cache
 from webapi import main, metrics_registry
 from webapi.api_auth import (
-    ApiAuthContext,
     enforce_tenant_authorization,
     require_api_auth_headers,
 )
@@ -21,6 +19,7 @@ def _clear_auth_env(monkeypatch):
     monkeypatch.delenv("API_AUTH_ENABLED", raising=False)
     monkeypatch.delenv("API_AUTH_KEYS", raising=False)
     monkeypatch.delenv("API_AUTH_TENANT_MAP", raising=False)
+    monkeypatch.delenv("API_AUTH_ALLOW_ANY_TENANT_WITHOUT_MAP", raising=False)
     monkeypatch.delenv("SEARCH_DEBUG_ENABLED", raising=False)
     monkeypatch.delenv("ADMIN_AUTH_ENABLED", raising=False)
     monkeypatch.delenv("ADMIN_AUTH_TOKEN", raising=False)
@@ -42,7 +41,7 @@ def test_auth_disabled_ignores_tenant_map(monkeypatch):
     enforce_tenant_authorization(ctx, None)
 
 
-def test_enabled_without_tenant_map_preserves_legacy_behavior(monkeypatch):
+def test_enabled_without_tenant_map_allows_only_default_tenant(monkeypatch):
     _clear_auth_env(monkeypatch)
     monkeypatch.setenv("API_AUTH_ENABLED", "true")
     monkeypatch.setenv("API_AUTH_KEYS", "key-a")
@@ -50,6 +49,22 @@ def test_enabled_without_tenant_map_preserves_legacy_behavior(monkeypatch):
     ctx = require_api_auth_headers({"X-Api-Key": "key-a"})
 
     assert ctx.authenticated is True
+    assert ctx.tenant_authorization_enabled is True
+    enforce_tenant_authorization(ctx, "default")
+    enforce_tenant_authorization(ctx, None)
+    with pytest.raises(HTTPException) as exc:
+        enforce_tenant_authorization(ctx, "tenant_b")
+    assert exc.value.status_code == 403
+
+
+def test_enabled_without_tenant_map_legacy_flag_allows_any_tenant(monkeypatch):
+    _clear_auth_env(monkeypatch)
+    monkeypatch.setenv("API_AUTH_ENABLED", "true")
+    monkeypatch.setenv("API_AUTH_KEYS", "key-a")
+    monkeypatch.setenv("API_AUTH_ALLOW_ANY_TENANT_WITHOUT_MAP", "true")
+
+    ctx = require_api_auth_headers({"X-Api-Key": "key-a"})
+
     assert ctx.tenant_authorization_enabled is False
     enforce_tenant_authorization(ctx, "tenant_a")
     enforce_tenant_authorization(ctx, "tenant_b")
@@ -267,8 +282,29 @@ def test_chat_unmapped_key_fails_closed(monkeypatch, tmp_path):
     assert fakes.pipeline.calls == []
 
 
-def test_chat_without_tenant_map_preserves_legacy_endpoint_behavior(monkeypatch, tmp_path):
+def test_chat_without_tenant_map_refuses_other_tenants(monkeypatch, tmp_path):
+    fakes = _setup_endpoint_env(monkeypatch, tmp_path, tenant_map=None)
+    client = TestClient(main.app)
+
+    denied = client.post(
+        "/chat",
+        json={"question": "質問です", "tenant_id": "tenant_b"},
+        headers={"X-Api-Key": "key-a"},
+    )
+    allowed = client.post(
+        "/chat",
+        json={"question": "質問です", "tenant_id": "default"},
+        headers={"X-Api-Key": "key-a"},
+    )
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    assert len(fakes.pipeline.calls) == 1
+
+
+def test_chat_without_tenant_map_legacy_flag_keeps_old_behavior(monkeypatch, tmp_path):
     _setup_endpoint_env(monkeypatch, tmp_path, tenant_map=None)
+    monkeypatch.setenv("API_AUTH_ALLOW_ANY_TENANT_WITHOUT_MAP", "true")
     client = TestClient(main.app)
 
     resp = client.post(

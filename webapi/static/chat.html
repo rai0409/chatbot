@@ -7,151 +7,218 @@
 <title>蔵伝 / KuraDen — 社内ナレッジ アシスタント</title>
 <style>
   :root {
-    --fg:#1f2933; --muted:#6b7684; --line:#e2e7ee; --accent:#0b6b5b;
-    --accent-weak:#e7f3f0; --warn:#8a5a00; --warn-bg:#fff8e6; --err:#a12a2a;
-    --bg:#f3f5f8; --panel:#ffffff; --sidebar:#10231f;
+    --fg:#1f2933; --muted:#667085; --line:#e3e8ef; --accent:#0b6b5b; --accent-fg:#ffffff;
+    --accent-weak:#e8f4f1; --warn:#7a4f00; --warn-bg:#fff7e0; --warn-line:#efd595;
+    --err:#a12a2a; --err-bg:#fdecec; --bg:#f4f6f9; --panel:#ffffff; --panel-2:#f8fafc;
+    --sidebar:#0f1f1c; --sidebar-fg:#e5eeeb; --sidebar-muted:#8fa5a0; --chip:#eef2f6;
+    --shadow:0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+    --radius:12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg:#e6e9ef; --muted:#9aa4b2; --line:#2a313c; --accent-weak:#12302a; --warn:#f3cf7a;
+      --warn-bg:#2b2410; --warn-line:#5a4a1c; --err:#ff9b9b; --err-bg:#3a1717; --bg:#12161c;
+      --panel:#181d24; --panel-2:#1d232b; --sidebar:#0b1412; --chip:#232a33;
+      --shadow:0 1px 2px rgba(0,0,0,.4);
+    }
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body { font-family: system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif;
-         color: var(--fg); background: var(--bg); }
-  .app { display: grid; grid-template-columns: 260px 1fr 320px; height: 100vh; }
+         color: var(--fg); background: var(--bg); font-size: 15px; line-height: 1.7; }
+  button { font: inherit; color: inherit; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .app { display: grid; grid-template-columns: 272px minmax(0, 1fr) 360px; height: 100vh; }
   /* sidebar */
-  .sidebar { background: var(--sidebar); color: #e7efec; display: flex; flex-direction: column; }
-  .brand { padding: 16px; border-bottom: 1px solid rgba(255,255,255,.1); }
-  .brand .name { font-weight: 700; font-size: 15px; }
-  .brand .sub { font-size: 11px; color: #9fb4ad; margin-top: 2px; }
-  .new-chat { margin: 12px; padding: 9px 12px; border: 1px solid rgba(255,255,255,.18);
-              background: transparent; color: #e7efec; border-radius: 8px; cursor: pointer; font-size: 13px; }
-  .conv-list { flex: 1; overflow: auto; padding: 4px 8px; }
-  .conv-list .placeholder { color: #7f948d; font-size: 12px; padding: 8px 6px; }
-  .conv-item { padding: 8px 10px; border-radius: 6px; font-size: 13px; color: #cfe0db; cursor: default; }
-  .sidebar-foot { padding: 10px 12px; border-top: 1px solid rgba(255,255,255,.1); font-size: 11px; color: #7f948d; }
+  .sidebar { background: var(--sidebar); color: var(--sidebar-fg); display: flex; flex-direction: column; min-height: 0; }
+  .brand { padding: 18px 16px 12px; }
+  .brand .name { font-weight: 700; font-size: 16px; }
+  .brand .sub { font-size: 11px; color: var(--sidebar-muted); margin-top: 2px; }
+  .new-chat { margin: 4px 12px 10px; padding: 9px 12px; border: 1px solid rgba(255,255,255,.18); background: transparent;
+              color: var(--sidebar-fg); border-radius: 10px; cursor: pointer; text-align: left; font-size: 14px; text-decoration: none; display: block; }
+  .new-chat:hover { background: rgba(255,255,255,.06); }
+  .side-label { font-size: 11px; color: var(--sidebar-muted); padding: 8px 16px 4px; letter-spacing: .04em; }
+  .conv-list { flex: 1; overflow: auto; padding: 0 8px 8px; min-height: 0; }
+  .conv-list .placeholder { color: var(--sidebar-muted); font-size: 12px; padding: 8px; line-height: 1.5; }
+  .conv-item { display: block; width: 100%; text-align: left; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent;
+               color: #cfe0db; cursor: pointer; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv-item:hover, .conv-item[aria-current="true"] { background: rgba(255,255,255,.08); color: #fff; }
+  .conv-item .when { display: block; font-size: 11px; color: var(--sidebar-muted); }
+  .sidebar-foot { padding: 10px 14px 14px; border-top: 1px solid rgba(255,255,255,.08); font-size: 11px; color: var(--sidebar-muted); line-height: 1.5; }
   /* main */
-  .main { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
-  .topbar { display: flex; align-items: center; justify-content: space-between;
-            padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
-  .topbar h1 { font-size: 14px; margin: 0; }
-  .topbar .hint { font-size: 11px; color: var(--muted); }
-  details.settings { font-size: 12px; color: var(--muted); }
-  details.settings summary { cursor: pointer; }
-  details.settings .fields { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
-  details.settings input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
-  .query-scope { margin-top: 8px; font-size: 11px; color: var(--muted); }
-  .scope-badge { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; background: var(--panel); margin-right: 4px; }
-  .scope-badge.staging { border-color: #d8b35d; color: #6f4d00; background: var(--warn-bg); }
-  #log { flex: 1; overflow: auto; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
-  .turn { max-width: 760px; width: 100%; align-self: center; }
-  .q { font-weight: 600; background: var(--panel); border: 1px solid var(--line);
-       border-radius: 10px; padding: 10px 12px; }
-  .a { white-space: pre-wrap; background: var(--accent-weak); border: 1px solid #cfe6df;
-       border-radius: 10px; padding: 10px 12px; margin-top: 8px; }
-  .abstain { background: var(--warn-bg); border: 1px solid #f0d9a0; color: var(--warn);
-             padding: 8px 10px; border-radius: 8px; margin-top: 8px; font-size: 13px; }
-  .err { color: var(--err); font-size: 13px; margin-top: 8px; }
-  .feedback { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .feedback span.label { font-size: 12px; color: var(--muted); }
-  .feedback button { font-size: 12px; padding: 5px 9px; border: 1px solid var(--line);
-                     background: var(--panel); border-radius: 6px; cursor: pointer; }
-  .feedback .done { color: var(--accent); font-size: 12px; }
-  .composer { border-top: 1px solid var(--line); background: var(--panel); padding: 12px 16px;
-              display: flex; gap: 10px; }
-  .composer textarea { flex: 1; min-height: 48px; max-height: 180px; padding: 11px;
-                       border: 1px solid var(--line); border-radius: 10px; font-size: 15px; resize: vertical; }
-  .composer button { padding: 0 20px; border: 0; background: var(--accent); color: #fff;
-                     border-radius: 10px; font-size: 15px; cursor: pointer; }
-  .composer button[disabled] { opacity: .5; cursor: default; }
+  .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .topbar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .topbar h1 { font-size: 15px; margin: 0; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .icon-btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 5px 10px; cursor: pointer; font-size: 13px; }
+  .icon-btn:hover { background: var(--panel-2); }
+  .menu-btn, .sources-btn { display: none; }
+  .scope { display: flex; gap: 6px; flex-wrap: wrap; }
+  .scope-badge { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; background: var(--panel-2); font-size: 11px; color: var(--muted); }
+  .scope-badge.staging { border-color: var(--warn-line); color: var(--warn); background: var(--warn-bg); }
+  details.settings { position: relative; font-size: 13px; }
+  details.settings summary { list-style: none; cursor: pointer; }
+  details.settings summary::-webkit-details-marker { display: none; }
+  details.settings .fields { position: absolute; right: 0; top: 34px; z-index: 5; width: 320px; background: var(--panel); border: 1px solid var(--line);
+                             border-radius: 10px; padding: 12px; box-shadow: var(--shadow); display: grid; gap: 8px; }
+  details.settings label { font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
+  details.settings input { padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; background: var(--panel); color: var(--fg); }
+  #log { flex: 1; overflow: auto; padding: 20px 16px 8px; display: flex; flex-direction: column; gap: 18px; min-height: 0; }
+  .turn { max-width: 820px; width: 100%; align-self: center; display: grid; gap: 8px; }
+  .q { justify-self: end; max-width: 85%; background: var(--accent); color: var(--accent-fg); border-radius: 16px 16px 4px 16px; padding: 9px 14px; white-space: pre-wrap; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 4px 16px 16px 16px; padding: 12px 16px; box-shadow: var(--shadow); }
+  .card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; color: var(--muted); }
+  .badge { border-radius: 999px; padding: 0 8px; font-size: 11px; border: 1px solid var(--line); background: var(--chip); color: var(--fg); }
+  .badge.approved { background: var(--accent-weak); border-color: transparent; color: var(--accent); font-weight: 600; }
+  .badge.abstain { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn); }
+  .a { word-break: break-word; }
+  .a p { margin: 0 0 .5em; }
+  .a ul { margin: 0 0 .5em; padding-left: 1.3em; }
+  .cite { display: inline-flex; align-items: center; justify-content: center; min-width: 1.6em; height: 1.45em; margin: 0 1px; padding: 0 4px;
+          border: 0; border-radius: 6px; background: var(--accent-weak); color: var(--accent); font-size: 11px; font-weight: 700; cursor: pointer; vertical-align: 1px; }
+  .cite:hover, .cite:focus-visible { background: var(--accent); color: var(--accent-fg); outline: none; }
+  .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
+  .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite ease-in-out; }
+  .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+  .abstain { background: var(--warn-bg); border: 1px solid var(--warn-line); color: var(--warn); padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.6; }
+  .abstain ul { margin: 4px 0 0; padding-left: 1.2em; }
+  .err { color: var(--err); background: var(--err-bg); border-radius: 10px; padding: 8px 12px; font-size: 13px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+  .actions button { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 3px 10px; cursor: pointer; font-size: 12px; color: var(--muted); }
+  .actions button:hover { color: var(--fg); background: var(--panel-2); }
+  .actions button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+  .actions .label { font-size: 12px; color: var(--muted); margin-right: 2px; }
+  .actions .done { font-size: 12px; color: var(--accent); }
+  .reasons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .reasons button { border: 1px solid var(--line); background: var(--chip); border-radius: 999px; padding: 2px 10px; cursor: pointer; font-size: 12px; }
+  .reasons textarea { width: 100%; min-height: 56px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; background: var(--panel); color: var(--fg); }
+  .empty-state { max-width: 760px; margin: 6vh auto 0; text-align: center; color: var(--muted); }
+  .empty-state h2 { color: var(--fg); font-size: 22px; margin: 0 0 6px; }
+  .suggest { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 22px; text-align: left; }
+  .suggest button { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 12px 14px; cursor: pointer; font-size: 13px; line-height: 1.5; box-shadow: var(--shadow); }
+  .suggest button:hover { border-color: var(--accent); }
+  .composer-wrap { padding: 8px 16px 14px; }
+  .composer { max-width: 820px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; background: var(--panel); border: 1px solid var(--line);
+              border-radius: 16px; padding: 8px; box-shadow: var(--shadow); }
+  .composer:focus-within { border-color: var(--accent); }
+  .composer textarea { flex: 1; min-height: 44px; max-height: 220px; padding: 10px; border: 0; outline: none; font: inherit; resize: none; background: transparent; color: var(--fg); }
+  .composer button { height: 40px; padding: 0 18px; border: 0; background: var(--accent); color: var(--accent-fg); border-radius: 10px; cursor: pointer; font-size: 14px; }
+  .composer button[disabled] { opacity: .45; cursor: default; }
+  .composer button.stop { background: var(--fg); color: var(--panel); }
+  .composer-note { max-width: 820px; margin: 6px auto 0; font-size: 11px; color: var(--muted); text-align: center; }
   /* citations panel */
-  .citations { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; }
-  .citations h2 { font-size: 13px; margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--line); }
-  .citations .body { flex: 1; overflow: auto; padding: 12px 16px; font-size: 13px; color: var(--fg); }
-  .citations .empty { color: var(--muted); font-size: 12px; }
-  .citations ol { margin: 0; padding-left: 18px; }
-  .citations li { margin-bottom: 8px; }
-  .citations .src { font-weight: 600; }
-  .citations .pg { color: var(--muted); }
-  @media (max-width: 1000px) { .app { grid-template-columns: 1fr; } .sidebar, .citations { display: none; } }
+  .citations { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .citations h2 { font-size: 13px; margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .citations .body { flex: 1; overflow: auto; padding: 12px; font-size: 13px; }
+  .citations .empty { color: var(--muted); font-size: 12px; padding: 4px; }
+  .src-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: var(--panel); }
+  .src-card.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-weak); }
+  .src-card .head { display: flex; gap: 8px; align-items: baseline; }
+  .src-card .num { flex: none; min-width: 1.6em; text-align: center; border-radius: 6px; background: var(--accent-weak); color: var(--accent); font-weight: 700; font-size: 11px; }
+  .src-card .title { font-weight: 600; word-break: break-all; }
+  .src-card .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .src-card .excerpt { margin-top: 8px; padding: 8px 10px; background: var(--panel-2); border-radius: 8px; white-space: pre-wrap; font-size: 12.5px; line-height: 1.6; max-height: 280px; overflow: auto; }
+  .src-card .more { margin-top: 6px; border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 12px; }
+  .backdrop { display: none; }
+  @media (max-width: 1100px) {
+    .app { grid-template-columns: minmax(0, 1fr); }
+    .sidebar, .citations { position: fixed; top: 0; bottom: 0; z-index: 20; width: min(88vw, 340px); transform: translateX(-100%); transition: transform .2s; }
+    .citations { right: 0; left: auto; transform: translateX(100%); }
+    body.show-sidebar .sidebar, body.show-sources .citations { transform: none; }
+    body.show-sidebar .backdrop, body.show-sources .backdrop { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 15; }
+    .menu-btn, .sources-btn { display: inline-block; }
+    .scope { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { .typing i { animation: none; } .sidebar, .citations { transition: none; } }
 </style>
 </head>
 <body>
 <div class="app">
-  <!-- Sidebar: conversation history shell (history wiring lands in a later stage). -->
   <aside class="sidebar" aria-label="サイドバー">
     <div class="brand">
       <div class="name" id="brandName">蔵伝 / KuraDen</div>
       <div class="sub" id="brandSub">社内ナレッジ アシスタント（オンプレ版）</div>
     </div>
-    <button class="new-chat" id="newChat" type="button">+ 新しい会話</button>
+    <button class="new-chat" id="newChat" type="button">＋ 新しい会話</button>
+    <div class="side-label">会話履歴</div>
     <nav class="conv-list" id="convList" aria-label="会話履歴">
-      <div class="placeholder">会話履歴はこの端末のセッション内のみ表示されます。</div>
+      <div class="placeholder">会話履歴を読み込み中…</div>
     </nav>
-    <a class="new-chat" id="adminLink" href="/admin/review" hidden>管理コンソール</a>
-    <div class="sidebar-foot">データは社外に送信されません（オンプレ運用）。</div>
+    <a class="new-chat" id="adminLink" href="/admin" hidden>管理コンソール</a>
+    <div class="sidebar-foot">データは社外に送信されません（オンプレ運用）。回答は登録文書に基づきます。</div>
   </aside>
+  <div class="backdrop" id="backdrop"></div>
 
-  <!-- Main chat workspace -->
   <section class="main">
     <header class="topbar">
-      <div>
-        <h1>社内文書アシスタント</h1>
-        <div class="hint">出典付きで回答します。確実な根拠が無い場合は「分かりません」と答えます。</div>
+      <button class="icon-btn menu-btn" id="menuBtn" type="button" aria-label="会話履歴を開く">☰</button>
+      <h1>社内文書アシスタント</h1>
+      <div class="scope" id="queryScope">
+        <span class="scope-badge" id="tenantBadge">tenant: default</span>
+        <span class="scope-badge" id="collectionBadge">collection: served default</span>
       </div>
       <details class="settings">
-        <summary>接続設定</summary>
+        <summary class="icon-btn" aria-label="接続設定">⚙ 設定</summary>
         <div class="fields">
-          <input id="apiKey" type="password" autocomplete="off" placeholder="APIキー（認証有効時のみ・ページに保存しません）" />
-          <input id="tenantId" type="text" autocomplete="off" placeholder="テナントID（既定 default）" />
-          <input id="stagingCollection" type="text" autocomplete="off" placeholder="ステージングコレクション（非本番）" hidden />
-        </div>
-        <div class="query-scope" id="queryScope">
-          <span class="scope-badge" id="tenantBadge">tenant: default</span>
-          <span class="scope-badge" id="collectionBadge">collection: served default</span>
+          <label>APIキー（認証有効時のみ。ページには保存しません）
+            <input id="apiKey" type="password" autocomplete="off" placeholder="X-Api-Key" /></label>
+          <label>テナントID
+            <input id="tenantId" type="text" autocomplete="off" placeholder="default" /></label>
+          <label id="stagingLabel" hidden>ステージングコレクション（非本番の確認用）
+            <input id="stagingCollection" type="text" autocomplete="off" placeholder="pilot_staging_v1" hidden /></label>
         </div>
       </details>
+      <button class="icon-btn sources-btn" id="sourcesBtn" type="button" aria-label="出典を開く">出典</button>
     </header>
 
-    <div id="log" aria-live="polite"></div>
+    <div id="log" role="log" aria-live="polite" aria-relevant="additions"></div>
 
-    <div class="composer">
-      <textarea id="q" placeholder="質問を入力（例：装置Xの起動手順は？）  Ctrl/Cmd+Enter で送信" aria-label="質問"></textarea>
-      <button id="send" type="button">送信</button>
+    <div class="composer-wrap">
+      <div class="composer">
+        <label class="sr-only" for="q">質問</label>
+        <textarea id="q" rows="1" placeholder="質問を入力（Enter で送信、Shift+Enter で改行）" aria-label="質問"></textarea>
+        <button id="send" type="button">送信</button>
+      </div>
+      <div class="composer-note">回答は登録された社内文書に基づきます。重要な判断の前に、出典の原文を確認してください。</div>
     </div>
   </section>
 
-  <!-- Citations / sources panel -->
   <aside class="citations" aria-label="出典">
-    <h2>出典 / Sources</h2>
-    <div class="body" id="citations"><div class="empty">回答すると、ここに出典が表示されます。</div></div>
+    <h2><span>出典 / Sources</span><button class="icon-btn sources-btn" id="sourcesClose" type="button" aria-label="出典を閉じる">×</button></h2>
+    <div class="body" id="citations"><div class="empty">回答すると、ここに出典が表示されます。番号をクリックすると該当箇所の抜粋を表示します。</div></div>
   </aside>
 </div>
 
+<script src="/static/js/render.js"></script>
 <script>
 "use strict";
-// Commercial chat workspace client. Reuses POST /chat/stream (SSE) and
-// POST /chat/feedback only. No API key is hardcoded: when API auth is on, the
-// operator enters the pilot key at runtime; it is held in memory only and sent
-// as the X-Api-Key header. Default (auth disabled) works with no key.
+// Chat workspace client (stage 10). Uses POST /chat/stream (SSE),
+// POST /chat/feedback, /chat/threads (history, when enabled) and
+// GET /chat/source (citation excerpt). No API key is hardcoded: when API auth
+// is on, the key is entered at runtime, kept in memory only and sent as the
+// X-Api-Key header.
 (function () {
-  var log = document.getElementById("log");
-  var qEl = document.getElementById("q");
-  var sendBtn = document.getElementById("send");
-  var apiKeyEl = document.getElementById("apiKey");
-  var tenantEl = document.getElementById("tenantId");
-  var stagingCollectionEl = document.getElementById("stagingCollection");
-  var tenantBadge = document.getElementById("tenantBadge");
-  var collectionBadge = document.getElementById("collectionBadge");
-  var citationsEl = document.getElementById("citations");
-  var newChatBtn = document.getElementById("newChat");
+  var $ = function (id) { return document.getElementById(id); };
+  var log = $("log"), qEl = $("q"), sendBtn = $("send"), apiKeyEl = $("apiKey"), tenantEl = $("tenantId");
+  var stagingCollectionEl = $("stagingCollection"), citationsEl = $("citations"), newChatBtn = $("newChat");
+  var convList = $("convList");
+  var SUGGESTIONS = ["経費精算の締め日はいつですか？", "パスワードを忘れたときの手続きは？", "出張旅費の上限を教えてください", "有給休暇の申請方法は？"];
+  var BAD_REASONS = [
+    { v: "wrong_intent", t: "質問の意図と違う" }, { v: "incorrect", t: "内容が誤っている" },
+    { v: "outdated", t: "情報が古い" }, { v: "wrong_source", t: "出典が合っていない" }, { v: "incomplete", t: "情報が足りない" }
+  ];
+  var controller = null, busy = false, historyEnabled = true;
 
-  function esc(s) {
-    return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  }
+  // Escaping and answer rendering: /static/js/render.js (tests/js/render.test.js).
+  var R = window.KuradenRender;
+  var esc = R.esc, stripReferenceBlock = R.stripReferenceBlock, renderAnswerHtml = R.renderAnswerHtml, answerKind = R.answerKind;
   function uuid() {
     if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
     return "q-" + Date.now() + "-" + Math.floor(Math.random() * 1e9);
   }
+  // One thread per conversation: the server uses it for follow-up completion
+  // (CONVERSATION_CONTEXT_ENABLED) and history. newConversation() resets it.
+  var threadId = uuid();
   function headers() {
     var h = { "Content-Type": "application/json" };
     var key = (apiKeyEl.value || "").trim();
@@ -161,95 +228,284 @@
   function tenant() { return (tenantEl.value || "").trim() || "default"; }
   function stagingCollection() { return (stagingCollectionEl && !stagingCollectionEl.hidden) ? (stagingCollectionEl.value || "").trim() : ""; }
   function updateScope() {
-    var t = tenant();
     var c = stagingCollection();
-    if (tenantBadge) tenantBadge.textContent = "tenant: " + t;
-    if (collectionBadge) {
-      collectionBadge.textContent = c ? "collection: staging " + c : "collection: served default";
-      collectionBadge.className = c ? "scope-badge staging" : "scope-badge";
-    }
+    $("tenantBadge").textContent = "tenant: " + tenant();
+    $("collectionBadge").textContent = c ? "collection: staging " + c : "collection: served default";
+    $("collectionBadge").className = c ? "scope-badge staging" : "scope-badge";
   }
+  function scrollDown() { log.scrollTop = log.scrollHeight; }
 
-  function renderCitations(citations) {
-    if (!citations || !citations.length) {
+  // --- citations panel ------------------------------------------------------------------
+  var currentCitations = [], currentTenant = "default", currentCollection = "";
+  function renderCitations(citations, tenantId, collectionName) {
+    currentCitations = citations || [];
+    currentTenant = tenantId || tenant();
+    currentCollection = collectionName || "";
+    if (!currentCitations.length) {
       citationsEl.innerHTML = '<div class="empty">この回答に出典はありません。</div>';
       return;
     }
-    var items = citations.map(function (c) {
-      var doc = c.source_doc || c.title || c.source_title || "出典";
-      var pages = Array.isArray(c.source_pages) && c.source_pages.length ? "p." + c.source_pages.join(",") : "";
-      return '<li><span class="src">' + esc(doc) + '</span> <span class="pg">' + esc(pages) + '</span></li>';
-    }).join("");
-    citationsEl.innerHTML = "<ol>" + items + "</ol>";
+    citationsEl.innerHTML = "";
+    currentCitations.forEach(function (c, i) {
+      var num = c.number || (i + 1);
+      var doc = c.source_title || c.title || c.source_doc || "出典";
+      var pages = Array.isArray(c.source_pages) && c.source_pages.length && c.source_pages[0] !== -1 ? "p." + c.source_pages.join(", ") : "";
+      var meta = [pages, c.version ? "版 " + c.version : "", c.updated_at ? "更新 " + String(c.updated_at).slice(0, 10) : ""].filter(Boolean).join(" ・ ");
+      var card = document.createElement("div");
+      card.className = "src-card"; card.id = "src-" + num;
+      card.innerHTML = '<div class="head"><span class="num">' + esc(num) + '</span><span class="title">' + esc(doc) + "</span></div>" +
+        (meta ? '<div class="meta">' + esc(meta) + "</div>" : "") +
+        (c.status === "approved" ? '<div class="meta"><span class="badge approved">承認済み</span></div>' : "");
+      if (c.chunk_id) {
+        var more = document.createElement("button");
+        more.type = "button"; more.className = "more"; more.textContent = "該当箇所を表示";
+        more.addEventListener("click", function () { loadExcerpt(card, c.chunk_id, more); });
+        card.appendChild(more);
+      }
+      citationsEl.appendChild(card);
+    });
+  }
+  function loadExcerpt(card, chunkId, button) {
+    if (card.querySelector(".excerpt")) return;
+    button.textContent = "読み込み中…";
+    var url = "/chat/source?chunk_id=" + encodeURIComponent(chunkId) + "&tenant_id=" + encodeURIComponent(currentTenant);
+    if (currentCollection) url += "&collection=" + encodeURIComponent(currentCollection);
+    fetch(url, { headers: headers() })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (src) {
+        var box = document.createElement("div"); box.className = "excerpt";
+        if (!src) { box.textContent = "抜粋を表示できませんでした。"; }
+        else {
+          var path = (src.section_path || []).join(" › ");
+          box.textContent = (path ? "【" + path + "】\n" : "") + (src.text || "");
+        }
+        button.remove(); card.appendChild(box);
+      })
+      .catch(function () { button.textContent = "該当箇所を表示"; });
+  }
+  function focusCitation(num) {
+    var card = $("src-" + num);
+    if (!card) return;
+    Array.prototype.forEach.call(citationsEl.querySelectorAll(".src-card.active"), function (el) { el.classList.remove("active"); });
+    card.classList.add("active");
+    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    var more = card.querySelector(".more");
+    if (more) more.click();
+    if (window.matchMedia("(max-width: 1100px)").matches) document.body.classList.add("show-sources");
+  }
+  log.addEventListener("click", function (e) {
+    var chip = e.target.closest(".cite");
+    if (!chip) return;
+    var turn = chip.closest(".turn");
+    if (turn && turn._citations) renderCitations(turn._citations, turn._tenant, turn._collection);
+    focusCitation(chip.getAttribute("data-n"));
+  });
+
+  // --- feedback ---------------------------------------------------------------------------
+  function sendFeedback(token, type, tenantId, extra) {
+    var body = { feedback_token: token, trace_id: token, feedback_type: type, tenant_id: tenantId };
+    if (extra) { body.bad_reason = extra.reason || null; body.comment = extra.comment || null; }
+    return fetch("/chat/feedback", { method: "POST", headers: headers(), body: JSON.stringify(body) })
+      .then(function (r) { return r.ok; }).catch(function () { return false; });
+  }
+  function attachActions(turn, card, ctx) {
+    var bar = document.createElement("div"); bar.className = "actions";
+    function btn(label, title, onClick) {
+      var b = document.createElement("button"); b.type = "button"; b.textContent = label; b.title = title;
+      b.addEventListener("click", onClick); bar.appendChild(b); return b;
+    }
+    btn("コピー", "回答をコピー", function (e) {
+      var text = card.querySelector(".a").innerText;
+      (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(function () {
+        e.target.textContent = "コピーしました"; setTimeout(function () { e.target.textContent = "コピー"; }, 1500);
+      }).catch(function () {});
+    });
+    btn("再生成", "同じ質問をもう一度", function () { if (!busy) send(ctx.question); });
+    var label = document.createElement("span"); label.className = "label"; label.textContent = "この回答は"; bar.appendChild(label);
+    var done = function (ok, msg) {
+      bar.querySelectorAll("button.fb").forEach(function (b) { b.disabled = true; });
+      var s = document.createElement("span"); s.className = ok ? "done" : "err"; s.textContent = ok ? msg : "送信できませんでした";
+      bar.appendChild(s);
+    };
+    var good = btn("👍 役に立った", "役に立った", function () {
+      good.setAttribute("aria-pressed", "true");
+      sendFeedback(ctx.token, "good", ctx.tenantId).then(function (ok) { done(ok, "ありがとうございます"); });
+    });
+    good.classList.add("fb");
+    var bad = btn("👎 役に立たなかった", "改善のため理由を選んでください", function () {
+      bad.setAttribute("aria-pressed", "true");
+      if (card.querySelector(".reasons")) return;
+      var box = document.createElement("div"); box.className = "reasons";
+      var chosen = "";
+      BAD_REASONS.forEach(function (r) {
+        var b = document.createElement("button"); b.type = "button"; b.textContent = r.t;
+        b.addEventListener("click", function () {
+          chosen = r.v;
+          box.querySelectorAll("button").forEach(function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+        });
+        box.appendChild(b);
+      });
+      var note = document.createElement("textarea"); note.placeholder = "補足（任意。個人情報は書かないでください）"; note.maxLength = 500;
+      var submit = document.createElement("button"); submit.type = "button"; submit.textContent = "送信";
+      submit.addEventListener("click", function () {
+        sendFeedback(ctx.token, "bad", ctx.tenantId, { reason: chosen || "other", comment: note.value.trim() }).then(function (ok) {
+          box.remove(); done(ok, "ご意見を受け付けました");
+        });
+      });
+      box.appendChild(note); box.appendChild(submit);
+      card.appendChild(box);
+    });
+    bad.classList.add("fb");
+    var human = btn("担当者に確認", "担当者の確認を依頼", function () {
+      sendFeedback(ctx.token, "human_review_requested", ctx.tenantId).then(function (ok) { done(ok, "担当者への確認を依頼しました"); });
+    });
+    human.classList.add("fb");
+    card.appendChild(bar);
   }
 
-  function renderAbstain(container) {
+  // --- conversation history -----------------------------------------------------------------
+  function saveTurn(question, tenantId, data, streamed) {
+    // Stored only when CONVERSATION_HISTORY_ENABLED (404 otherwise; ignored).
+    var txt = (data && (data.answer_text || data.answer_with_footnotes)) || streamed || "";
+    fetch("/chat/threads", {
+      method: "POST", headers: headers(),
+      body: JSON.stringify({
+        thread_id: threadId, question: question, answer_text: txt,
+        answer_mode: (data && data.answer_mode) || null,
+        abstained: answerKind(data) === "abstain",
+        citations_count: (data && data.citations && data.citations.length) || 0,
+        tenant_id: tenantId
+      })
+    }).then(function (r) { if (r.ok) loadHistory(); }).catch(function () {});
+  }
+  function fmtTime(epoch) {
+    if (!epoch) return "";
+    var d = new Date(epoch * 1000), now = new Date();
+    return d.toDateString() === now.toDateString()
+      ? d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })
+      : d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" });
+  }
+  function loadHistory() {
+    if (!historyEnabled) return;
+    fetch("/chat/threads?tenant_id=" + encodeURIComponent(tenant()), { headers: headers() })
+      .then(function (r) {
+        if (r.status === 404) { historyEnabled = false; return null; }
+        return r.ok ? r.json() : null;
+      })
+      .then(function (res) {
+        if (!historyEnabled) { convList.innerHTML = '<div class="placeholder">会話履歴は無効です（管理者が有効にすると、ここに表示されます）。</div>'; return; }
+        var threads = (res && res.threads) || [];
+        if (!threads.length) { convList.innerHTML = '<div class="placeholder">まだ会話はありません。</div>'; return; }
+        convList.innerHTML = "";
+        threads.slice(0, 50).forEach(function (t) {
+          var b = document.createElement("button"); b.type = "button"; b.className = "conv-item";
+          if (t.thread_id === threadId) b.setAttribute("aria-current", "true");
+          b.innerHTML = esc(t.title || "（無題）") + '<span class="when">' + esc(fmtTime(t.updated_at)) + "</span>";
+          b.addEventListener("click", function () { openThread(t.thread_id); });
+          convList.appendChild(b);
+        });
+      })
+      .catch(function () {});
+  }
+  function openThread(id) {
+    fetch("/chat/threads/" + encodeURIComponent(id) + "?tenant_id=" + encodeURIComponent(tenant()), { headers: headers() })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (res) {
+        if (!res) return;
+        threadId = id; log.innerHTML = "";
+        (res.turns || []).forEach(function (t) {
+          var turn = addTurn(t.question);
+          var card = addCard(turn, t.abstained ? "abstain" : (/^approved_/.test(t.answer_mode || "") ? "approved" : "grounded"));
+          card.querySelector(".a").innerHTML = renderAnswerHtml(t.answer_text || "", null);
+        });
+        renderCitations([], tenant());
+        document.body.classList.remove("show-sidebar");
+        loadHistory(); scrollDown();
+      }).catch(function () {});
+  }
+
+  // --- turns ---------------------------------------------------------------------------------
+  function clearEmptyState() { var e = log.querySelector(".empty-state"); if (e) e.remove(); }
+  function showEmptyState() {
+    log.innerHTML = '<div class="empty-state"><h2>何をお調べしますか？</h2>' +
+      '<div>社内の規程・手順書・FAQ から、出典付きで回答します。根拠が見つからない場合は「分かりません」と答えます。</div>' +
+      '<div class="suggest" id="suggest"></div></div>';
+    SUGGESTIONS.forEach(function (s) {
+      var b = document.createElement("button"); b.type = "button"; b.textContent = s;
+      b.addEventListener("click", function () { send(s); });
+      $("suggest").appendChild(b);
+    });
+  }
+  function addTurn(question) {
+    clearEmptyState();
+    var turn = document.createElement("div"); turn.className = "turn";
+    var q = document.createElement("div"); q.className = "q"; q.textContent = question;
+    turn.appendChild(q); log.appendChild(turn);
+    return turn;
+  }
+  function addCard(turn, kind) {
+    var card = document.createElement("div"); card.className = "card";
+    var head = document.createElement("div"); head.className = "card-head";
+    card.appendChild(head);
+    var a = document.createElement("div"); a.className = "a";
+    card.appendChild(a); turn.appendChild(card);
+    setKind(card, kind);
+    return card;
+  }
+  function setKind(card, kind) {
+    var head = card.querySelector(".card-head");
+    head.innerHTML = kind === "approved" ? '<span class="badge approved">承認済み回答</span><span>担当部署が確認した回答です</span>'
+      : kind === "abstain" ? '<span class="badge abstain">回答できません</span>'
+      : kind === "grounded" ? '<span class="badge">文書から回答</span>'
+      : '<span class="typing" aria-label="回答を作成中"><i></i><i></i><i></i></span>';
+  }
+  function renderAbstain(card) {
     var b = document.createElement("div");
     b.className = "abstain";
-    b.textContent = "確実な根拠が登録文書内に見つからなかったため、回答できません。";
-    container.appendChild(b);
+    b.innerHTML = "確実な根拠が登録文書内に見つからなかったため、回答できません。<ul>" +
+      "<li>キーワードや言い回しを変えて質問してみてください（例: 正式な制度名・手続き名）</li>" +
+      "<li>解決しない場合は「担当者に確認」から問い合わせできます</li></ul>";
+    card.appendChild(b);
+  }
+  function showError(card, status) {
+    var e = document.createElement("div"); e.className = "err";
+    e.textContent = status === 401 ? "認証が必要です。設定でキーを入力するか、サインインしてください。"
+      : status === 403 ? "このテナントへのアクセス権がありません。"
+      : status === 404 ? "指定したステージングコレクションは利用できません。"
+      : status === 409 ? "指定したステージングコレクションはまだ検索できません。"
+      : status === 429 ? "アクセスが集中しています。少し待って再試行してください。"
+      : status === 503 ? "サービスが一時的に利用できません。しばらくしてから再試行してください。"
+      : "回答を取得できませんでした。";
+    card.querySelector(".card-head").innerHTML = "";
+    card.appendChild(e);
   }
 
-  function attachFeedback(container, token, tenantId) {
-    var box = document.createElement("div");
-    box.className = "feedback";
-    var label = document.createElement("span");
-    label.className = "label";
-    label.textContent = "この回答は役に立ちましたか？";
-    box.appendChild(label);
-    [
-      { t: "good", txt: "役に立った" },
-      { t: "bad", txt: "役に立たなかった" },
-      { t: "human_review_requested", txt: "人に確認したい" }
-    ].forEach(function (o) {
-      var btn = document.createElement("button");
-      btn.type = "button"; btn.textContent = o.txt;
-      btn.addEventListener("click", function () { sendFeedback(token, o.t, tenantId, box); });
-      box.appendChild(btn);
-    });
-    container.appendChild(box);
+  function finish(turn, card, ctx, data, streamed) {
+    var kind = data ? answerKind(data) : (streamed ? "grounded" : "abstain");
+    setKind(card, kind);
+    var a = card.querySelector(".a");
+    var citations = (data && data.citations) || [];
+    var citeMap = {};
+    citations.forEach(function (c, i) { citeMap[String(i + 1)] = String(c.number || (i + 1)); });
+    var txt = data ? (data.answer_with_footnotes || data.answer_text || "") : streamed;
+    if (txt) a.innerHTML = renderAnswerHtml(txt, citeMap); else a.innerHTML = "";
+    if (kind === "abstain") renderAbstain(card);
+    turn._citations = citations; turn._tenant = ctx.tenantId; turn._collection = ctx.collection;
+    renderCitations(citations, ctx.tenantId, ctx.collection);
+    attachActions(turn, card, ctx);
+    saveTurn(ctx.question, ctx.tenantId, data, streamed);
   }
 
-  function sendFeedback(token, type, tenantId, box) {
-    fetch("/chat/feedback", {
-      method: "POST", headers: headers(),
-      body: JSON.stringify({ feedback_token: token, trace_id: token, feedback_type: type, tenant_id: tenantId })
-    }).then(function (r) {
-      box.innerHTML = r.ok
-        ? '<span class="done">フィードバックを受け付けました。ありがとうございます。</span>'
-        : '<span class="err">フィードバックを送信できませんでした。</span>';
-    }).catch(function () {
-      box.innerHTML = '<span class="err">フィードバックを送信できませんでした。</span>';
-    });
-  }
-
-  function applyAnswer(turn, ansEl, data) {
-    var txt = (data && (data.answer_text || data.answer_with_footnotes)) || "";
-    var abstained = !!(data && (data.guard_reason || data.used_fallback)) || !txt;
-    if (txt) ansEl.textContent = txt;
-    if (abstained) renderAbstain(turn);
-    renderCitations(data && data.citations);
-  }
-
-  function streamChat(question, turn, ansEl, token, tenantId, collectionName) {
-    var body = { question: question, tenant_id: tenantId, trace_id: token };
-    if (collectionName) body.staging_collection = collectionName;
+  function streamChat(ctx, turn, card) {
+    var body = { question: ctx.question, tenant_id: ctx.tenantId, trace_id: ctx.token, thread_id: threadId };
+    if (ctx.collection) body.staging_collection = ctx.collection;
+    controller = window.AbortController ? new AbortController() : null;
+    var a = card.querySelector(".a");
     return fetch("/chat/stream", {
-      method: "POST", headers: headers(),
-      body: JSON.stringify(body)
+      method: "POST", headers: headers(), body: JSON.stringify(body),
+      signal: controller ? controller.signal : undefined
     }).then(function (resp) {
-      if (!resp.ok || !resp.body) {
-        var e = document.createElement("div");
-        e.className = "err";
-        e.textContent = resp.status === 401 ? "認証が必要です。接続設定でキーを入力してください。"
-          : resp.status === 403 ? "このテナントへのアクセス権がありません。"
-          : resp.status === 404 ? "指定したステージングコレクションは利用できません。"
-          : resp.status === 409 ? "指定したステージングコレクションはまだ検索できません。"
-          : resp.status === 429 ? "アクセスが集中しています。少し待って再試行してください。"
-          : "回答を取得できませんでした。";
-        turn.appendChild(e);
-        return;
-      }
+      if (!resp.ok || !resp.body) { showError(card, resp.status); return; }
       var reader = resp.body.getReader();
       var decoder = new TextDecoder("utf-8");
       var buf = "", streamed = "", settled = false;
@@ -257,13 +513,11 @@
         var data = null;
         try { data = dataStr ? JSON.parse(dataStr) : null; } catch (_) { data = null; }
         if (name === "delta" && data && typeof data.text === "string") {
-          streamed += data.text; ansEl.textContent = streamed;
+          streamed += data.text; a.textContent = stripReferenceBlock(streamed); scrollDown();
         } else if (name === "final" || name === "approved") {
-          settled = true; applyAnswer(turn, ansEl, data); attachFeedback(turn, token, tenantId);
+          settled = true; finish(turn, card, ctx, data, streamed);
         } else if (name === "error") {
-          settled = true;
-          var e = document.createElement("div"); e.className = "err";
-          e.textContent = "回答を取得できませんでした。"; turn.appendChild(e);
+          settled = true; showError(card, 0);
         }
       }
       function parseFrames() {
@@ -280,70 +534,79 @@
       }
       function pump() {
         return reader.read().then(function (res) {
-          if (res.done) { if (!settled && streamed) attachFeedback(turn, token, tenantId); return; }
+          if (res.done) {
+            if (!settled && streamed) finish(turn, card, ctx, null, streamed);
+            return;
+          }
           buf += decoder.decode(res.value, { stream: true });
           parseFrames();
           return pump();
         });
       }
       return pump();
-    }).catch(function () {
-      var e = document.createElement("div"); e.className = "err";
-      e.textContent = "回答を取得できませんでした。"; turn.appendChild(e);
+    }).catch(function (err) {
+      if (err && err.name === "AbortError") {
+        setKind(card, "grounded");
+        var s = document.createElement("div"); s.className = "err"; s.textContent = "回答の生成を停止しました。";
+        card.appendChild(s);
+        return;
+      }
+      showError(card, 0);
     });
   }
 
+  function setBusy(on) {
+    busy = on;
+    sendBtn.textContent = on ? "停止" : "送信";
+    sendBtn.className = on ? "stop" : "";
+    sendBtn.setAttribute("aria-label", on ? "回答の生成を停止" : "送信");
+  }
+  function send(text) {
+    var question = String(text || "").trim();
+    if (!question || busy) return;
+    var ctx = { question: question, tenantId: tenant(), collection: stagingCollection(), token: uuid() };
+    var turn = addTurn(question);
+    var card = addCard(turn, "pending");
+    scrollDown();
+    citationsEl.innerHTML = '<div class="empty">回答を取得中…</div>';
+    setBusy(true);
+    streamChat(ctx, turn, card).then(function () { setBusy(false); controller = null; scrollDown(); qEl.focus(); });
+  }
   function ask() {
+    if (busy) { if (controller) controller.abort(); return; }
     var question = (qEl.value || "").trim();
     if (!question) return;
-    var tenantId = tenant();
-    var collectionName = stagingCollection();
-    var token = uuid();
-    var turn = document.createElement("div"); turn.className = "turn";
-    var q = document.createElement("div"); q.className = "q"; q.textContent = question;
-    var scope = document.createElement("div");
-    scope.className = "query-scope";
-    scope.innerHTML = '<span class="scope-badge">tenant: ' + esc(tenantId) + '</span> ' +
-      '<span class="' + (collectionName ? 'scope-badge staging' : 'scope-badge') + '">collection: ' +
-      esc(collectionName ? "staging " + collectionName : "served default") + '</span>';
-    var a = document.createElement("div"); a.className = "a"; a.textContent = "…";
-    turn.appendChild(q); turn.appendChild(scope); turn.appendChild(a); log.appendChild(turn);
-    log.scrollTop = log.scrollHeight;
-    qEl.value = ""; sendBtn.disabled = true;
-    citationsEl.innerHTML = '<div class="empty">回答を取得中…</div>';
-    streamChat(question, turn, a, token, tenantId, collectionName).then(function () {
-      sendBtn.disabled = false;
-      if (a.textContent === "…") a.textContent = "";
-      log.scrollTop = log.scrollHeight;
-    });
+    qEl.value = ""; autoGrow();
+    send(question);
   }
 
   function newConversation() {
-    log.innerHTML = "";
-    citationsEl.innerHTML = '<div class="empty">回答すると、ここに出典が表示されます。</div>';
+    if (controller) controller.abort();
+    threadId = uuid();
+    showEmptyState();
+    renderCitations([], tenant());
+    citationsEl.innerHTML = '<div class="empty">回答すると、ここに出典が表示されます。番号をクリックすると該当箇所の抜粋を表示します。</div>';
+    document.body.classList.remove("show-sidebar");
+    loadHistory();
     qEl.focus();
   }
+  function autoGrow() { qEl.style.height = "auto"; qEl.style.height = Math.min(220, qEl.scrollHeight) + "px"; }
 
   // Apply safe branding + backend-authoritative role gating (cosmetic only;
   // privileged routes are enforced server-side regardless of this UI).
   function applyBranding() {
     fetch("/branding").then(function (r) { return r.ok ? r.json() : null; }).then(function (b) {
       if (!b) return;
-      var name = document.getElementById("brandName");
-      var sub = document.getElementById("brandSub");
-      if (b.product_name && name) name.textContent = b.product_name;
-      if (b.subtitle && sub) sub.textContent = b.subtitle;
+      if (b.product_name) { $("brandName").textContent = b.product_name; document.title = b.product_name + " — 社内ナレッジ アシスタント"; }
+      if (b.subtitle) $("brandSub").textContent = b.subtitle;
       if (b.theme_color) document.documentElement.style.setProperty("--accent", b.theme_color);
     }).catch(function () {});
   }
   function applyRole() {
     fetch("/ui/context").then(function (r) { return r.ok ? r.json() : null; }).then(function (ctx) {
-      if (ctx && ctx.role === "admin") {
-        var link = document.getElementById("adminLink");
-        if (link) link.hidden = false;
-      }
+      if (ctx && ctx.role === "admin") $("adminLink").hidden = false;
       if (ctx && (ctx.role === "admin" || ctx.role === "operator") && stagingCollectionEl) {
-        stagingCollectionEl.hidden = false;
+        stagingCollectionEl.hidden = false; $("stagingLabel").hidden = false;
       }
       updateScope();
     }).catch(function () {});
@@ -351,14 +614,29 @@
 
   sendBtn.addEventListener("click", ask);
   newChatBtn.addEventListener("click", newConversation);
+  tenantEl.addEventListener("change", function () { updateScope(); historyEnabled = true; loadHistory(); });
   tenantEl.addEventListener("input", updateScope);
+  apiKeyEl.addEventListener("change", function () { historyEnabled = true; loadHistory(); });
   if (stagingCollectionEl) stagingCollectionEl.addEventListener("input", updateScope);
+  qEl.addEventListener("input", autoGrow);
+  qEl.addEventListener("keydown", function (e) {
+    // Japanese IME: Enter that confirms a conversion must not send.
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === "Enter" && (!e.shiftKey || e.ctrlKey || e.metaKey)) { e.preventDefault(); ask(); }
+  });
+  $("menuBtn").addEventListener("click", function () { document.body.classList.toggle("show-sidebar"); });
+  $("sourcesBtn").addEventListener("click", function () { document.body.classList.toggle("show-sources"); });
+  $("sourcesClose").addEventListener("click", function () { document.body.classList.remove("show-sources"); });
+  $("backdrop").addEventListener("click", function () { document.body.classList.remove("show-sidebar", "show-sources"); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") document.body.classList.remove("show-sidebar", "show-sources");
+  });
+
+  showEmptyState();
   updateScope();
   applyBranding();
   applyRole();
-  qEl.addEventListener("keydown", function (e) {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ask(); }
-  });
+  loadHistory();
 })();
 </script>
 </body>

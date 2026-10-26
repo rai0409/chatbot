@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
@@ -271,11 +272,15 @@ def build_review_queue(
             seen.add(key)
             items.append(item)
 
+    # Write to a temporary file and rename: the admin page never reads a
+    # half-written queue.
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
+    tmp_path = output_path.with_name(f".{output_path.name}.tmp-{os.getpid()}")
+    with tmp_path.open("w", encoding="utf-8") as f:
         for item in items:
             f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
+    os.replace(tmp_path, output_path)
 
     return {
         "chat_events_loaded": len(chat_records),

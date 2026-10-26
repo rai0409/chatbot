@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -11,6 +13,17 @@ from webapi import ingestion_jobs, main
 
 
 SYNTH = "eval/cases/qa_pair_chunks.jsonl"  # existing synthetic, non-customer data
+
+
+@pytest.fixture(autouse=True)
+def _isolated_registry_and_ingest_roots(monkeypatch, tmp_path):
+    # Stage 1: the job registry is persisted and inputs are confined to
+    # INGEST_ALLOWED_ROOTS. Each test gets its own registry file and allows
+    # only the synthetic cases directory and its tmp_path.
+    monkeypatch.setenv("INGESTION_REGISTRY_PATH", str(tmp_path / "ingestion_registry.sqlite3"))
+    roots = [str(Path(config.BASE_DIR) / "eval" / "cases"), str(tmp_path)]
+    monkeypatch.setenv("INGEST_ALLOWED_ROOTS", os.pathsep.join(roots))
+    monkeypatch.setattr(ingestion_jobs, "_vectorstore_has_collection", lambda name: False)
 
 
 def _admin(monkeypatch, *, enabled=True):

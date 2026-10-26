@@ -8,11 +8,12 @@ from typing import Any, Mapping
 from rag_core import embedding_provider
 
 
-BUILDER_VERSION = "chroma_fingerprint_v1"
+BUILDER_VERSION = "chroma_fingerprint_v2"
 CORE_FINGERPRINT_KEYS = ("embed_provider", "embed_model")
 EXTENDED_FINGERPRINT_KEYS = (
     "embed_provider",
     "embed_model",
+    "embed_prefix_scheme",
     "embedding_dim",
     "source_jsonl_path",
     "source_jsonl_sha256",
@@ -44,6 +45,7 @@ def build_collection_fingerprint_metadata(
     builder_version: str = BUILDER_VERSION,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = dict(active_core_fingerprint(provider_name))
+    payload["embed_prefix_scheme"] = embedding_provider.active_prefix_scheme(provider_name)
     if embedding_dim is not None:
         payload["embedding_dim"] = int(embedding_dim)
     if source_jsonl_path is not None:
@@ -118,6 +120,8 @@ def fingerprint_status(metadata: Mapping[str, Any] | None, *, provider_name: str
     active = active_core_fingerprint(provider_name)
     stamped = collection_core_fingerprint(metadata)
     extended = collection_extended_fingerprint(metadata)
+    active_scheme = embedding_provider.active_prefix_scheme(provider_name)
+    stamped_scheme = extended.get("embed_prefix_scheme")
     return {
         "present": stamped is not None,
         "matches_active": stamped == active if stamped is not None else False,
@@ -125,4 +129,7 @@ def fingerprint_status(metadata: Mapping[str, Any] | None, *, provider_name: str
         "stamped": stamped,
         "extended": extended,
         "missing_extended_keys": [key for key in EXTENDED_FINGERPRINT_KEYS if key not in extended],
+        # None when the collection predates prefix stamping.
+        "prefix_scheme_matches": (stamped_scheme == active_scheme) if stamped_scheme else None,
+        "active_prefix_scheme": active_scheme,
     }

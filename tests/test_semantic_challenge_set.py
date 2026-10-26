@@ -1,5 +1,5 @@
 from __future__ import annotations
-import copy,json
+import copy
 from pathlib import Path
 import pytest
 from scripts import validate_semantic_challenge_set as v

@@ -37,6 +37,7 @@ def test_branding_overridable_via_env(monkeypatch):
 
 def test_ui_context_role_open_mode(monkeypatch):
     _clear(monkeypatch)  # admin auth disabled -> open/dev -> admin role
+    monkeypatch.setenv("ADMIN_AUTH_ALLOW_INSECURE_DEV", "true")
     ctx = TestClient(main.app).get("/ui/context").json()
     assert ctx["role"] == "admin"
     assert ctx["admin_auth_enabled"] is False

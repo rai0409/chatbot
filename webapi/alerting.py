@@ -157,6 +157,15 @@ def evaluate_alerts(
         "value": auth_rejections, "warn": ar["warn"], "critical": ar["critical"],
     })
 
+    # Audit records that could not be written (disk full, permissions): any is
+    # CRITICAL. The counter is in the snapshot only when it is above zero.
+    audit_failures = _sum(_counter(payload, "audit_write_failures_total"))
+    if audit_failures > 0:
+        signals.append({
+            "name": "audit_write_failures", "status": CRITICAL, "value": audit_failures,
+            "detail": f"audit_write_failures={audit_failures}",
+        })
+
     # Feedback human-review spike — only when feedback metrics are present.
     if feedback_total > 0:
         cfg = t["human_review_rate"]

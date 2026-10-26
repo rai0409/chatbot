@@ -13,7 +13,7 @@ import os
 from collections.abc import Mapping
 from typing import Dict
 
-from webapi.admin_auth import admin_auth_enabled, enforce_admin_token
+from webapi.admin_auth import admin_auth_enabled, enforce_admin_token, insecure_admin_access_allowed
 
 ROLE_ADMIN = "admin"
 ROLE_USER = "user"
@@ -43,10 +43,12 @@ def branding_config() -> Dict[str, str]:
 
 def resolve_role(headers: Mapping[str, str] | None) -> str:
     # Authoritative role for UI gating, mirroring real admin access:
-    # - admin auth disabled  -> admin routes are open (dev/open mode) -> "admin"
-    # - admin auth enabled    -> "admin" only with a valid admin token, else "user"
+    # - admin auth disabled  -> admin routes are refused (stage 1), so "admin"
+    #   only with the development override ADMIN_AUTH_ALLOW_INSECURE_DEV
+    # - admin auth enabled    -> "admin" only with a valid admin token or
+    #   admin browser session, else "user"
     if not admin_auth_enabled():
-        return ROLE_ADMIN
+        return ROLE_ADMIN if insecure_admin_access_allowed() else ROLE_USER
     try:
         enforce_admin_token(headers)
         return ROLE_ADMIN

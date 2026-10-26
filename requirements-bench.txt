@@ -1,0 +1,7 @@
+# Optional dependencies for `python -m eval.bench` vector DB comparisons.
+# chromadb and numpy are already in requirements.txt; sentence-transformers
+# is in requirements-embedding.txt. qdrant-client >= 1.10 provides
+# query_points. Pin exact versions in constraints/ after verification.
+qdrant-client>=1.10
+# JQaRA candidate-limited evaluator reads the published dev Parquet directly.
+pyarrow>=14

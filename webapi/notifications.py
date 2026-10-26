@@ -71,7 +71,7 @@ def build_message(result: Dict[str, Any]) -> str:
 def _default_slack_send(webhook: str, text: str) -> None:
     data = json.dumps({"text": text}).encode("utf-8")
     req = urllib.request.Request(webhook, data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310 (webhook is operator-set)
+    with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310 (webhook is operator-set)  # nosec B310
         if resp.status >= 300:
             raise RuntimeError(f"slack http {resp.status}")
 

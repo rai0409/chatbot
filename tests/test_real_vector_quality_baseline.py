@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import errno
 import importlib.util
 import json
@@ -181,3 +180,16 @@ def test_committed_report_has_no_machine_paths_or_secret_keys():
 
 def test_deterministic_baseline_is_separate_and_unchanged():
     assert baseline.sha(ROOT / "reports/current_retrieval_baseline.json") == "24d160979b05f2383db11033f1d830ca5e943bb75629a341fe9832ce2fc5672d"
+
+
+def test_stale_implementation_hash_is_rejected():
+    report = baseline.load(
+        ROOT / "reports/current_real_vector_quality_baseline.json"
+    )
+    report["implementation_sources"][0]["sha256"] = "0" * 64
+
+    with pytest.raises(
+        baseline.QualityViolationError,
+        match="implementation source fingerprint mismatch",
+    ):
+        baseline.validate_report(report)

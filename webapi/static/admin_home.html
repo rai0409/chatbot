@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Admin Dashboard</title>
+<style>
+  :root { --fg:#1f2933; --muted:#667085; --line:#e3e8ef; --bg:#f4f6f9; --panel:#fff; --accent:#0b6b5b; --accent-weak:#e8f4f1;
+          --ok:#11733b; --warn:#8a5a00; --warn-bg:#fff7e0; --crit:#a12a2a; --crit-bg:#fdecec; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e6e9ef; --muted:#9aa4b2; --line:#2a313c; --bg:#12161c; --panel:#181d24; --accent-weak:#12302a;
+            --ok:#6fd49b; --warn:#f3cf7a; --warn-bg:#2b2410; --crit:#ff9b9b; --crit-bg:#3a1717; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.6 system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif; }
+  main { width: min(1180px, calc(100% - 32px)); margin: 20px auto 40px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .panel h2 { font-size: 14px; margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; }
+  .status { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: 12px; font-weight: 600; }
+  .status.OK { background: var(--accent-weak); color: var(--ok); }
+  .status.WARN { background: var(--warn-bg); color: var(--warn); }
+  .status.CRITICAL { background: var(--crit-bg); color: var(--crit); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  .bar { height: 8px; background: var(--accent-weak); border-radius: 4px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--accent); }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .kpi b { display: block; font-size: 22px; }
+  .kpi span { color: var(--muted); font-size: 12px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  button.danger { font: inherit; font-size: 13px; border: 1px solid var(--crit); color: var(--crit); background: transparent; border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+</style>
+</head>
+<body>
+<!--admin-nav-->
+<main>
+  <h1>ダッシュボード</h1>
+  <div class="sub" id="scopeNote">運用状況の概要です。</div>
+
+  <div class="kpis">
+    <div class="kpi"><b id="kpiAnswers">–</b><span>回答数</span></div>
+    <div class="kpi"><b id="kpiGrounded">–</b><span>根拠付き・承認済みの割合</span></div>
+    <div class="kpi"><b id="kpiAbstain">–</b><span>回答できなかった割合</span></div>
+    <div class="kpi"><b id="kpiFeedback">–</b><span>フィードバック（良い／悪い）</span></div>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>アラート <span class="status" id="overall">–</span></h2>
+      <table><thead><tr><th>指標</th><th>状態</th><th>値</th></tr></thead><tbody id="signals"></tbody></table>
+    </section>
+    <section class="panel">
+      <h2>回答の内訳</h2>
+      <table><tbody id="modes"><tr><td class="muted">データがありません</td></tr></tbody></table>
+    </section>
+    <section class="panel">
+      <h2>依存サービス</h2>
+      <table><thead><tr><th>サービス</th><th>状態</th><th>応答</th></tr></thead><tbody id="deps"></tbody></table>
+      <div class="muted" id="model"></div>
+    </section>
+    <section class="panel">
+      <h2>最近の取込ジョブ <a href="/admin/ingestion" class="muted">すべて表示</a></h2>
+      <table><thead><tr><th>ジョブ</th><th>状態</th><th>コレクション</th></tr></thead><tbody id="jobs"></tbody></table>
+    </section>
+    <section class="panel">
+      <h2>セッション</h2>
+      <p class="muted">管理トークンを共有している全員の管理画面セッションを終了します（自分も含む）。トークン漏えいの疑いがある場合は、あわせて ADMIN_AUTH_TOKEN を変更してください。</p>
+      <button type="button" class="danger" id="logoutAll">すべての管理セッションを終了</button>
+    </section>
+  </div>
+</main>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var LABELS = {
+    grounded: "文書から回答", approved_exact_match: "承認済み（完全一致）", approved_alias_match: "承認済み（別名）",
+    fallback: "回答できない（根拠不足）", approved_similar_candidate_only: "類似の承認済み候補のみ"
+  };
+  var SIGNALS = {
+    error_rate: "エラー率", fallback_rate: "回答不能率", guard_trip_rate: "ガード発動率", zero_success: "成功ゼロ",
+    rate_limited: "レート制限", auth_rejection: "認証拒否", human_review_rate: "担当者確認の依頼率",
+    latency_p95_ms: "応答時間 p95", audit_write_failures: "監査記録の書き込み失敗"
+  };
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function sum(obj) { return Object.keys(obj || {}).reduce(function (a, k) { return a + Number(obj[k] || 0); }, 0); }
+  function pct(n, d) { return d ? Math.round((n / d) * 1000) / 10 + "%" : "–"; }
+
+  function loadMetrics() {
+    adminFetch("/admin/metrics/summary").then(function (r) { return r.ok ? r.json() : null; }).then(function (m) {
+      if (!m) return;
+      var counters = m.counters || {};
+      var modes = counters.chat_answer_mode_total || {};
+      var total = sum(modes);
+      var served = (modes.grounded || 0) + (modes.approved_exact_match || 0) + (modes.approved_alias_match || 0);
+      $("kpiAnswers").textContent = total;
+      $("kpiGrounded").textContent = pct(served, total);
+      $("kpiAbstain").textContent = pct(modes.fallback || 0, total);
+      var fb = counters.chat_feedback_total || {};
+      $("kpiFeedback").textContent = (fb.good || 0) + " / " + (fb.bad || 0);
+      $("scopeNote").textContent = m.scope === "all_workers" ? "全ワーカーの合計（METRICS_MULTIPROC_DIR）。プロセス起動以降の値です。"
+        : "このプロセスの値です（複数ワーカーなら METRICS_MULTIPROC_DIR を設定すると合算されます）。";
+      var alerts = m.alerts || {};
+      $("overall").textContent = alerts.overall || "–";
+      $("overall").className = "status " + (alerts.overall || "");
+      $("signals").innerHTML = (alerts.signals || []).map(function (s) {
+        return "<tr><td>" + esc(SIGNALS[s.name] || s.name) + '</td><td><span class="status ' + esc(s.status) + '">' + esc(s.status) +
+          "</span></td><td>" + esc(s.detail || s.value) + "</td></tr>";
+      }).join("");
+      var rows = Object.keys(modes).sort(function (a, b) { return modes[b] - modes[a]; }).map(function (k) {
+        var share = total ? (modes[k] / total) * 100 : 0;
+        return "<tr><td>" + esc(LABELS[k] || k) + '</td><td style="width:45%"><div class="bar"><span style="width:' + share.toFixed(1) + '%"></span></div></td><td>' +
+          esc(modes[k]) + "</td></tr>";
+      });
+      if (rows.length) $("modes").innerHTML = rows.join("");
+    }).catch(function () {});
+  }
+  function loadHealth() {
+    adminFetch("/admin/health").then(function (r) { return r.ok ? r.json() : null; }).then(function (h) {
+      if (!h) return;
+      var deps = h.dependencies || {};
+      var names = Object.keys(deps);
+      $("deps").innerHTML = names.length ? names.map(function (k) {
+        var d = deps[k];
+        return "<tr><td>" + esc(k) + '</td><td><span class="status ' + (d.ok ? "OK" : "CRITICAL") + '">' + (d.ok ? "正常" : "接続不可") +
+          "</span></td><td>" + esc(d.ok ? (d.ms + " ms") : (d.error || "")) + "</td></tr>";
+      }).join("") : '<tr><td colspan="3" class="muted">共有サービスは使っていません（単一ノード構成）。</td></tr>';
+      var model = [h.embed_provider, h.embed_model].filter(Boolean).join(" / ");
+      $("model").textContent = model ? "埋め込み: " + model : "";
+    }).catch(function () {});
+  }
+  function loadJobs() {
+    adminFetch("/admin/ingestion/jobs").then(function (r) { return r.ok ? r.json() : null; }).then(function (res) {
+      var jobs = (res && res.jobs) || [];
+      $("jobs").innerHTML = jobs.length ? jobs.slice(0, 8).map(function (j) {
+        return "<tr><td>" + esc(String(j.job_id || "").slice(0, 8)) + "</td><td>" + esc(j.status) + "</td><td>" + esc(j.collection || "") + "</td></tr>";
+      }).join("") : '<tr><td colspan="3" class="muted">ジョブはありません。</td></tr>';
+    }).catch(function () {});
+  }
+  $("logoutAll").addEventListener("click", function () {
+    if (!confirm("すべての管理セッションを終了します。よろしいですか？")) return;
+    adminFetch("/admin/logout-all", { method: "POST" }).then(function () { location.href = "/admin/login"; });
+  });
+  loadMetrics(); loadHealth(); loadJobs();
+  setInterval(loadMetrics, 30000);
+})();
+</script>
+</body>
+</html>

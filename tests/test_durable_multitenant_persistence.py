@@ -4,7 +4,6 @@ import json
 import subprocess
 from pathlib import Path
 
-import pytest
 
 import config
 from rag_core import retrieval, store

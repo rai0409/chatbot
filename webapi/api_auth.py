@@ -57,6 +57,22 @@ def search_debug_enabled() -> bool:
     return raw in _ENABLED_VALUES
 
 
+def unmapped_tenant_access_allowed(env_name: str) -> bool:
+    # Legacy opt-in only. With the variable unset, an authenticated caller that
+    # has no tenant map is limited to the default tenant (fail closed).
+    return str(os.getenv(env_name, "")).strip().lower() in _ENABLED_VALUES
+
+
+def _default_tenant_only(ctx: ApiAuthContext) -> ApiAuthContext:
+    return ApiAuthContext(
+        authenticated=ctx.authenticated,
+        tenant_authorization_enabled=True,
+        allowed_tenants=frozenset({_DEFAULT_TENANT_ID}),
+        key_fingerprint=ctx.key_fingerprint,
+        role=ctx.role,
+    )
+
+
 def _configured_keys() -> list[str]:
     raw = str(os.getenv("API_AUTH_KEYS", ""))
     return [part.strip() for part in raw.split(",") if part.strip()]
@@ -91,10 +107,15 @@ def _key_fingerprint(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
 
 
+def _same_secret(a: str, b: str) -> bool:
+    # compare_digest raises TypeError for non-ASCII str (a 500); bytes never do.
+    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
 def _allowed_tenants_for_key(provided: str, tenant_map: dict[str, frozenset[str]]) -> frozenset[str]:
     allowed: frozenset[str] = frozenset()
     for map_key, tenants in tenant_map.items():
-        if hmac.compare_digest(provided, map_key):
+        if _same_secret(provided, map_key):
             allowed = allowed | tenants
     return allowed
 
@@ -134,9 +155,20 @@ def require_api_auth_headers(headers: Mapping[str, str] | None = None) -> ApiAut
 
     oidc_ctx = oidc_auth.resolve_oidc_session(headers)
     if oidc_ctx is not None:
+        # A session issued without any tenant map (OIDC_TENANT_MAP /
+        # OIDC_GROUP_TENANT_MAP unset) would otherwise reach every tenant.
+        if not oidc_ctx.tenant_authorization_enabled and not unmapped_tenant_access_allowed(
+            "OIDC_ALLOW_ANY_TENANT_WITHOUT_MAP"
+        ):
+            return _default_tenant_only(oidc_ctx)
         return oidc_ctx
 
     if not api_auth_enabled():
+        # With OIDC or the proxy bridge on, a request without their
+        # credentials is not anonymous: it would otherwise reach every tenant.
+        if oidc_auth.oidc_enabled() or enterprise_auth.enterprise_auth_enabled():
+            _record_auth_rejection("missing_credentials")
+            raise HTTPException(status_code=401, detail="authentication required")
         return ApiAuthContext()
 
     keys = _configured_keys()
@@ -150,19 +182,23 @@ def require_api_auth_headers(headers: Mapping[str, str] | None = None) -> ApiAut
     if not provided:
         _record_auth_rejection("missing_credentials")
         raise HTTPException(status_code=401, detail="api authentication required")
-    if not any(hmac.compare_digest(provided, key) for key in keys):
+    if not any(_same_secret(provided, key) for key in keys):
         _record_auth_rejection("invalid_credentials")
         raise HTTPException(status_code=403, detail="invalid api credentials")
 
     raw_map = _tenant_map_raw()
     if not raw_map:
-        # Backward compatible: with no tenant map configured, any valid API
-        # key may access any requested tenant_id.
-        return ApiAuthContext(
+        # With no tenant map configured, a valid API key reaches only the
+        # default tenant. API_AUTH_ALLOW_ANY_TENANT_WITHOUT_MAP=true restores
+        # the old "any tenant" behavior for single-tenant legacy setups.
+        legacy = ApiAuthContext(
             authenticated=True,
             tenant_authorization_enabled=False,
             key_fingerprint=_key_fingerprint(provided),
         )
+        if unmapped_tenant_access_allowed("API_AUTH_ALLOW_ANY_TENANT_WITHOUT_MAP"):
+            return legacy
+        return _default_tenant_only(legacy)
 
     # A non-empty map activates strict enforcement. Keys absent from the map
     # (including all-invalid map entries) get an empty tenant set and fail

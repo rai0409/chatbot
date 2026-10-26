@@ -8,7 +8,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment

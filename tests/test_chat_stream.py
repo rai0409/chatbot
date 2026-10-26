@@ -229,7 +229,7 @@ def test_chat_stream_endpoint_error_before_first_token(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", False)
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(qa, "hybrid_retrieve", lambda *a, **k: [_mk_chunk("A", "説明です。")])
+    monkeypatch.setattr(qa, "hybrid_retrieve", lambda *a, **k: [_mk_chunk("A", "PR2 は二段階確認の説明です。")])
     monkeypatch.setattr(qa, "guard_merged_top", lambda *a, **k: None)
     monkeypatch.setattr(qa.time, "sleep", lambda s: None)
     failing = _FakeStreamClient(

@@ -36,6 +36,24 @@ _COST_POLICY_KEYS = {
 _NEVER_ENABLE_FEATURES = {"llm_answer", "llm_rerank"}
 _NEVER_ENABLE_ANSWER = {"allow_similar_auto_answer"}
 _PRODUCTION_PROFILES = {"production_safe", "production_low_cost"}
+# Safety steps a request override may never switch off.
+_LOCKED_FEATURES = {"audit", "review_queue"}
+_LOCKED_ANSWER_POLICY = {"fallback_to_no_answer", "human_review_on_low_confidence"}
+
+
+def _is_production(profile: Dict[str, Any]) -> bool:
+    # Decided by operation mode as well as name, so a copied production profile
+    # under another name keeps the production safety rules.
+    name = str(profile.get("profile_name") or "")
+    mode = str(profile.get("operation_mode") or "")
+    return name in _PRODUCTION_PROFILES or mode.startswith("production")
+
+
+def _is_low_cost(profile: Dict[str, Any]) -> bool:
+    return "production_low_cost" in {
+        str(profile.get("profile_name") or ""),
+        str(profile.get("operation_mode") or ""),
+    }
 
 
 def _dict(profile: Dict[str, Any], key: str) -> Dict[str, Any]:
@@ -48,7 +66,6 @@ def _warnings_for_safety(profile: Dict[str, Any]) -> List[str]:
     features = _dict(profile, "features")
     answer = _dict(profile, "answer_policy")
     cost = _dict(profile, "cost_policy")
-    profile_name = str(profile.get("profile_name") or "")
 
     if answer.get("allow_similar_auto_answer") is True:
         warnings.append("similar_auto_answer_forced_disabled")
@@ -56,9 +73,9 @@ def _warnings_for_safety(profile: Dict[str, Any]) -> List[str]:
         warnings.append("llm_features_forced_disabled")
     if cost.get("allow_llm_calls") is not True and (features.get("llm_answer") or features.get("llm_rerank")):
         warnings.append("llm_features_disabled_by_cost_policy")
-    if profile_name in _PRODUCTION_PROFILES and features.get("debug_comparison"):
+    if _is_production(profile) and features.get("debug_comparison"):
         warnings.append("debug_comparison_forced_disabled_in_production")
-    if profile_name in {"production_safe", "production_low_cost"} and features.get("feedback_preview_rerank"):
+    if _is_production(profile) and features.get("feedback_preview_rerank"):
         warnings.append("feedback_preview_forced_disabled_in_production")
     return warnings
 
@@ -67,7 +84,6 @@ def _apply_hard_safety(profile: Dict[str, Any]) -> None:
     features = _dict(profile, "features")
     answer = _dict(profile, "answer_policy")
     cost = _dict(profile, "cost_policy")
-    profile_name = str(profile.get("profile_name") or "")
 
     answer["allow_similar_auto_answer"] = False
     answer["force_candidate_only_for_similar"] = True
@@ -76,11 +92,10 @@ def _apply_hard_safety(profile: Dict[str, Any]) -> None:
         features["llm_rerank"] = False
     features["llm_answer"] = False
     features["llm_rerank"] = False
-    if profile_name in _PRODUCTION_PROFILES:
+    if _is_production(profile):
         features["debug_comparison"] = False
-    if profile_name in {"production_safe", "production_low_cost"}:
         features["feedback_preview_rerank"] = False
-        if profile_name == "production_low_cost":
+        if _is_low_cost(profile):
             features["combined_rerank"] = False
     profile["features"] = features
     profile["answer_policy"] = answer
@@ -95,6 +110,9 @@ def _apply_feature_overrides(profile: Dict[str, Any], overrides: Dict[str, Any],
             continue
         if not isinstance(value, bool):
             warnings.append(f"invalid_override:features.{key}")
+            continue
+        if key in _LOCKED_FEATURES and value is False:
+            warnings.append(f"locked_override_ignored:features.{key}")
             continue
         if value is True:
             warnings.append(f"unsafe_enable_ignored:features.{key}")
@@ -115,6 +133,9 @@ def _apply_answer_overrides(profile: Dict[str, Any], overrides: Dict[str, Any], 
             continue
         if key in _NEVER_ENABLE_ANSWER and value is True:
             warnings.append(f"unsafe_enable_ignored:answer_policy.{key}")
+            continue
+        if key in _LOCKED_ANSWER_POLICY and value is False:
+            warnings.append(f"locked_override_ignored:answer_policy.{key}")
             continue
         current = answer.get(key)
         if isinstance(current, bool) and value is False and current is True:

@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 
 import config
 from rag_core import answer_cache, embedder, qa, store
-from rag_core.retrieval import RetrievedChunk
 from webapi import ingestion_jobs, main, metrics_registry
 
 

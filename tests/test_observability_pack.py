@@ -15,7 +15,7 @@ _KNOWN_METRICS = {
     "chat_answer_mode_total", "chat_guard_reason_total", "chat_used_fallback_total",
     "chat_provider_error_total", "chat_cache_hit_total", "chat_tenant_profile_total",
     "chat_feedback_total", "api_rate_limited_total", "api_auth_rejection_total",
-    "api_enterprise_auth_total", "api_oidc_auth_total", "api_role_total", "up",
+    "api_enterprise_auth_total", "api_oidc_auth_total", "api_role_total", "up", "audit_write_failures_total",
 }
 _FORBIDDEN = ("sk-", "Bearer ", "X-Api-Key", "OPENAI_API_KEY", "ADMIN_AUTH_TOKEN",
               "OIDC_CLIENT_SECRET", "OIDC_SESSION_SECRET", "ENTERPRISE_AUTH_TRUST_TOKEN",

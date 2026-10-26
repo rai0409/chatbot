@@ -1,19 +1,22 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import chromadb
+from urllib.parse import quote
+
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler as _default_http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import config
 from rag_core import answer_cache
@@ -44,7 +47,14 @@ from rag_core.product_contract import (
 from rag_core.feedback_rerank_profile import PROFILE_PATH, apply_feedback_preview_rerank
 from rag_core.product_profile import load_product_profile
 from rag_core.product_route_policy import build_route_policy
-from rag_core.qa import answer_query_stream, answer_query_with_trace, debug_retrieve_with_trace, retrieve_chunks
+from rag_core.profile_loader import is_valid_rag_profile_id
+from rag_core.qa import (
+    answer_query_stream,
+    answer_query_with_trace,
+    debug_retrieve_with_trace,
+    distance_guard_calibration,
+    retrieve_chunks,
+)
 from rag_core.question_normalization import normalize_question_for_exact_match
 from rag_core.retrieval import RetrievedChunk, keyword_index_status, normalize_tenant_id
 from rag_core.review_actions import (
@@ -61,18 +71,116 @@ from webapi import conversation_store
 from webapi import ingestion_jobs
 from webapi import metrics_registry
 from webapi import oidc_auth
-from webapi.admin_auth import admin_auth_enabled, require_admin_auth
+from webapi.admin_auth import (
+    ADMIN_CSRF_COOKIE,
+    ADMIN_SESSION_COOKIE,
+    admin_auth_enabled,
+    admin_scope,
+    csrf_token_for,
+    enforce_admin_token,
+    issue_admin_session,
+    require_admin_auth,
+    require_global,
+    require_scope,
+    revoke_admin_session,
+    revoke_all_admin_sessions,
+    token_scope,
+)
 from webapi.api_auth import (
     ApiAuthContext,
+    _parse_tenant_map,
     api_auth_enabled,
     enforce_tenant_authorization,
     require_search_debug_access,
 )
-from webapi.rate_limit import require_api_auth_rate_limited
+from webapi.rate_limit import FixedWindowRateLimiter, require_api_auth_rate_limited
+from webapi.rbac import ROLE_OPERATOR, ROLE_USER, caller_has_role, enforce_role
+from webapi import production_guard
+from webapi import synonym_review
+from webapi import security_middleware
+from webapi import state_backend
+from rag_core import vector_backend
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from rag_core import conversation_context
+from webapi.security_middleware import HardeningMiddleware
+from rag_core.audit_log import set_audit_actor, write_failure_count
+from rag_core.review_actions import latest_review_statuses
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-app = FastAPI()
+# APP_ENV=production refuses to start with unsafe settings (see
+# webapi/production_guard.py); development keeps the historical behaviour.
+production_guard.check_production_settings()
+_DOCS = production_guard.docs_enabled()
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    # Stage 14: jobs of a process that was stopped (deploy, crash) are marked
+    # interrupted instead of staying "running" forever; on shutdown the job
+    # pool and the conversion workers stop and shared connections close.
+    try:
+        recovered = ingestion_jobs.recover_interrupted_jobs()
+        if recovered:
+            logging.warning("ingestion jobs marked interrupted at startup: %d", recovered)
+    except Exception:  # noqa: BLE001 - never block startup on the job registry
+        logging.exception("ingestion job recovery failed")
+    try:
+        calibration = distance_guard_calibration()
+        if not calibration["calibrated"]:
+            logging.warning(
+                "distance guard thresholds were calibrated for %s, active embedding model is %s: "
+                "run scripts/calibrate_distance_guard.py (RAG_DIST_CALIBRATED_MODEL)",
+                calibration["calibrated_for"], calibration["active_model"],
+            )
+    except Exception:  # noqa: BLE001
+        logging.exception("distance guard calibration check failed")
+    yield
+    try:
+        ingestion_jobs.shutdown(wait=False)
+    finally:
+        state_backend.close_all()
+
+
+app = FastAPI(
+    docs_url="/docs" if _DOCS else None,
+    redoc_url="/redoc" if _DOCS else None,
+    openapi_url="/openapi.json" if _DOCS else None,
+    lifespan=_lifespan,
+)
+# Request body size limit and security headers on every response.
+app.add_middleware(HardeningMiddleware)
+
+
+def _production_index_checks() -> None:
+    # v2_02 P0-1 / P0-3: load the keyword index at start-up (the first query
+    # no longer pays for it) and refuse to serve a missing/empty index or one
+    # built with another normalization than the one queries use.
+    from rag_core.ja_text import active_normalization_version
+    from rag_core.retrieval import keyword_index_versions
+
+    status = keyword_index_status()
+    if not status.get("keyword_index_loaded"):
+        raise RuntimeError(
+            "APP_ENV=production refused to start: keyword index is missing or empty "
+            f"({status.get('keyword_index_path')})"
+        )
+    active = active_normalization_version()
+    other = {v: n for v, n in keyword_index_versions()["normalization_version"].items() if v and v != active}
+    if other:
+        raise RuntimeError(
+            f"APP_ENV=production refused to start: keyword index rows use normalization {sorted(other)}, "
+            f"queries use {active}; rebuild the index or set NORMALIZATION_PROFILE to match"
+        )
+
+
+if production_guard.is_production():
+    _production_index_checks()
+_ALLOWED_HOSTS = [h.strip() for h in str(os.getenv("ALLOWED_HOSTS", "")).split(",") if h.strip()]
+if _ALLOWED_HOSTS:
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=_ALLOWED_HOSTS)
 
 
 def _cors_allow_origins() -> List[str]:
@@ -88,8 +196,8 @@ if _CORS_ORIGINS:
         CORSMiddleware,
         allow_origins=_CORS_ORIGINS,
         allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Content-Type", "Authorization", "X-Api-Key", "X-Admin-Token"],
     )
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _start_time = time.time()
@@ -122,28 +230,45 @@ _REVIEW_ITEM_FIELDS = (
 )
 
 
+def _int_env(name: str, default: int) -> int:
+    try:
+        value = int(str(os.getenv(name, "")).strip() or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# Input bounds (6-1). Over-long questions and huge top_k / context sizes are
+# rejected with 422 before any retrieval or model call.
+_MAX_QUESTION_CHARS = _int_env("MAX_QUESTION_CHARS", 4000)
+_MAX_TOP_K = _int_env("MAX_TOP_K", 100)
+_MAX_CONTEXT_CHARS = _int_env("MAX_CONTEXT_CHARS_LIMIT", 32000)
+
+
 class ChatRequest(BaseModel):
-    question: str
-    top_k: Optional[int] = None
-    max_context_chars: Optional[int] = None
+    question: str = Field(..., max_length=_MAX_QUESTION_CHARS)
+    top_k: Optional[int] = Field(None, ge=1, le=_MAX_TOP_K)
+    max_context_chars: Optional[int] = Field(None, ge=1, le=_MAX_CONTEXT_CHARS)
     trace_id: Optional[str] = None
     tenant_id: Optional[str] = None
     staging_collection: Optional[str] = None
     rag_profile_id: Optional[str] = None
+    # Conversation thread for follow-up completion (CONVERSATION_CONTEXT_ENABLED).
+    thread_id: Optional[str] = Field(None, max_length=128)
 
 
 class SearchRequest(BaseModel):
-    query: str
-    top_k: Optional[int] = None
+    query: str = Field(..., max_length=_MAX_QUESTION_CHARS)
+    top_k: Optional[int] = Field(None, ge=1, le=_MAX_TOP_K)
     trace_id: Optional[str] = None
     tenant_id: Optional[str] = None
     staging_collection: Optional[str] = None
 
 
 class SearchDebugRequest(BaseModel):
-    query: str
-    top_k: Optional[int] = None
-    max_context_chars: Optional[int] = None
+    query: str = Field(..., max_length=_MAX_QUESTION_CHARS)
+    top_k: Optional[int] = Field(None, ge=1, le=_MAX_TOP_K)
+    max_context_chars: Optional[int] = Field(None, ge=1, le=_MAX_CONTEXT_CHARS)
     trace_id: Optional[str] = None
     include_context: bool = False
     generate_answer: bool = True
@@ -154,8 +279,8 @@ class SearchDebugRequest(BaseModel):
 
 
 class ProductPreviewChatRequest(BaseModel):
-    query: Optional[str] = None
-    message: Optional[str] = None
+    query: Optional[str] = Field(None, max_length=_MAX_QUESTION_CHARS)
+    message: Optional[str] = Field(None, max_length=_MAX_QUESTION_CHARS)
     tenant_id: Optional[str] = "default"
     customer_id: Optional[str] = None
     top_k: Optional[int] = 3
@@ -194,35 +319,52 @@ class ReviewActionRequest(BaseModel):
     tags: Optional[List[str]] = None
 
 
+# Product-preview profiles are selected by name from these allowlists only;
+# request values are never used as file paths.
+_PRODUCT_PREVIEW_KEYWORD_PROFILES = {
+    "default": "configs/approved_similar_keyword_weights.json",
+}
+_PRODUCT_PREVIEW_THRESHOLD_PROFILES = {
+    "default": "configs/approved_similar_decision_thresholds.json",
+    "balanced": "configs/approved_similar_decision_thresholds_balanced.json",
+    "conservative": "configs/approved_similar_decision_thresholds_conservative.json",
+}
+
+
+def _product_preview_profile_path(name: str | None, allowed: Dict[str, str], field: str) -> str | None:
+    value = str(name or "").strip()
+    if not value:
+        return None
+    relative = allowed.get(value)
+    if relative is None:
+        raise HTTPException(status_code=400, detail=f"unknown {field}")
+    return str(Path(config.BASE_DIR) / relative)
+
+
+def _is_non_serving_product_profile(name: str | None) -> bool:
+    value = str(name or "").strip()
+    if not value:
+        return False
+    try:
+        profile = load_product_profile(value)
+    except Exception:
+        return False
+    return profile.get("profile_name") == value and not bool(profile.get("runtime_serving", False))
+
+
 @contextmanager
 def _temporary_product_preview_profiles(
     *,
-    keyword_profile: str | None,
-    threshold_profile: str | None,
+    keyword_profile_path: str | None,
+    threshold_profile_path: str | None,
 ):
-    previous_keyword = os.environ.get("APPROVED_SIMILAR_KEYWORD_WEIGHTS")
-    previous_keyword_present = "APPROVED_SIMILAR_KEYWORD_WEIGHTS" in os.environ
-    previous_thresholds = os.environ.get("APPROVED_SIMILAR_DECISION_THRESHOLDS")
-    previous_thresholds_present = "APPROVED_SIMILAR_DECISION_THRESHOLDS" in os.environ
-    try:
-        if keyword_profile:
-            os.environ["APPROVED_SIMILAR_KEYWORD_WEIGHTS"] = keyword_profile
-            approved_similar._load_keyword_weight_profile.cache_clear()
-        if threshold_profile:
-            os.environ["APPROVED_SIMILAR_DECISION_THRESHOLDS"] = threshold_profile
-            approved_similar._load_decision_threshold_config.cache_clear()
+    # Request-scoped (contextvars): os.environ is never modified, so concurrent
+    # requests cannot observe each other's profile.
+    with approved_similar.profile_overrides(
+        keyword_profile_path=keyword_profile_path,
+        decision_thresholds_path=threshold_profile_path,
+    ):
         yield
-    finally:
-        if previous_keyword_present:
-            os.environ["APPROVED_SIMILAR_KEYWORD_WEIGHTS"] = str(previous_keyword)
-        else:
-            os.environ.pop("APPROVED_SIMILAR_KEYWORD_WEIGHTS", None)
-        if previous_thresholds_present:
-            os.environ["APPROVED_SIMILAR_DECISION_THRESHOLDS"] = str(previous_thresholds)
-        else:
-            os.environ.pop("APPROVED_SIMILAR_DECISION_THRESHOLDS", None)
-        approved_similar._load_keyword_weight_profile.cache_clear()
-        approved_similar._load_decision_threshold_config.cache_clear()
 
 
 def _preview(text: Any, max_chars: int) -> str:
@@ -358,7 +500,13 @@ def _approved_qa_lookup(question: str, tenant_id: str = "default") -> ApprovedAn
     # Single-slot cache keyed by path AND tenant: load_approved_qa filters
     # records per tenant, so an index loaded for one tenant must never serve
     # another.
-    cache_key = f"{path}::{tenant}"
+    # The file's mtime is part of the key: an edited approved-QA file is
+    # reloaded on the next request instead of after a restart.
+    try:
+        mtime_ns = os.stat(path).st_mtime_ns
+    except OSError:
+        mtime_ns = None
+    cache_key = f"{path}::{tenant}::{mtime_ns}"
     if _approved_qa_index is None or _approved_qa_index_path != cache_key:
         _approved_qa_index = load_approved_qa(path, tenant_id=tenant)
         _approved_qa_index_path = cache_key
@@ -492,7 +640,9 @@ def _approved_exact_hit_to_chat_payload(hit: dict, question: str, tenant_id: str
 
 
 def _approved_exact_chat_lookup(question: str, tenant_id: str) -> Optional[Dict[str, Any]]:
-    hits = lookup_approved_qa_exact(question, limit=1)
+    if not getattr(config, "APPROVED_QA_ENABLED", False):
+        return None
+    hits = lookup_approved_qa_exact(question, tenant_id=tenant_id, limit=1)
     if not hits:
         return None
     return _approved_exact_hit_to_chat_payload(hits[0], question, tenant_id)
@@ -919,6 +1069,7 @@ def _load_review_items(
     priority: str | None = None,
     tenant_id: str | None = None,
     limit: int = 100,
+    tenant_scope=None,
 ) -> Dict[str, Any]:
     source_path = _review_queue_path()
     safe_limit = max(0, min(int(limit or 100), 500))
@@ -931,6 +1082,9 @@ def _load_review_items(
     total_loaded = 0
     skipped_malformed = 0
     items: List[Dict[str, Any]] = []
+    # Latest operator decision per (tenant, review_id) overrides the status
+    # written when the queue was built.
+    action_statuses = latest_review_statuses(Path(config.RUNS_DIR) / "review" / "review_actions.jsonl")
 
     if source_path.exists():
         with source_path.open("r", encoding="utf-8") as f:
@@ -948,12 +1102,17 @@ def _load_review_items(
                     continue
                 total_loaded += 1
                 item = _bounded_review_item(record)
+                decided = action_statuses.get((str(item.get("tenant_id") or "default"), str(item.get("review_id") or "")))
+                if decided:
+                    item["status"] = decided
                 if status and item.get("status") != status:
                     continue
                 if priority and item.get("priority") != priority:
                     continue
                 if tenant_id and item.get("tenant_id") != tenant_id:
                     continue
+                if tenant_scope is not None and str(item.get("tenant_id") or "default") not in tenant_scope:
+                    continue  # stage 15: a tenant administrator sees only its tenants
                 if len(items) < safe_limit:
                     items.append(item)
 
@@ -967,8 +1126,7 @@ def _load_review_items(
     }
 
 
-@app.get("/health")
-def health():
+def _health_details() -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "status": "ok",
         "chroma_collection": config.resolve_chroma_collection_name(),
@@ -976,6 +1134,10 @@ def health():
         "vectorstore_dir": config.VECTORSTORE_DIR,
         "chat_generation_mode": config.resolve_chat_generation_mode(),
     }
+    try:
+        payload["distance_guard"] = distance_guard_calibration()
+    except Exception:  # noqa: BLE001
+        logging.exception("distance guard calibration status unavailable")
     try:
         payload.update(keyword_index_status())
     except Exception:
@@ -993,6 +1155,51 @@ def health():
         logging.exception("embedding fingerprint unavailable")
         payload.update({"embed_provider": None, "embed_model": None})
     return payload
+
+
+@app.get("/health")
+def health():
+    # Production: liveness only. Paths, collection names and models are on
+    # the admin-only /admin/health.
+    if production_guard.is_production():
+        return {"status": "ok"}
+    return _health_details()
+
+
+@app.get("/admin/health")
+def admin_health(_admin_auth: None = Depends(require_admin_auth)):
+    payload = _health_details()
+    # Reachability of Redis / Postgres / Qdrant when they are configured (stage 10).
+    payload["dependencies"] = {**state_backend.health(), **vector_backend.health()}
+    return payload
+
+
+@app.get("/ready")
+def ready():
+    # Readiness for a load balancer / orchestrator: 503 while a configured
+    # shared service (Redis, Postgres, Qdrant) is unreachable. Names only.
+    deps = {**state_backend.health(), **vector_backend.health()}
+    failing = sorted(name for name, state in deps.items() if not state.get("ok"))
+    if failing:
+        return JSONResponse(status_code=503, content={"status": "not_ready", "failing": failing})
+    return {"status": "ready"}
+
+
+def require_metrics_access(request: Request) -> None:
+    # Production: /metrics needs "Authorization: Bearer <METRICS_TOKEN>".
+    if not production_guard.is_production():
+        return
+    import hmac
+
+    expected = str(os.getenv("METRICS_TOKEN", "")).strip()
+    header = str(request.headers.get("authorization") or "")
+    provided = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    if not expected:
+        raise HTTPException(status_code=503, detail="metrics token is not configured")
+    if not provided:
+        raise HTTPException(status_code=401, detail="metrics authentication required")
+    if not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=403, detail="invalid metrics credentials")
 
 
 def _record_chat_outcome_metrics(
@@ -1018,7 +1225,7 @@ def _record_provider_error_metric(generation_error) -> None:
 
 
 @app.get("/metrics")
-def metrics(format: Optional[str] = None):
+def metrics(format: Optional[str] = None, _metrics_auth: None = Depends(require_metrics_access)):
     # Counters are per-process; with multiple workers each process reports
     # its own numbers. Default output is JSON; ?format=prometheus returns the
     # Prometheus text exposition format generated from the same counters.
@@ -1026,8 +1233,18 @@ def metrics(format: Optional[str] = None):
         "uptime_seconds": int(time.time() - _start_time),
         "total_requests": _total_requests,
         "error_requests": _error_requests,
-        "counters": metrics_registry.snapshot(),
+        "counters": metrics_registry.aggregate_snapshot(),
+        "counters_scope": metrics_registry.scope(),
     }
+    if metrics_registry.scope() == "all_workers":
+        totals = metrics_registry.aggregate_totals()
+        payload["total_requests"] = totals["requests"]
+        payload["error_requests"] = totals["errors"]
+    audit_failures = write_failure_count()
+    if audit_failures:
+        # Audit writes that failed (disk full, permissions): alert on > 0.
+        payload["counters"] = dict(payload["counters"])
+        payload["counters"]["audit_write_failures_total"] = {"total": audit_failures}
     if str(format or "").strip().lower() == "prometheus":
         return PlainTextResponse(
             metrics_registry.to_prometheus(payload),
@@ -1044,6 +1261,21 @@ def product_preview_page():
     except Exception:
         logging.exception("product preview page unavailable")
         raise HTTPException(status_code=500, detail="product preview page unavailable")
+
+
+# Scripts shared by the pages (stage 13; unit-tested with node --test).
+_STATIC_SCRIPTS = {"render.js", "login.js"}
+
+
+@app.get("/static/js/{name}")
+def static_script(name: str):
+    if name not in _STATIC_SCRIPTS:
+        raise HTTPException(status_code=404, detail="not found")
+    return PlainTextResponse(
+        (_STATIC_DIR / "js" / name).read_text(encoding="utf-8"),
+        media_type="application/javascript; charset=utf-8",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/chat-ui", response_class=HTMLResponse)
@@ -1096,9 +1328,14 @@ def oidc_callback(request: Request, code: Optional[str] = None, state: Optional[
 
 
 @app.get("/auth/oidc/logout")
-def oidc_logout():
+@app.post("/auth/oidc/logout")
+def oidc_logout(request: Request):
     _require_oidc()
-    resp = JSONResponse({"ok": True})
+    # Revoke server-side too: a copied cookie stops working after logout.
+    oidc_auth.revoke_session_from_headers(request.headers)
+    # end_session_url (when the IdP publishes one): the UI sends the browser
+    # there so the IdP session ends too (RP-initiated logout).
+    resp = JSONResponse({"ok": True, **oidc_auth.end_session_info()})
     resp.delete_cookie(oidc_auth.SESSION_COOKIE, path="/")
     return resp
 
@@ -1126,11 +1363,175 @@ def ui_context(request: Request):
     }
 
 
+# --- Admin browser login (stage 9) -------------------------------------------
+# Admin auth is fail-closed and browsers cannot send X-Admin-Token on a page
+# navigation, so the admin pages were unreachable from a browser. /admin/login
+# exchanges the token for an httponly, SameSite=Strict session cookie (signed
+# with the token; ADMIN_SESSION_TTL_SECONDS, default 8h).
+
+
+class AdminLoginRequest(BaseModel):
+    token: str = Field(..., min_length=1, max_length=512)
+
+
+_ADMIN_LOGIN_LIMITER = FixedWindowRateLimiter()
+
+
+def _admin_login_attempts_per_minute() -> int:
+    try:
+        return max(1, int(os.getenv("ADMIN_LOGIN_ATTEMPTS_PER_MINUTE", "") or 10))
+    except ValueError:
+        return 10
+
+
+def _request_scope(request: Optional[Request]):
+    # Direct function calls (tests) bypass FastAPI and its admin dependency,
+    # like enforce_tenant_authorization; served requests always carry one.
+    return admin_scope(request.headers) if isinstance(request, Request) else None
+
+
+def _admin_actor(scope) -> Dict[str, Any]:
+    # Audit actor of an admin request: never the token, only its reach.
+    return {"admin_scope": "installation" if scope is None else sorted(scope)}
+
+
+def _audit_admin(scope, action: str, **fields: Any) -> None:
+    """Stage 15: administrative changes are written to the audit log."""
+    append_audit_event("admin", {"action": action, **_admin_actor(scope), **fields})
+
+
+@app.get("/admin/login", response_class=HTMLResponse)
+def admin_login_page():
+    path = _STATIC_DIR / "admin_login.html"
+    try:
+        return HTMLResponse(path.read_text(encoding="utf-8"))
+    except Exception:
+        logging.exception("admin login page unavailable")
+        raise HTTPException(status_code=500, detail="admin login page unavailable")
+
+
+@app.post("/admin/login")
+def admin_login(req: AdminLoginRequest, request: Request):
+    if not admin_auth_enabled():
+        raise HTTPException(status_code=404, detail="not found")
+    # Always limited, independent of RATE_LIMIT_ENABLED: one bucket per address.
+    host = request.client.host if request.client else "unknown"
+    bucket = "admin-login:" + hashlib.sha256(host.encode("utf-8")).hexdigest()[:12]
+    allowed, retry_after = _ADMIN_LOGIN_LIMITER.check(bucket, _admin_login_attempts_per_minute())
+    if not allowed:
+        raise HTTPException(
+            status_code=429, detail="too many login attempts", headers={"Retry-After": str(max(1, int(retry_after) + 1))}
+        )
+    try:
+        enforce_admin_token({"x-admin-token": req.token})
+    except HTTPException:
+        metrics_registry.increment("api_auth_rejection_total", "admin_login_failed")
+        _audit_admin(frozenset(), "admin_login_failed")
+        raise
+    scope = token_scope(req.token)[1]
+    cookie, ttl = issue_admin_session(scope=scope)
+    _audit_admin(scope, "admin_login")
+    resp = JSONResponse({"ok": True, "expires_in": ttl})
+    secure = oidc_auth.cookie_secure()
+    resp.set_cookie(
+        ADMIN_SESSION_COOKIE, cookie, max_age=ttl, httponly=True,
+        samesite="strict", secure=secure, path="/",
+    )
+    # Readable by the admin pages' script, which echoes it in X-CSRF-Token.
+    resp.set_cookie(
+        ADMIN_CSRF_COOKIE, csrf_token_for(cookie), max_age=ttl, httponly=False,
+        samesite="strict", secure=secure, path="/",
+    )
+    return resp
+
+
+@app.post("/admin/logout")
+def admin_logout(request: Request):
+    # The session is revoked on the server too: a copied cookie stops working.
+    revoke_admin_session(request.cookies.get(ADMIN_SESSION_COOKIE))
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(ADMIN_SESSION_COOKIE, path="/")
+    resp.delete_cookie(ADMIN_CSRF_COOKIE, path="/")
+    return resp
+
+
+@app.post("/admin/logout-all")
+def admin_logout_all(request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    # Ends every admin browser session issued until now, on every node.
+    scope = _request_scope(request)
+    require_global(scope)
+    revoke_all_admin_sessions()
+    _audit_admin(scope, "admin_logout_all")
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(ADMIN_SESSION_COOKIE, path="/")
+    resp.delete_cookie(ADMIN_CSRF_COOKIE, path="/")
+    return resp
+
+
+_ADMIN_PAGES = {"/admin", "/admin/review", "/admin/ingestion", "/admin/synonyms"}
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_with_admin_login(request: Request, exc: StarletteHTTPException):
+    # A browser opening an admin page without a valid session goes to the
+    # login page instead of a JSON 401 (API clients keep the 401).
+    path = request.url.path.rstrip("/") or "/"
+    if (
+        exc.status_code == 401
+        and request.method == "GET"
+        and path in _ADMIN_PAGES
+        and "text/html" in str(request.headers.get("accept") or "")
+    ):
+        return RedirectResponse(url="/admin/login?next=" + quote(path), status_code=303)
+    return await _default_http_exception_handler(request, exc)
+
+
+@app.exception_handler(state_backend.StateBackendUnavailable)
+async def _state_backend_unavailable(request: Request, exc: Exception):
+    return JSONResponse(status_code=503, content={"detail": "shared state service unavailable"}, headers={"Retry-After": "5"})
+
+
+def _admin_page_html(path: Path) -> str:
+    # Admin pages share one header (menu, logout, CSRF-aware fetch); it is
+    # inserted where a page has the "admin-nav" marker comment.
+    html = path.read_text(encoding="utf-8")
+    marker = "<!--admin-nav-->"
+    if marker in html:
+        try:
+            nav = (_STATIC_DIR / "admin_nav.html").read_text(encoding="utf-8")
+        except OSError:
+            nav = ""
+        html = html.replace(marker, nav, 1)
+    return html
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_home_page(_admin_auth: None = Depends(require_admin_auth)):
+    path = _STATIC_DIR / "admin_home.html"
+    try:
+        return HTMLResponse(_admin_page_html(path))
+    except Exception:
+        logging.exception("admin dashboard unavailable")
+        raise HTTPException(status_code=500, detail="admin dashboard unavailable")
+
+
+@app.get("/admin/metrics/summary")
+def admin_metrics_summary(_admin_auth: None = Depends(require_admin_auth)):
+    from webapi.alerting import evaluate_alerts
+
+    counters = metrics_registry.aggregate_snapshot()
+    audit_failures = write_failure_count()
+    if audit_failures:
+        counters = dict(counters)
+        counters["audit_write_failures_total"] = {"total": audit_failures}
+    return {"counters": counters, "scope": metrics_registry.scope(), "alerts": evaluate_alerts({"counters": counters})}
+
+
 @app.get("/admin/review", response_class=HTMLResponse)
 def admin_review_page(_admin_auth: None = Depends(require_admin_auth)):
     path = _STATIC_DIR / "review_queue.html"
     try:
-        return HTMLResponse(path.read_text(encoding="utf-8"))
+        return HTMLResponse(_admin_page_html(path))
     except Exception:
         logging.exception("review queue page unavailable")
         raise HTTPException(status_code=500, detail="review queue page unavailable")
@@ -1138,22 +1539,27 @@ def admin_review_page(_admin_auth: None = Depends(require_admin_auth)):
 
 @app.get("/admin/review/items")
 def admin_review_items(
+    request: Request = None,
     status: Optional[str] = None,
     priority: Optional[str] = None,
     tenant_id: Optional[str] = None,
     limit: int = 100,
     _admin_auth: None = Depends(require_admin_auth),
 ):
+    scope = _request_scope(request)
+    if tenant_id:
+        require_scope(scope, tenant_id)
     return _load_review_items(
         status=status,
         priority=priority,
         tenant_id=tenant_id,
         limit=limit,
+        tenant_scope=scope,
     )
 
 
 @app.post("/admin/review/action")
-def admin_review_action(req: ReviewActionRequest, _admin_auth: None = Depends(require_admin_auth)):
+def admin_review_action(req: ReviewActionRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
     review_id = str(req.review_id or "").strip()
     action_type = str(req.action_type or "").strip()
     status_after = str(req.status_after or "").strip() if req.status_after is not None else None
@@ -1163,6 +1569,16 @@ def admin_review_action(req: ReviewActionRequest, _admin_auth: None = Depends(re
         raise HTTPException(status_code=400, detail="invalid action_type")
     if status_after is not None and status_after not in ALLOWED_STATUS_AFTER:
         raise HTTPException(status_code=400, detail="invalid status_after")
+    queued = [
+        item for item in _load_review_items(limit=500)["items"] if str(item.get("review_id") or "") == review_id
+    ]
+    if queued and all(str(item.get("tenant_id") or "default") != (req.tenant_id or "default") for item in queued):
+        raise HTTPException(status_code=403, detail="review item belongs to another tenant")
+    # Stage 15: the item's own tenant (the queue), not only the request body.
+    scope = _request_scope(request)
+    require_scope(scope, req.tenant_id or "default")
+    for item in queued:
+        require_scope(scope, item.get("tenant_id") or "default")
 
     event = build_review_action_event(
         review_id=review_id,
@@ -1175,6 +1591,8 @@ def admin_review_action(req: ReviewActionRequest, _admin_auth: None = Depends(re
         tags=req.tags,
     )
     stored = append_review_action_event(event)
+    _audit_admin(scope, "review_action", tenant_id=req.tenant_id or "default", review_id=review_id,
+                 action_type=action_type, status_after=status_after)
     response: Dict[str, Any] = {
         "ok": True,
         "stored": stored,
@@ -1201,23 +1619,28 @@ class RawDocumentIngestionRequest(BaseModel):
     expected_tenant: str
     collection: str
     execute: bool = False
+    # true: validate, queue, return 202 with the job id (poll the job status).
+    async_job: bool = False
 
 
 @app.get("/admin/ingestion", response_class=HTMLResponse)
 def ingestion_page(_admin_auth: None = Depends(require_admin_auth)):
     path = _STATIC_DIR / "ingestion.html"
     try:
-        return HTMLResponse(path.read_text(encoding="utf-8"))
+        return HTMLResponse(_admin_page_html(path))
     except Exception:
         logging.exception("ingestion page unavailable")
         raise HTTPException(status_code=500, detail="ingestion page unavailable")
 
 
 @app.post("/admin/ingestion/dry-run")
-def ingestion_dry_run(req: IngestionDryRunRequest, _admin_auth: None = Depends(require_admin_auth)):
+def ingestion_dry_run(req: IngestionDryRunRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
     inputs = [str(p) for p in (req.inputs or []) if str(p).strip()]
     if not inputs:
         raise HTTPException(status_code=400, detail="inputs is required")
+    scope = _request_scope(request)
+    if scope is not None:
+        require_scope(scope, req.expected_tenant)
     # Refuse the production/default collection outright (never mutated anyway;
     # this is a dry-run validation only).
     if req.collection is not None and ingestion_jobs.is_production_collection(req.collection):
@@ -1226,6 +1649,8 @@ def ingestion_dry_run(req: IngestionDryRunRequest, _admin_auth: None = Depends(r
         return ingestion_jobs.run_dry_run(
             inputs, expected_tenant=req.expected_tenant, collection=req.collection
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1233,6 +1658,7 @@ def ingestion_dry_run(req: IngestionDryRunRequest, _admin_auth: None = Depends(r
 @app.post("/admin/ingestion/raw-documents")
 def ingestion_raw_documents(
     req: RawDocumentIngestionRequest,
+    request: Request = None,
     _admin_auth: None = Depends(require_admin_auth),
 ):
     inputs = [str(p) for p in (req.inputs or []) if str(p).strip()]
@@ -1240,32 +1666,287 @@ def ingestion_raw_documents(
         raise HTTPException(status_code=400, detail="inputs is required")
     if not str(req.expected_tenant or "").strip():
         raise HTTPException(status_code=400, detail="expected_tenant is required")
+    scope = _request_scope(request)
+    require_scope(scope, req.expected_tenant)
+    if req.execute:
+        _audit_admin(scope, "ingestion_execute", tenant_id=req.expected_tenant, collection=req.collection,
+                     files=len(inputs), async_job=bool(req.async_job))
     if not str(req.collection or "").strip():
         raise HTTPException(status_code=400, detail="collection is required")
     if ingestion_jobs.is_production_collection(req.collection):
         raise HTTPException(status_code=400, detail="refusing production/default collection")
     try:
+        if req.async_job:
+            queued = ingestion_jobs.submit_raw_document_job(
+                inputs,
+                expected_tenant=req.expected_tenant,
+                collection=req.collection,
+                execute=bool(req.execute),
+            )
+            return JSONResponse(status_code=202, content=queued)
         return ingestion_jobs.run_raw_document_job(
             inputs,
             expected_tenant=req.expected_tenant,
             collection=req.collection,
             execute=bool(req.execute),
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+_UPLOAD_SUFFIXES = {".pdf": (b"%PDF",), ".docx": (b"PK\x03\x04",), ".xlsx": (b"PK\x03\x04",),
+                    ".pptx": (b"PK\x03\x04",), ".csv": ()}
+
+
+def _upload_dir() -> Path:
+    # Uploads go under INGEST_UPLOAD_DIR (default: <first ingest root>/uploads),
+    # which must itself be inside INGEST_ALLOWED_ROOTS so the ingestion job
+    # accepts the saved files.
+    roots = ingestion_jobs.allowed_ingest_roots()
+    if not roots:
+        raise HTTPException(status_code=409, detail="ingest roots are not configured (INGEST_ALLOWED_ROOTS)")
+    configured = str(os.getenv("INGEST_UPLOAD_DIR", "")).strip()
+    base = Path(configured) if configured else roots[0] / "uploads"
+    if not base.is_absolute():
+        base = Path(config.BASE_DIR) / base
+    resolved = base.resolve()
+    if not any(resolved == root or resolved.is_relative_to(root) for root in roots):
+        raise HTTPException(status_code=409, detail="INGEST_UPLOAD_DIR must be inside INGEST_ALLOWED_ROOTS")
+    return resolved
+
+
+_UPLOAD_PRUNE = {"last": 0.0}
+
+
+def _prune_old_uploads(directory: Path) -> int:
+    # INGEST_UPLOAD_RETENTION_DAYS (default 30, 0 = keep): uploaded files
+    # older than that are removed, at most once an hour. Only files named
+    # like uploads ("<12 hex>_<name>") and their emptied day folders.
+    try:
+        days = float(os.getenv("INGEST_UPLOAD_RETENTION_DAYS", "") or 30)
+    except ValueError:
+        days = 30.0
+    now = time.time()
+    if days <= 0 or now - _UPLOAD_PRUNE["last"] < 3600:
+        return 0
+    _UPLOAD_PRUNE["last"] = now
+    removed = 0
+    for path in directory.glob("*/*/*"):
+        if path.is_file() and re.fullmatch(r"[0-9a-f]{12}_.+", path.name) and now - path.stat().st_mtime > days * 86400:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
+    for day_dir in directory.glob("*/*"):
+        if day_dir.is_dir() and not any(day_dir.iterdir()):
+            day_dir.rmdir()
+    return removed
+
+
+@app.put("/admin/ingestion/upload")
+async def ingestion_upload(
+    request: Request,
+    filename: str,
+    tenant: Optional[str] = None,
+    _admin_auth: None = Depends(require_admin_auth),
+):
+    # Raw request body (no multipart dependency); size-limited by
+    # INGEST_UPLOAD_MAX_BYTES in the hardening middleware and here.
+    require_scope(_request_scope(request), normalize_tenant_id(tenant))
+    name = Path(str(filename or "")).name
+    suffix = Path(name).suffix.lower()
+    if suffix not in _UPLOAD_SUFFIXES:
+        raise HTTPException(status_code=400, detail="unsupported file type (pdf, docx, xlsx, pptx, csv)")
+    safe_name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", name)[-120:] or f"upload{suffix}"
+    tenant_segment = re.sub(r"[^A-Za-z0-9_.-]", "_", normalize_tenant_id(tenant))
+    upload_root = _upload_dir()
+    _prune_old_uploads(upload_root)
+    target_dir = upload_root / tenant_segment / time.strftime("%Y%m%d")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"{uuid.uuid4().hex[:12]}_{safe_name}"
+    partial = target.with_name(f".{target.name}.part")
+    limit = security_middleware.max_upload_bytes()
+    digest = hashlib.sha256()
+    size = 0
+    head = b""
+    try:
+        with partial.open("wb") as out:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(status_code=413, detail="file too large")
+                if len(head) < 8:
+                    head += chunk[: 8 - len(head)]
+                digest.update(chunk)
+                out.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="empty file")
+        signatures = _UPLOAD_SUFFIXES[suffix]
+        if signatures and not any(head.startswith(sig) for sig in signatures):
+            raise HTTPException(status_code=400, detail="file content does not match its extension")
+        os.replace(partial, target)
+    finally:
+        if partial.exists():
+            partial.unlink()
+    return {"path": str(target), "filename": name, "bytes": size, "sha256": digest.hexdigest()}
+
+
+def _job_in_scope(job: Dict[str, Any], scope) -> bool:
+    return scope is None or str(job.get("expected_tenant") or "default") in scope
+
+
 @app.get("/admin/ingestion/jobs")
-def ingestion_jobs_list(_admin_auth: None = Depends(require_admin_auth)):
-    return {"jobs": ingestion_jobs.list_jobs()}
+def ingestion_jobs_list(request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    scope = _request_scope(request)
+    return {"jobs": [job for job in ingestion_jobs.list_jobs() if _job_in_scope(job, scope)]}
 
 
 @app.get("/admin/ingestion/jobs/{job_id}")
-def ingestion_job_status(job_id: str, _admin_auth: None = Depends(require_admin_auth)):
+def ingestion_job_status(job_id: str, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
     job = ingestion_jobs.get_job(job_id)
-    if job is None:
+    if job is None or not _job_in_scope(job, _request_scope(request)):
         raise HTTPException(status_code=404, detail="job not found")
     return job
+
+
+# --- Document deletion and promotion to the served collection (stage 15) -------
+
+
+class DocumentDeleteRequest(BaseModel):
+    tenant_id: str = Field(..., max_length=128)
+    source_docs: List[str] = Field(..., min_length=1, max_length=500)
+    # None: the served (production) collection; otherwise a staging collection.
+    collection: Optional[str] = Field(None, max_length=128)
+    execute: bool = False
+
+
+class PromoteRequest(BaseModel):
+    collection: str = Field(..., max_length=128)
+    tenant_id: str = Field(..., max_length=128)
+    execute: bool = False
+
+
+@app.post("/admin/ingestion/documents/delete")
+def ingestion_delete_documents(req: DocumentDeleteRequest, request: Request = None,
+                               _admin_auth: None = Depends(require_admin_auth)):
+    # Dry run unless execute=true: the report lists the chunks per document.
+    from webapi import collection_admin
+
+    scope = _request_scope(request)
+    tenant = normalize_tenant_id(req.tenant_id)
+    require_scope(scope, tenant)
+    try:
+        report = collection_admin.delete_documents(req.collection, tenant=tenant, source_docs=req.source_docs,
+                                                   execute=req.execute)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if req.execute:
+        _audit_admin(scope, "documents_deleted", tenant_id=tenant, collection=report["collection"],
+                     documents=sorted(report["documents"]), chunks=report["chunks"])
+    return report
+
+
+@app.post("/admin/ingestion/promote")
+def ingestion_promote(req: PromoteRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    # Staging -> served collection for one tenant's documents (dry run unless execute=true).
+    from webapi import collection_admin
+
+    scope = _request_scope(request)
+    tenant = normalize_tenant_id(req.tenant_id)
+    require_scope(scope, tenant)
+    try:
+        report = collection_admin.promote_staging(req.collection, tenant=tenant, execute=req.execute)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if req.execute:
+        _audit_admin(scope, "collection_promoted", tenant_id=tenant, collection=req.collection,
+                     documents=report["documents"], chunks=report["chunks"])
+    return report
+
+
+# --- Synonym candidate review (N8) -------------------------------------------
+
+
+class SynonymDecisionRequest(BaseModel):
+    candidate_id: str = Field(..., max_length=64)
+    status: str
+
+
+class SynonymApplyRequest(BaseModel):
+    profile_id: str = Field(..., max_length=64)
+
+
+@app.get("/admin/synonyms", response_class=HTMLResponse)
+def synonym_review_page(_admin_auth: None = Depends(require_admin_auth)):
+    path = _STATIC_DIR / "synonym_review.html"
+    try:
+        return HTMLResponse(_admin_page_html(path))
+    except Exception:
+        logging.exception("synonym review page unavailable")
+        raise HTTPException(status_code=500, detail="synonym review page unavailable")
+
+
+@app.get("/admin/synonyms/candidates")
+def synonym_candidates(request: Request = None, status: Optional[str] = None, limit: int = 200,
+                       _admin_auth: None = Depends(require_admin_auth)):
+    # Candidates come from every tenant's corpus: installation administrator only.
+    require_global(_request_scope(request))
+    if status and status not in synonym_review.STATUSES:
+        raise HTTPException(status_code=400, detail="invalid status")
+    return synonym_review.list_candidates(status=status, limit=limit)
+
+
+@app.post("/admin/synonyms/decision")
+def synonym_decision(req: SynonymDecisionRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    scope = _request_scope(request)
+    require_global(scope)
+    _audit_admin(scope, "synonym_decision", candidate_id=req.candidate_id, status=req.status)
+    try:
+        return synonym_review.decide(req.candidate_id, req.status, decided_by="admin")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="candidate not found")
+
+
+@app.post("/admin/synonyms/apply")
+def synonym_apply(req: SynonymApplyRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    scope = _request_scope(request)
+    require_global(scope)
+    _audit_admin(scope, "synonym_apply", profile_id=req.profile_id)
+    try:
+        return synonym_review.apply_to_profile(req.profile_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+# --- OIDC session revocation (6-3) ----------------------------------------------
+
+
+class SessionRevokeRequest(BaseModel):
+    key_fingerprint: str = Field(..., min_length=6, max_length=64)
+
+
+@app.post("/admin/sessions/revoke")
+def revoke_sessions(req: SessionRevokeRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    # Every OIDC session of this identity issued until now stops working
+    # (fingerprints are what audit records show as actor.key_fingerprint).
+    scope = _request_scope(request)
+    require_global(scope)
+    oidc_auth.revoke_identity(req.key_fingerprint)
+    _audit_admin(scope, "sessions_revoked", key_fingerprint=req.key_fingerprint)
+    return {"ok": True, "key_fingerprint": req.key_fingerprint}
 
 
 _CHAT_SAFE_PROFILE = "production_safe"
@@ -1360,23 +2041,6 @@ def _annotate_chat_profile(event: Dict[str, Any], runtime_profile: Optional[Dict
     event["tenant_profile_decision"] = runtime_profile.get("decision")
 
 
-_STAGING_COLLECTION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-
-
-def _staging_collection_exists_in_vectorstore(name: str) -> bool:
-    try:
-        client = chromadb.PersistentClient(path=config.VECTORSTORE_DIR)
-        collections = client.list_collections()
-    except Exception as exc:
-        logging.debug("staging_collection_vectorstore_lookup_failed name=%s error=%s", name, exc)
-        return False
-
-    for collection in collections:
-        collection_name = collection if isinstance(collection, str) else getattr(collection, "name", "")
-        collection_name = str(collection_name or "").strip()
-        if collection_name == name:
-            return True
-    return False
 
 
 def _resolve_staging_collection(collection: Optional[str], *, tenant_id: str) -> Optional[str]:
@@ -1385,7 +2049,9 @@ def _resolve_staging_collection(collection: Optional[str], *, tenant_id: str) ->
         return None
     if ingestion_jobs.is_production_collection(name):
         raise HTTPException(status_code=400, detail="refusing production/default collection for staging query")
-    if not _STAGING_COLLECTION_RE.fullmatch(name):
+    try:
+        ingestion_jobs.validate_collection_name(name)
+    except ValueError:
         raise HTTPException(status_code=400, detail="invalid staging collection name")
     status = ingestion_jobs.staging_collection_status(name, tenant_id=tenant_id)
     if status.get("allowed"):
@@ -1394,8 +2060,8 @@ def _resolve_staging_collection(collection: Optional[str], *, tenant_id: str) ->
     if reason == "staging_collection_forbidden_for_tenant":
         raise HTTPException(status_code=403, detail="staging collection is not authorized for this tenant")
     if reason == "staging_collection_unknown":
-        if _staging_collection_exists_in_vectorstore(name):
-            return name
+        # Unregistered collections are refused even if they exist in the
+        # vectorstore: their owner tenant is unknown.
         raise HTTPException(status_code=404, detail="staging collection is not available for query")
     raise HTTPException(status_code=409, detail="staging collection is not ready for query")
 
@@ -1406,12 +2072,42 @@ def _collection_meta(collection_name: Optional[str]) -> Dict[str, Any]:
     return {"query_collection_mode": "staging", "query_collection": collection_name}
 
 
-def _resolve_rag_profile_id(req: ChatRequest, staging_collection: Optional[str]) -> str:
-    if req.rag_profile_id:
-        return req.rag_profile_id
-    if staging_collection == "pilot_staging_v1":
-        return "volcano_demo"
+def _rag_profiles_allowed_for_tenant(tenant_id: str) -> frozenset:
+    # RAG_PROFILE_TENANT_MAP: tenant_a=profile1|profile2,tenant_b=profile3
+    allowed: frozenset = frozenset()
+    for tenant, profiles in _parse_tenant_map(str(os.getenv("RAG_PROFILE_TENANT_MAP", ""))).items():
+        if tenant == tenant_id:
+            allowed = allowed | profiles
+    return allowed
+
+
+def _resolve_rag_profile_id(req: ChatRequest, staging_collection: Optional[str], tenant_id: str = "default") -> str:
+    requested = str(req.rag_profile_id or "").strip()
+    if requested:
+        if not is_valid_rag_profile_id(requested):
+            raise HTTPException(status_code=400, detail="invalid rag_profile_id")
+        if requested != "default" and requested not in _rag_profiles_allowed_for_tenant(tenant_id):
+            raise HTTPException(status_code=403, detail="rag_profile_id is not allowed for this tenant")
+        return requested
+    # Staging collections no longer imply a demo profile; select one explicitly
+    # with rag_profile_id (allowed per tenant via RAG_PROFILE_TENANT_MAP).
     return "default"
+
+
+def _conversation_question(req: ChatRequest, api_auth, tenant_id: str):
+    """(question used for retrieval, trace or None) — 5-11 follow-up completion."""
+    enabled = str(os.getenv("CONVERSATION_CONTEXT_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if not (enabled and req.thread_id and conversation_store.conversation_history_enabled()):
+        return req.question, None
+    turns = conversation_store.get_thread(tenant_id, _conversation_identity(api_auth), req.thread_id)
+    result = conversation_context.contextualize(req.question, turns)
+    if not result["completed"]:
+        return req.question, None
+    return result["question"], {
+        "original_question": req.question,
+        "contextualized_question": result["question"],
+        "added_terms": result["added_terms"],
+    }
 
 
 def _annotate_collection_event(event: Dict[str, Any], collection_name: Optional[str]) -> None:
@@ -1424,10 +2120,13 @@ def _annotate_collection_event(event: Dict[str, Any], collection_name: Optional[
 def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited)):
     global _total_requests, _error_requests
     _total_requests += 1
+    metrics_registry.note_request()
     tenant_id = normalize_tenant_id(req.tenant_id)
     enforce_tenant_authorization(api_auth, tenant_id)
+    set_audit_actor(api_auth)
     staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
-    rag_profile_id = _resolve_rag_profile_id(req, staging_collection)
+    rag_profile_id = _resolve_rag_profile_id(req, staging_collection, tenant_id)
+    question_for_answer, conversation_trace = _conversation_question(req, api_auth, tenant_id)
     try:
         approved = None if staging_collection else _approved_qa_lookup(req.question, tenant_id=tenant_id)
         if approved is not None:
@@ -1476,7 +2175,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         cache_key = None
         if answer_cache.enabled() and not staging_collection and rag_profile_id == "default":
             cache_key = answer_cache.build_key(
-                req.question,
+                question_for_answer,
                 top_k=effective_top_k,
                 max_context_chars=effective_max_context_chars,
                 tenant_id=tenant_id,
@@ -1497,8 +2196,17 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
                     },
                 )
                 metrics_registry.increment("chat_cache_hit_total")
-                _record_chat_outcome_metrics(answer_mode="grounded")
-                return cached
+                # The stored payload carries its answer mode; a cached
+                # fallback is not counted as a grounded answer.
+                _record_chat_outcome_metrics(answer_mode=str(cached.get("answer_mode") or "grounded"))
+                # The stored copy holds no per-request fields: this request's own
+                # ids and conversation context are added back (stage 14).
+                hit = dict(cached)
+                if req.trace_id:
+                    hit["trace_id"] = req.trace_id
+                if conversation_trace:
+                    hit["conversation_context"] = conversation_trace
+                return hit
 
         client = (
             ensure_openai_client(base_url=config.OPENAI_BASE_URL)
@@ -1514,7 +2222,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         if staging_collection:
             answer_kwargs["collection_name"] = staging_collection
         answer_kwargs["rag_profile_id"] = rag_profile_id
-        ans, trace = answer_query_with_trace(req.question, **answer_kwargs)
+        ans, trace = answer_query_with_trace(question_for_answer, **answer_kwargs)
         chat_event = {
             "request_id": trace.get("request_id"),
             "trace_id": req.trace_id or trace.get("request_id"),
@@ -1547,6 +2255,8 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
             "chat_generation_mode", config.resolve_chat_generation_mode()
         )
         payload["rag_profile_id"] = trace.get("rag_profile_id", rag_profile_id)
+        if conversation_trace:
+            payload["conversation_context"] = conversation_trace
         payload["question_type"] = trace.get("question_type", "other")
         payload["profile_validation"] = trace.get(
             "profile_validation",
@@ -1565,10 +2275,17 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         if cache_key is not None and ans.guard_reason is None and not ans.used_fallback:
             # Only clean grounded answers are cacheable; guard/no-answer and
             # extractive-fallback responses are never cached.
-            answer_cache.put(cache_key, payload)
+            # Stage 14: without the caller's conversation context (it holds that
+            # user's earlier question) or request ids; another caller in the
+            # tenant asking the same wording must not see them.
+            answer_cache.put(cache_key, {
+                k: v for k, v in payload.items()
+                if k not in {"conversation_context", "trace_id", "request_id", "feedback_token"}
+            })
         return payload
     except Exception as exc:
         _error_requests += 1
+        metrics_registry.note_error()
         generation_error = _generation_error_payload(exc)
         append_audit_event(
             "chat",
@@ -1596,14 +2313,20 @@ def _sse_event(name: str, payload: Dict[str, Any]) -> str:
 def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited)):
     global _total_requests
     _total_requests += 1
+    metrics_registry.note_request()
     tenant_id = normalize_tenant_id(req.tenant_id)
     # Raise before the StreamingResponse is constructed so an unauthorized
     # tenant gets a plain 403 and no stream ever starts.
     enforce_tenant_authorization(api_auth, tenant_id)
+    set_audit_actor(api_auth)
     staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
+    # Stage 14: the same profile resolution as /chat (400/403 before the stream starts).
+    rag_profile_id = _resolve_rag_profile_id(req, staging_collection, tenant_id)
+    question_for_answer, conversation_trace = _conversation_question(req, api_auth, tenant_id)
 
     def _events():
         global _error_requests
+        set_audit_actor(api_auth)
         try:
             approved = None if staging_collection else _approved_qa_lookup(req.question, tenant_id=tenant_id)
             if approved is not None:
@@ -1650,7 +2373,32 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
 
             runtime_profile = resolve_chat_runtime_profile(tenant_id)
             effective_top_k = _apply_chat_profile_top_k(req.top_k or config.TOP_K, runtime_profile)
+            effective_max_context_chars = req.max_context_chars or config.MAX_CONTEXT_CHARS
             _record_chat_profile_metric(runtime_profile)
+            # Stage 14: the answer cache of /chat (same key, same rules).
+            cache_key = None
+            if answer_cache.enabled() and not staging_collection and rag_profile_id == "default":
+                cache_key = answer_cache.build_key(
+                    question_for_answer, top_k=effective_top_k,
+                    max_context_chars=effective_max_context_chars, tenant_id=tenant_id,
+                )
+                cached = answer_cache.get(cache_key)
+                if cached is not None:
+                    hit = dict(cached)
+                    if req.trace_id:
+                        hit["trace_id"] = req.trace_id
+                    if conversation_trace:
+                        hit["conversation_context"] = conversation_trace
+                    append_audit_event("chat", {
+                        "request_id": req.trace_id, "trace_id": req.trace_id, "tenant_id": tenant_id,
+                        "question": req.question, "guard_reason": hit.get("guard_reason"),
+                        "used_fallback": hit.get("used_fallback"),
+                        "citations_count": len(hit.get("citations") or []), "cache_hit": True, "streamed": True,
+                    })
+                    metrics_registry.increment("chat_cache_hit_total")
+                    _record_chat_outcome_metrics(answer_mode=str(hit.get("answer_mode") or "grounded"))
+                    yield _sse_event("final", hit)
+                    return
             client = (
                 ensure_openai_client(base_url=config.OPENAI_BASE_URL)
                 if config.resolve_chat_generation_mode() == "llm"
@@ -1661,20 +2409,32 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
             stream_kwargs: Dict[str, Any] = {
                 "client": client,
                 "top_k": effective_top_k,
-                "max_context_chars": req.max_context_chars or config.MAX_CONTEXT_CHARS,
+                "max_context_chars": effective_max_context_chars,
                 "tenant_id": tenant_id,
+                "rag_profile_id": rag_profile_id,
             }
             if staging_collection:
                 stream_kwargs["collection_name"] = staging_collection
-            for name, payload in answer_query_stream(req.question, **stream_kwargs):
+            for name, payload in answer_query_stream(question_for_answer, **stream_kwargs):
                 if name == "final":
                     result, trace = payload
                     final_payload = result.to_dict()
                     final_payload.update(_collection_meta(staging_collection))
+                    if conversation_trace:
+                        final_payload["conversation_context"] = conversation_trace
                     final_payload["answer_mode"] = trace.get("answer_mode")
                     final_payload["chat_generation_mode"] = trace.get(
                         "chat_generation_mode", config.resolve_chat_generation_mode()
                     )
+                    final_payload["rag_profile_id"] = trace.get("rag_profile_id", rag_profile_id)
+                    final_payload["question_type"] = trace.get("question_type", "other")
+                    if "profile_validation" in trace:
+                        final_payload["profile_validation"] = trace["profile_validation"]
+                    if cache_key is not None and result.guard_reason is None and not result.used_fallback:
+                        answer_cache.put(cache_key, {
+                            k: v for k, v in final_payload.items()
+                            if k not in {"conversation_context", "trace_id", "request_id", "feedback_token"}
+                        })
                     yield _sse_event("final", final_payload)
                 else:
                     yield _sse_event(name, payload)
@@ -1704,6 +2464,7 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                 )
         except Exception as exc:
             _error_requests += 1
+            metrics_registry.note_error()
             generation_error = _generation_error_payload(exc)
             _record_provider_error_metric(generation_error)
             content = (
@@ -1733,6 +2494,7 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
 def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited)):
     global _total_requests, _error_requests
     _total_requests += 1
+    metrics_registry.note_request()
     started = time.time()
     user_query = (req.query if req.query is not None else req.message) or ""
     user_query = user_query.strip()
@@ -1743,10 +2505,21 @@ def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContex
     trace_id = request_id
     tenant_id = (req.tenant_id or "default").strip() or "default"
     enforce_tenant_authorization(api_auth, tenant_id)
+    set_audit_actor(api_auth)
     top_k = max(1, min(int(req.top_k or 3), 10))
     keyword_profile = req.keyword_profile
     threshold_profile = req.threshold_profile
     rerank_profile = req.rerank_profile
+    keyword_profile_path = _product_preview_profile_path(
+        keyword_profile, _PRODUCT_PREVIEW_KEYWORD_PROFILES, "keyword_profile"
+    )
+    threshold_profile_path = _product_preview_profile_path(
+        threshold_profile, _PRODUCT_PREVIEW_THRESHOLD_PROFILES, "threshold_profile"
+    )
+    if (keyword_profile_path or threshold_profile_path) and not caller_has_role(api_auth, ROLE_OPERATOR):
+        raise HTTPException(status_code=403, detail="profile selection requires operator role")
+    if _is_non_serving_product_profile(req.product_profile) and not caller_has_role(api_auth, ROLE_OPERATOR):
+        raise HTTPException(status_code=403, detail="non-serving product profile requires operator role")
     requested_apply_feedback_preview = bool(req.apply_feedback_preview)
     requested_apply_feature_rerank = bool(req.apply_feature_rerank)
     policy_context = _product_policy_context(
@@ -1938,13 +2711,14 @@ def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContex
             return envelope
 
         with _temporary_product_preview_profiles(
-            keyword_profile=keyword_profile,
-            threshold_profile=threshold_profile,
+            keyword_profile_path=keyword_profile_path,
+            threshold_profile_path=threshold_profile_path,
         ):
             client = _embedding_client()
             raw_candidates = approved_similar.search_approved_similar_candidates(
                 user_query,
                 client=client,
+                tenant_id=tenant_id,
                 top_k=effective_top_k,
             )
             preview_candidates, feedback_preview_meta, feedback_preview_warnings = apply_feedback_preview_rerank(
@@ -2064,6 +2838,7 @@ def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContex
         raise
     except Exception:
         _error_requests += 1
+        metrics_registry.note_error()
         logging.exception("chat_product_preview failed trace_id=%s", trace_id)
         raise HTTPException(status_code=500, detail="internal error")
 
@@ -2071,6 +2846,8 @@ def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContex
 @app.post("/chat/feedback")
 def chat_feedback(req: ProductFeedbackRequest, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited)):
     enforce_tenant_authorization(api_auth, normalize_tenant_id(req.tenant_id))
+    set_audit_actor(api_auth)
+    enforce_role(api_auth, ROLE_USER)
     feedback_token = str(req.feedback_token or "").strip()
     feedback_type = str(req.feedback_type or "").strip()
     if not feedback_token:
@@ -2099,6 +2876,66 @@ def chat_feedback(req: ProductFeedbackRequest, api_auth: ApiAuthContext = Depend
     return response
 
 
+# --- Citation excerpt for the source panel (stage 10) ---------------------------
+
+
+def _approved_source_row(chunk_id: str, tenant: str) -> Optional[Dict[str, Any]]:
+    # "approved_qa_pair:<qa_id>" that is not in the keyword corpus: the
+    # approved question and answer themselves (same tenant only).
+    if not getattr(config, "APPROVED_QA_ENABLED", False) or not str(chunk_id).startswith("approved_qa_pair:"):
+        return None
+    qa_id = str(chunk_id).split(":", 1)[1]
+    loaded = load_approved_qa(str(config.APPROVED_QA_PATH), tenant_id=tenant)
+    for answer in loaded.records:
+        if answer.qa_id == qa_id:
+            first = answer.approved_citations[0] if answer.approved_citations else None
+            return {
+                "tenant_id": answer.tenant_id,
+                "text": f"Q: {answer.question}\nA: {answer.approved_answer}",
+                "title": "承認済み回答",
+                "source_doc": first.source_doc if first else None,
+                "source_pages": list(first.source_pages) if first else [],
+                "section_path": [],
+                "doc_version": answer.doc_version,
+            }
+    return None
+
+
+@app.get("/chat/source")
+def chat_source(
+    chunk_id: str,
+    tenant_id: Optional[str] = None,
+    collection: Optional[str] = None,
+    api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited),
+):
+    # The text of one cited chunk, only when it belongs to the caller's
+    # (authorized) tenant; anything else is 404. collection: a staging
+    # collection, checked exactly like the chat request that cited it.
+    # Approved-QA citations fall back to the approved answer itself.
+    tenant = normalize_tenant_id(tenant_id)
+    enforce_tenant_authorization(api_auth, tenant)
+    set_audit_actor(api_auth)
+    staging = _resolve_staging_collection(collection, tenant_id=tenant)
+    from rag_core import retrieval
+
+    row = retrieval.chunk_row(chunk_id, staging) if staging else retrieval.chunk_row(chunk_id)
+    if not row and not staging:
+        row = _approved_source_row(chunk_id, tenant)
+    if not row or normalize_tenant_id(row.get("tenant_id")) != tenant:
+        raise HTTPException(status_code=404, detail="source not found")
+    text = str(row.get("display_text") or row.get("text") or "")
+    limit = 1500
+    return {
+        "chunk_id": str(chunk_id),
+        "source_doc": row.get("source_doc"),
+        "title": row.get("title") or row.get("source_doc"),
+        "source_pages": row.get("source_pages") or [],
+        "section_path": [str(p) for p in (row.get("section_path") or [])][:6],
+        "doc_version": row.get("doc_version"),
+        "text": text[:limit] + ("…" if len(text) > limit else ""),
+    }
+
+
 # --- Conversation history (default-off; per-caller, tenant/identity-scoped) ---
 
 
@@ -2117,6 +2954,9 @@ def _conversation_identity(api_auth: ApiAuthContext) -> str:
     # off there is no per-user identity, so all callers share "anonymous".
     if isinstance(api_auth, ApiAuthContext) and api_auth.key_fingerprint:
         return api_auth.key_fingerprint
+    if production_guard.is_production():
+        # Without a per-user identity every caller would share one history.
+        raise HTTPException(status_code=403, detail="conversation history requires an authenticated user")
     return "anonymous"
 
 
@@ -2132,6 +2972,7 @@ def list_chat_threads(api_auth: ApiAuthContext = Depends(require_api_auth_rate_l
     _require_conversation_history()
     tenant = normalize_tenant_id(tenant_id)
     enforce_tenant_authorization(api_auth, tenant)
+    set_audit_actor(api_auth)
     return {"threads": conversation_store.list_threads(tenant, _conversation_identity(api_auth))}
 
 
@@ -2140,6 +2981,7 @@ def get_chat_thread(thread_id: str, api_auth: ApiAuthContext = Depends(require_a
     _require_conversation_history()
     tenant = normalize_tenant_id(tenant_id)
     enforce_tenant_authorization(api_auth, tenant)
+    set_audit_actor(api_auth)
     return {"thread_id": thread_id, "turns": conversation_store.get_thread(tenant, _conversation_identity(api_auth), thread_id)}
 
 
@@ -2148,6 +2990,8 @@ def append_chat_thread(req: ConversationTurnRequest, api_auth: ApiAuthContext = 
     _require_conversation_history()
     tenant = normalize_tenant_id(req.tenant_id)
     enforce_tenant_authorization(api_auth, tenant)
+    set_audit_actor(api_auth)
+    enforce_role(api_auth, ROLE_USER)
     if not str(req.thread_id or "").strip():
         raise HTTPException(status_code=400, detail="thread_id is required")
     record = conversation_store.append_turn(
@@ -2168,6 +3012,8 @@ def delete_chat_thread(thread_id: str, api_auth: ApiAuthContext = Depends(requir
     _require_conversation_history()
     tenant = normalize_tenant_id(tenant_id)
     enforce_tenant_authorization(api_auth, tenant)
+    set_audit_actor(api_auth)
+    enforce_role(api_auth, ROLE_USER)
     return {"ok": True, "deleted": conversation_store.delete_thread(tenant, _conversation_identity(api_auth), thread_id)}
 
 
@@ -2175,8 +3021,10 @@ def delete_chat_thread(thread_id: str, api_auth: ApiAuthContext = Depends(requir
 def search(req: SearchRequest, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited)):
     global _total_requests, _error_requests
     _total_requests += 1
+    metrics_registry.note_request()
     tenant_id = normalize_tenant_id(req.tenant_id)
     enforce_tenant_authorization(api_auth, tenant_id)
+    set_audit_actor(api_auth)
     staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
     try:
         top_k = req.top_k or config.TOP_K
@@ -2184,8 +3032,8 @@ def search(req: SearchRequest, api_auth: ApiAuthContext = Depends(require_api_au
         # Approved QA exact lookup:
         # 確定QAと質問が完全一致する場合は、vector検索より前に必ず返す。
         # staging_collection指定時はステージング検証を優先するため exact bypass はしない。
-        if not staging_collection:
-            exact_hits = lookup_approved_qa_exact(req.query, limit=top_k)
+        if not staging_collection and getattr(config, "APPROVED_QA_ENABLED", False):
+            exact_hits = lookup_approved_qa_exact(req.query, tenant_id=tenant_id, limit=top_k)
             if exact_hits:
                 return {
                     **_collection_meta(staging_collection),
@@ -2212,6 +3060,7 @@ def search(req: SearchRequest, api_auth: ApiAuthContext = Depends(require_api_au
         }
     except Exception:
         _error_requests += 1
+        metrics_registry.note_error()
         logging.exception("search failed trace_id=%s", req.trace_id)
         raise HTTPException(status_code=500, detail="internal error")
 
@@ -2220,8 +3069,10 @@ def search(req: SearchRequest, api_auth: ApiAuthContext = Depends(require_api_au
 def search_debug(req: SearchDebugRequest, api_auth: ApiAuthContext = Depends(require_search_debug_access)):
     global _total_requests, _error_requests
     _total_requests += 1
+    metrics_registry.note_request()
     tenant_id = normalize_tenant_id(req.tenant_id)
     enforce_tenant_authorization(api_auth, tenant_id)
+    set_audit_actor(api_auth)
     staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
     try:
         client = _embedding_client()
@@ -2262,12 +3113,13 @@ def search_debug(req: SearchDebugRequest, api_auth: ApiAuthContext = Depends(req
             req.include_approved_similar_candidates
             or getattr(config, "APPROVED_SIMILAR_CANDIDATES_ENABLED", False)
         )
-        approved_exact = _approved_qa_lookup(req.query) if include_approved_similar else None
+        approved_exact = _approved_qa_lookup(req.query, tenant_id=tenant_id) if include_approved_similar else None
         approved_similar_candidates = []
         if include_approved_similar and approved_exact is None:
             approved_similar_candidates = search_approved_similar_candidates(
                 req.query,
                 client=client,
+                tenant_id=tenant_id,
                 top_k=req.approved_similar_top_k
                 or getattr(config, "APPROVED_SIMILAR_CANDIDATES_TOP_K", 5),
             )
@@ -2341,6 +3193,7 @@ def search_debug(req: SearchDebugRequest, api_auth: ApiAuthContext = Depends(req
         return response
     except Exception as exc:
         _error_requests += 1
+        metrics_registry.note_error()
         generation_error = _generation_error_payload(exc) if req.generate_answer else None
         append_audit_event(
             "search_debug",

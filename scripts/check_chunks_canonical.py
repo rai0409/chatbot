@@ -9,7 +9,7 @@ if str(_ROOT) not in sys.path:
 
 import argparse
 import json
-from collections import Counter, defaultdict
+from collections import Counter
 
 
 def main():

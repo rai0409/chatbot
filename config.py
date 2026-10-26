@@ -100,6 +100,8 @@ OPENAI_API_KEY = getenv_first("OPENAI_API_KEY", default="")
 OPENAI_BASE_URL = getenv_first("OPENAI_BASE_URL", default=None)
 CHAT_MODEL = getenv_first("CHAT_MODEL", default="gpt-4o-mini")
 CHAT_COMPLETION_TIMEOUT_SECONDS = _get_float("CHAT_COMPLETION_TIMEOUT_SECONDS", default=30.0)
+# Stage 14: OpenAI embeddings (EMBED_PROVIDER=openai) had no timeout.
+OPENAI_EMBED_TIMEOUT_SECONDS = _get_float("OPENAI_EMBED_TIMEOUT_SECONDS", default=30.0)
 CHAT_COMPLETION_MAX_RETRIES = int(getenv_first("CHAT_COMPLETION_MAX_RETRIES", default="1"))
 CHAT_COMPLETION_RETRY_BACKOFF_SECONDS = _get_float(
     "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", default=1.0
@@ -121,6 +123,34 @@ ENABLE_HYBRID_RETRIEVAL = _get_bool("ENABLE_HYBRID_RETRIEVAL", default=True)
 VECTOR_TOP_K = int(getenv_first("VECTOR_TOP_K", default=str(TOP_K)))
 BM25_TOP_K = int(getenv_first("BM25_TOP_K", default=str(TOP_K)))
 HYBRID_RRF_K = int(getenv_first("HYBRID_RRF_K", default="60"))
+# Hybrid fusion (replaces the former hand-tuned score boosts).
+# "weighted_rrf": sum of weight / (HYBRID_RRF_K + rank) over the dense,
+# keyword and exact-match lanes. "dbsf": per-lane mean±3σ score
+# normalization summed with the same weights. Tune weights and k with
+# `python -m eval.bench`; defaults keep every lane at weight 1.0.
+HYBRID_FUSION = getenv_first("HYBRID_FUSION", default="weighted_rrf")
+HYBRID_DENSE_WEIGHT = _get_float("HYBRID_DENSE_WEIGHT", default=1.0)
+HYBRID_KEYWORD_WEIGHT = _get_float("HYBRID_KEYWORD_WEIGHT", default=1.0)
+HYBRID_EXACT_WEIGHT = _get_float("HYBRID_EXACT_WEIGHT", default=1.0)
+# Run the dense and keyword lanes concurrently (latency = slower lane).
+HYBRID_PARALLEL = _get_bool("HYBRID_PARALLEL", default=False)
+# Keyword (BM25) tokenizer. "auto" uses Sudachi when SudachiPy and a
+# dictionary are installed (requirements-ja.txt) and otherwise falls back to
+# the legacy heuristic tokenizer with one warning; "sudachi" fails loudly when
+# Sudachi is unavailable; "heuristic" keeps the legacy character bigrams.
+KEYWORD_TOKENIZER = getenv_first("KEYWORD_TOKENIZER", default="auto")
+SUDACHI_DICT = getenv_first("SUDACHI_DICT", default="core")
+SUDACHI_SPLIT_MODE = getenv_first("SUDACHI_SPLIT_MODE", default="A")
+KEYWORD_NGRAM_ENABLED = _get_bool("KEYWORD_NGRAM_ENABLED", default=True)
+# Add quantity tokens (q:money:15000JPY, q:date:2024-04-01, ...) so equal
+# amounts and dates match across notations (rag_core/quantities.py).
+KEYWORD_NUMERIC_TOKENS = _get_bool("KEYWORD_NUMERIC_TOKENS", default=False)
+# "rank_bm25" scores every document for every query term; "inverted" scores
+# only documents that contain a query term (rag_core/bm25_index.py). Stage 14:
+# inverted is the default (rank_bm25 does not scale to 200,000 chunks).
+KEYWORD_INDEX_ENGINE = getenv_first("KEYWORD_INDEX_ENGINE", default="inverted")
+BM25_K1 = _get_float("BM25_K1", default=1.5)
+BM25_B = _get_float("BM25_B", default=0.75)
 CHILD_RETRIEVAL_OVERSAMPLE = int(getenv_first("CHILD_RETRIEVAL_OVERSAMPLE", default="2"))
 CHILD_CHUNK_ROLE_VALUES = _get_list("CHILD_CHUNK_ROLE_VALUES", ["child", "leaf"])
 ENABLE_PARENT_EXPANSION = _get_bool("ENABLE_PARENT_EXPANSION", default=True)
@@ -153,6 +183,14 @@ RAG_HARD_MAX_DIST_PROCEDURE_DELTA = _get_float(
 # when there is literally zero term overlap.
 RAG_MIN_KEYWORD_EVIDENCE_BM25 = _get_float("RAG_MIN_KEYWORD_EVIDENCE_BM25", default=0.0)
 
+# Stage 14: the distance thresholds below are cosine distances of the best
+# vector hit and depend on the embedding model. The defaults were tuned on runs
+# with this model; after switching models (the product default is ruri-v3),
+# calibrate them (scripts/calibrate_distance_guard.py) and set this to the
+# model they were calibrated for. /admin/health reports a mismatch.
+RAG_DIST_CALIBRATED_MODEL = getenv_first(
+    "RAG_DIST_CALIBRATED_MODEL", default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+)
 RAG_SOFT_DIST_OTHER = _get_float("RAG_SOFT_DIST_OTHER", default=0.65)
 RAG_SOFT_DIST_RESET = _get_float("RAG_SOFT_DIST_RESET", default=0.80)
 RAG_SOFT_DIST_CHANGE = _get_float("RAG_SOFT_DIST_CHANGE", default=0.90)
@@ -162,15 +200,7 @@ RAG_SOFT_DIST_PROCEDURE = _get_float(
 
 NEGATION_PHRASES = _get_list(
     "NEGATION_PHRASES",
-    [
-        "しない",
-        "できない",
-        "不要",
-        "禁止",
-        "不要です",
-        "しなくてよい",
-        "やらない",
-    ],
+    ["しない", "できない", "不要", "禁止", "不要です", "しなくてよい", "やらない"],
 )
 DEFINITION_TERMS = _get_list(
     "DEFINITION_TERMS", ["とは", "意味", "定義", "概要", "教えて", "何ですか"]
@@ -178,18 +208,12 @@ DEFINITION_TERMS = _get_list(
 PROCEDURE_STRONG_TERMS = _get_list(
     "PROCEDURE_STRONG_TERMS", ["手順", "方法", "流れ", "操作", "手続き", "やり方"]
 )
-PROCEDURE_WEAK_TERMS = _get_list(
-    "PROCEDURE_WEAK_TERMS", ["設定", "登録", "変更", "削除", "更新"]
-)
-INQUIRY_TERMS = _get_list(
-    "INQUIRY_TERMS", ["問い合わせ", "質問", "連絡", "サポート", "窓口"]
-)
+PROCEDURE_WEAK_TERMS = _get_list("PROCEDURE_WEAK_TERMS", ["設定", "登録", "変更", "削除", "更新"])
+INQUIRY_TERMS = _get_list("INQUIRY_TERMS", ["問い合わせ", "質問", "連絡", "サポート", "窓口"])
 INQUIRY_TO_PROCEDURE_HINT_TERMS = _get_list(
     "INQUIRY_TO_PROCEDURE_HINT_TERMS", ["手順", "方法", "どうやって"]
 )
-OTHER_QUERY_BOOST_TERMS = _get_list(
-    "OTHER_QUERY_BOOST_TERMS", ["定義", "意味", "概要", "説明"]
-)
+OTHER_QUERY_BOOST_TERMS = _get_list("OTHER_QUERY_BOOST_TERMS", ["定義", "意味", "概要", "説明"])
 
 RESET_TERMS = _get_list("RESET_TERMS", ["再設定", "再発行", "リセット", "初期化"])
 CHANGE_TERMS = _get_list("CHANGE_TERMS", ["変更", "更新", "切替", "変更方法"])
@@ -199,27 +223,13 @@ OTHER_MAX_PER_PAGE = int(getenv_first("OTHER_MAX_PER_PAGE", default="3"))
 
 STOP_SALIENT_TERMS = _get_list(
     "STOP_SALIENT_TERMS",
-    [
-        "概要",
-        "教えて",
-        "ページ番号",
-        "内容",
-        "確認",
-        "資料",
-        "どこ",
-        "何",
-        "一覧",
-    ],
+    ["概要", "教えて", "ページ番号", "内容", "確認", "資料", "どこ", "何", "一覧"],
 )
 
-PREFER_SORT_TERMS_OTHER = _get_list(
-    "PREFER_SORT_TERMS_OTHER", ["定義", "意味", "概要", "説明"]
-)
+PREFER_SORT_TERMS_OTHER = _get_list("PREFER_SORT_TERMS_OTHER", ["定義", "意味", "概要", "説明"])
 PREFER_SORT_TERMS_RESET = _get_list("PREFER_SORT_TERMS_RESET", ["再設定", "再発行"])
 PREFER_SORT_TERMS_CHANGE = _get_list("PREFER_SORT_TERMS_CHANGE", ["変更", "更新"])
-PREFER_SORT_TERMS_PROCEDURE = _get_list(
-    "PREFER_SORT_TERMS_PROCEDURE", ["手順", "方法", "操作"]
-)
+PREFER_SORT_TERMS_PROCEDURE = _get_list("PREFER_SORT_TERMS_PROCEDURE", ["手順", "方法", "操作"])
 
 RERANK_BOOST_FAQ_SHORT_LOOKUP = int(getenv_first("RERANK_BOOST_FAQ_SHORT_LOOKUP", default="2"))
 RERANK_BOOST_PROCEDURE_DOC_TYPE = int(getenv_first("RERANK_BOOST_PROCEDURE_DOC_TYPE", default="1"))
@@ -232,10 +242,19 @@ KEYWORD_BOOST_QUERY_TYPES = _get_list("KEYWORD_BOOST_QUERY_TYPES", ["exact_looku
 KEYWORD_BOOST_MAX_DELTA = _get_float("KEYWORD_BOOST_MAX_DELTA", default=0.05)
 
 # Optional semantic rerank stage (off by default; needs the optional
-# sentence-transformers dependency only when enabled).
+# sentence-transformers dependency only when enabled). The default model is
+# cl-nagoya/ruri-v3-reranker-310m (Apache-2.0; JQaRA nDCG@10 86.9 on its
+# model card vs 67.3 for BAAI/bge-reranker-v2-m3 in the same table). On a
+# CPU-only host consider cl-nagoya/ruri-reranker-base (check its license).
 CROSS_ENCODER_RERANK_ENABLED = _get_bool("CROSS_ENCODER_RERANK_ENABLED", default=False)
-CROSS_ENCODER_MODEL = getenv_first("CROSS_ENCODER_MODEL", default="BAAI/bge-reranker-v2-m3")
-CROSS_ENCODER_TOP_N = int(getenv_first("CROSS_ENCODER_TOP_N", default="20"))
+CROSS_ENCODER_MODEL = getenv_first("CROSS_ENCODER_MODEL", default="cl-nagoya/ruri-v3-reranker-310m")
+CROSS_ENCODER_TOP_N = int(getenv_first("CROSS_ENCODER_TOP_N", default="30"))
+# Caps query+passage length per pair; 0 keeps the model default.
+CROSS_ENCODER_MAX_LENGTH = int(getenv_first("CROSS_ENCODER_MAX_LENGTH", default="512"))
+# Skip reranking when the fused-score gap between the top two candidates is
+# at least this value (0 = never skip). Derive it from
+# `python -m eval.bench calibrate --base-config-id ...` (rerank_skip).
+CROSS_ENCODER_SKIP_MARGIN = _get_float("CROSS_ENCODER_SKIP_MARGIN", default=0.0)
 
 APPROVED_QA_ENABLED = _get_bool("APPROVED_QA_ENABLED", default=False)
 _APPROVED_QA_PATH_RAW = getenv_first("APPROVED_QA_PATH", default="eval/cases/approved_qa_sample.jsonl")
@@ -253,6 +272,10 @@ CHAT_USE_TENANT_PROFILE = _get_bool("CHAT_USE_TENANT_PROFILE", default=False)
 
 DISABLE_GUARD = _get_bool("DISABLE_GUARD", default=False)
 IGNORE_SEARCHABLE = _get_bool("IGNORE_SEARCHABLE", default=False)
+# When true, the default tenant also gets a DB-side tenant_id="default"
+# filter. Run scripts/backfill_tenant_id.py first: records without tenant_id
+# would otherwise disappear from default-tenant vector results.
+TENANT_FILTER_STRICT = _get_bool("TENANT_FILTER_STRICT", default=False)
 LOG_WHERE = _get_bool("LOG_WHERE", default=False)
 AUDIT_CHAT_ENABLED = _get_bool("AUDIT_CHAT_ENABLED", default=True)
 AUDIT_SEARCH_DEBUG_ENABLED = _get_bool("AUDIT_SEARCH_DEBUG_ENABLED", default=True)

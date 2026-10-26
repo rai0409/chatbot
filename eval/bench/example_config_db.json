@@ -1,0 +1,31 @@
+{
+  "name": "vector-db-comparison",
+  "eval_set": "eval/bench_data/eval_set.jsonl",
+  "split": "dev",
+  "match_mode": "evidence",
+  "corpus": {
+    "chunks_jsonl": "index/chunks.canonical.bytype.dedup.jsonl",
+    "documents_jsonl": null
+  },
+  "ks": [1, 5, 10, 20, 50, 100],
+  "candidates": {"dense_top": 100, "lexical_top": 100, "fused_top": 100},
+  "chunking": [{"mode": "as_is"}],
+  "embedding": [{"model": "cl-nagoya/ruri-v3-130m", "prefix": "auto"}],
+  "dimension": ["none"],
+  "quantization": [
+    {"type": "float32"},
+    {"type": "int8", "rescore_oversample": 3}
+  ],
+  "dense_backend": [
+    {"type": "exact"},
+    {"type": "chroma", "m": 16, "ef_construction": 200, "ef_search": 64},
+    {"type": "chroma", "m": 32, "ef_construction": 200, "ef_search": 128},
+    {"type": "qdrant", "url": "http://localhost:6333", "m": 16, "ef_construction": 200, "ef_search": 64},
+    {"type": "qdrant", "url": "http://localhost:6333", "m": 32, "ef_construction": 200, "ef_search": 128}
+  ],
+  "lexical": [{"tokenizer": "heuristic", "k1": 1.5, "b": 0.75}],
+  "fusion": [{"method": "dense_only"}, {"method": "weighted_rrf", "k": 60}],
+  "rerank": [],
+  "bootstrap": {"resamples": 2000, "seed": 0},
+  "max_evaluations": 100
+}

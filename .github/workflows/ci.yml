@@ -16,10 +16,32 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt -r requirements-pdf.txt pytest -c constraints/linux-py312.txt
+        run: |
+          if [ -f requirements.lock.txt ]; then
+            # Hash-locked install (scripts/lock_dependencies.sh): a changed or
+            # substituted package fails here.
+            # requirements.lock.txt covers requirements.txt + -ja + -pdf + -state + -qdrant.
+            python -m pip install --require-hashes -r requirements.lock.txt
+            python -m pip install pytest -c constraints/linux-py312.txt
+          else
+            # Same set as the Docker image (Sudachi, Redis/Postgres, Qdrant), so their tests run too.
+            python -m pip install -r requirements.txt -r requirements-pdf.txt -r requirements-ja.txt -r requirements-state.txt -r requirements-qdrant.txt pytest -c constraints/linux-py312.txt
+          fi
 
       - name: Product readiness smoke
         run: bash scripts/product_readiness_smoke.sh
+
+      - name: Normalization golden cases (P1-B)
+        run: python scripts/check_normalization.py
+
+      - name: Stage regression suites (v3)
+        run: |
+          python -m pytest -q \
+            tests/test_stage1_security.py \
+            tests/test_stage2_no_demo_code.py \
+            tests/test_stage3_ingestion.py \
+            tests/test_stage5_accuracy.py \
+            tests/test_query_preprocess.py
 
       - name: Hardening test suites
         run: |
@@ -29,6 +51,66 @@ jobs:
             tests/test_answer_cache.py \
             tests/test_confidence_guard.py -q
 
-      - name: Run full test suite
-        run: python -m pytest -q
+      - name: Dependency vulnerability audit
+        run: |
+          python -m pip install pip-audit
+          # The whole pinned set. Ignored: chromadb advisories with no fixed
+          # release, all in the Chroma server API (/api/v2/...); the app uses the
+          # embedded PersistentClient and never runs or exposes a Chroma server.
+          python -m pip_audit --disable-pip --no-deps -r constraints/linux-py312.txt \
+            --ignore-vuln PYSEC-2026-311 --ignore-vuln PYSEC-2026-3813 \
+            --ignore-vuln PYSEC-2026-3814 --ignore-vuln PYSEC-2026-3815
+
+      - name: Security static check (bandit, product code, medium or higher)
+        run: |
+          python -m pip install bandit
+          python -m bandit -q -r rag_core webapi libs/docextract/src config.py -ll
+
+      - name: Secret scan (detect-secrets; .secrets.baseline lists the reviewed test placeholders)
+        run: |
+          python -m pip install detect-secrets
+          git ls-files -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline
+
+      - name: Production settings guard smoke
+        run: python -m pytest -q tests/test_stage6_operations.py
+
+      - name: Retrieval regression gate
+        run: |
+          if [ -f eval/baselines/retrieval_gate_baseline.json ]; then
+            python scripts/eval_regression_gate.py --margin 0.02
+          else
+            echo "no baseline yet: run python scripts/eval_regression_gate.py --update-baseline and commit it"
+          fi
+
+      - name: Stage 8 tests
+        run: python -m pytest -q tests/test_stage8_additions.py
+
+      - name: Static check (pyflakes, no finding allowed)
+        run: |
+          python -m pip install pyflakes
+          python -m pyflakes rag_core webapi scripts eval tools tests libs config.py rag_grounded.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Screen script unit tests (node --test)
+        run: node --test tests/js/*.test.js
+
+      - name: Screen browser tests (Playwright, headless Chromium)
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium-headless-shell
+          KURADEN_E2E_REQUIRED=1 python -m pytest -q tests/e2e
+
+      - name: Stage 10 tests and extraction backends
+        run: |
+          python -m pip install -e "libs/docextract[light]"
+          python -m pytest -q tests/test_stage10_additions.py libs/docextract/tests
+          PYTHONPATH=libs/docextract/src python -m docextract check
+
+      - name: Run full test suite (with a coverage report; not a gate)
+        run: |
+          python -m pip install pytest-cov
+          python -m pytest -q --cov=rag_core --cov=webapi --cov=docextract --cov-report=term-missing:skip-covered
         timeout-minutes: 10

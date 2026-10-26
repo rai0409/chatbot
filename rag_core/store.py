@@ -13,6 +13,9 @@ from rag_core import embedding_provider
 logger = logging.getLogger(__name__)
 
 _FINGERPRINT_KEYS = ("embed_provider", "embed_model")
+# Stamped by rag_core.embedding_fingerprint.stamp_collection_metadata. Checked
+# only when present, so collections stamped before prefixes existed still load.
+_PREFIX_SCHEME_KEY = "embed_prefix_scheme"
 
 # Reused chromadb.PersistentClient instances keyed by resolved vectorstore path,
 # so each query does not pay client construction cost.
@@ -44,8 +47,16 @@ def get_vectorstore(
     verify_embedding_fingerprint: bool = True,
     create_if_missing: bool = True,
 ):
-    client = _get_persistent_client(config.VECTORSTORE_DIR)
     name = config.resolve_chroma_collection_name(collection_name)
+    from rag_core import vector_backend
+
+    if vector_backend.backend_name() == "qdrant":
+        # VECTOR_BACKEND=qdrant: same interface, Qdrant underneath.
+        collection = vector_backend.get_collection(name, create_if_missing=create_if_missing)
+        if verify_embedding_fingerprint:
+            verify_collection_fingerprint(collection)
+        return collection
+    client = _get_persistent_client(config.VECTORSTORE_DIR)
     if create_if_missing:
         collection = client.get_or_create_collection(
             name=name, metadata={"hnsw:space": "cosine"}
@@ -91,6 +102,19 @@ def verify_collection_fingerprint(collection, provider_name: Optional[str] = Non
             "Re-ingest the collection with the active provider/model or set "
             "EMBED_PROVIDER and the embed model to match the collection."
         )
+    # Same model with a different query/document prefix scheme yields
+    # incompatible vectors (e.g. ruri-v3 "検索クエリ: " vs no prefix).
+    meta = getattr(collection, "metadata", None) or {}
+    stamped_scheme = str(meta.get(_PREFIX_SCHEME_KEY) or "").strip()
+    if stamped_scheme:
+        active_scheme = embedding_provider.active_prefix_scheme(provider_name)
+        if stamped_scheme != active_scheme:
+            raise RuntimeError(
+                f"embedding prefix scheme mismatch for collection '{name}': "
+                f"collection={stamped_scheme} active={active_scheme}. "
+                "Re-ingest the collection or set EMBED_QUERY_PREFIX/EMBED_DOCUMENT_PREFIX "
+                "to match the collection."
+            )
 
 
 def stamp_collection_fingerprint(collection, provider_name: Optional[str] = None) -> Dict[str, str]:

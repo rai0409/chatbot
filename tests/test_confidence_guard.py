@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 import config
 from rag_core import qa
