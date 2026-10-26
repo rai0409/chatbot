@@ -17,12 +17,11 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from numbers import Integral
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-import numpy as np
 
 from eval.bench.corpus import Chunk
-from eval.bench.encoders import DenseIndex, EmbeddingSpec, encode, load_model
+from eval.bench.encoders import DenseIndex, EmbeddingSpec, encode
 from eval.bench.lexical import LexicalHit, LexicalIndex, LexicalSpec
 from eval.bench.metrics import RankedChunk, query_metrics
 from eval.bench.rerank_cache import CrossEncoderScorer
