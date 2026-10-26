@@ -33,8 +33,18 @@ def summary(collection="isolated", count=27):
 
 
 def test_current_contract_and_report_validate():
-    baseline.validate_contract(contract())
-    baseline.validate_report(baseline.load(ROOT / "reports/current_real_vector_quality_baseline.json"))
+    current_contract = contract()
+    baseline.validate_contract(current_contract)
+    if (
+        current_contract["profile"]["ordinary_ci_required"] is False
+        and os.environ.get("CHATBOT_REAL_VECTOR_RELEASE_GATE") != "1"
+    ):
+        pytest.skip(
+            "Real-vector evidence is a release gate, not an ordinary CI gate"
+        )
+    baseline.validate_report(
+        baseline.load(ROOT / "reports/current_real_vector_quality_baseline.json")
+    )
 
 
 @pytest.mark.parametrize(("path", "value"), [
