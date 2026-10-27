@@ -58,3 +58,35 @@ venv/
 
 # Generated BM25 keyword index
 index/chunks.canonical.bytype.dedup.jsonl
+
+# CHATBOT_NONPUBLIC_DATA_IGNORE_V1
+# Do not commit source files or derived real-data documents.
+*.pdf
+*.jsonl
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.doc
+*.docx
+*.ppt
+*.pptx
+*.parquet
+*.sqlite
+*.sqlite3
+*.db
+*.zip
+*.7z
+*.tar
+*.gz
+*.jpg
+*.jpeg
+*.png
+*.webp
+pdfs/
+data/
+index/
+artifacts/
+vectorstore/
+runs/
+backups/
