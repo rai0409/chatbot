@@ -13,9 +13,9 @@ from typing import Any, Dict, List, Optional
 
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import http_exception_handler as _default_http_exception_handler
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 import config
@@ -47,6 +47,12 @@ from rag_core.product_contract import (
 from rag_core.feedback_rerank_profile import PROFILE_PATH, apply_feedback_preview_rerank
 from rag_core.product_profile import load_product_profile
 from rag_core.product_route_policy import build_route_policy
+from rag_core import search_mode
+from rag_core import suggest as question_suggest
+from rag_core import change_ledger as source_changes, source_apply, source_registry, source_sync
+from rag_core import extraction_review, extraction_store
+from rag_core import contract_notify, contracts
+from rag_core.connectors import outlook as outlook_connector
 from rag_core.profile_loader import is_valid_rag_profile_id
 from rag_core.qa import (
     answer_query_stream,
@@ -255,6 +261,8 @@ class ChatRequest(BaseModel):
     rag_profile_id: Optional[str] = None
     # Conversation thread for follow-up completion (CONVERSATION_CONTEXT_ENABLED).
     thread_id: Optional[str] = Field(None, max_length=128)
+    # "Look deeper": more candidates, multi-query on for this request, no answer cache.
+    deep: bool = False
 
 
 class SearchRequest(BaseModel):
@@ -492,6 +500,14 @@ def _generation_error_payload(exc: Exception) -> tuple[int, Dict[str, str]] | No
 
 
 def _approved_qa_lookup(question: str, tenant_id: str = "default") -> ApprovedAnswer | None:
+    index = _approved_qa_index_for(tenant_id)
+    if index is None:
+        return None
+    return lookup_approved_answer(index, question, tenant_id=normalize_tenant_id(tenant_id))
+
+
+def _approved_qa_index_for(tenant_id: str = "default"):
+    """The approved-QA index of a tenant (cached), or None when approved QA is off."""
     global _approved_qa_index, _approved_qa_index_path
     if not getattr(config, "APPROVED_QA_ENABLED", False):
         return None
@@ -510,7 +526,7 @@ def _approved_qa_lookup(question: str, tenant_id: str = "default") -> ApprovedAn
     if _approved_qa_index is None or _approved_qa_index_path != cache_key:
         _approved_qa_index = load_approved_qa(path, tenant_id=tenant)
         _approved_qa_index_path = cache_key
-    return lookup_approved_answer(_approved_qa_index, question, tenant_id=tenant)
+    return _approved_qa_index
 
 
 def _approved_chat_payload(answer: ApprovedAnswer) -> Dict[str, Any]:
@@ -1134,6 +1150,15 @@ def _health_details() -> Dict[str, Any]:
         "vectorstore_dir": config.VECTORSTORE_DIR,
         "chat_generation_mode": config.resolve_chat_generation_mode(),
     }
+    from rag_core import index_generation
+
+    active_generation = index_generation.active_pointer()
+    if active_generation:
+        payload["active_generation"] = {
+            "collection": active_generation.get("collection"),
+            "generation_id": active_generation.get("generation_id"),
+            "activated_at": active_generation.get("activated_at"),
+        }
     try:
         payload["distance_guard"] = distance_guard_calibration()
     except Exception:  # noqa: BLE001
@@ -1875,6 +1900,497 @@ def ingestion_promote(req: PromoteRequest, request: Request = None, _admin_auth:
     return report
 
 
+# --- Contracts (7-3) ------------------------------------------------------------
+
+
+class ContractImportRequest(BaseModel):
+    tenant_id: str = Field("default", max_length=64)
+    contract_id: str = Field(..., max_length=64)
+    source_doc: str = Field("", max_length=512)
+    extracted: Dict[str, Any]
+
+
+class ContractFieldRequest(BaseModel):
+    tenant_id: str = Field("default", max_length=64)
+    name: str = Field(..., max_length=40)
+    value: Optional[Any] = None
+    note: Optional[str] = Field(None, max_length=500)
+
+
+class ContractNotifyRequest(BaseModel):
+    tenant_id: str = Field("default", max_length=64)
+    dry_run: bool = True
+
+
+class ContractDraftRequest(BaseModel):
+    tenant_id: str = Field("default", max_length=64)
+    kind: str = Field(..., max_length=40)
+    mailbox: str = Field(..., max_length=320)
+
+
+def _contract_http_error(exc: Exception) -> HTTPException:
+    text = str(exc)
+    if "not found" in text:
+        return HTTPException(status_code=404, detail=text)
+    if "already exists" in text or "changed by someone else" in text:
+        return HTTPException(status_code=409, detail=text)
+    return HTTPException(status_code=400, detail=text)
+
+
+def _contract_scope(request, tenant_id: str):
+    scope = _request_scope(request)
+    require_scope(scope, tenant_id)
+    return scope
+
+
+def _contract_summary(contract: Dict[str, Any]) -> Dict[str, Any]:
+    items = contracts.deadlines(contract)
+    ahead = sorted((d for d in items if d["days_left"] >= 0), key=lambda d: d["date"])
+    nearest = ahead[0] if ahead else (max(items, key=lambda d: d["date"]) if items else None)
+    fields = contract["fields"]
+    return {"contract_id": contract["contract_id"], "counterparty": fields["counterparty"]["value"], "title": fields["title"]["value"],
+            "status": contracts.status_of(contract), "source_doc": contract["source_doc"], "nearest_deadline": nearest,
+            "unconfirmed": sum(1 for f in fields.values() if f["value"] is not None and f["state"] == "extracted")}
+
+
+@app.get("/admin/contracts", response_class=HTMLResponse)
+def contracts_page(_admin_auth: None = Depends(require_admin_auth)):
+    path = _STATIC_DIR / "contracts.html"
+    try:
+        return HTMLResponse(_admin_page_html(path))
+    except Exception:
+        logging.exception("contracts page unavailable")
+        raise HTTPException(status_code=500, detail="contracts page unavailable")
+
+
+@app.get("/admin/contracts/list")
+def contracts_list(tenant_id: str = Query("default", max_length=64), request: Request = None,
+                   _admin_auth: None = Depends(require_admin_auth)):
+    _contract_scope(request, tenant_id)
+    try:
+        return {"contracts": [_contract_summary(c) for c in contracts.list_contracts(tenant_id)]}
+    except contracts.ContractError as exc:
+        raise _contract_http_error(exc)
+
+
+@app.get("/admin/contracts/upcoming")
+def contracts_upcoming(tenant_id: str = Query("default", max_length=64), within_days: int = Query(90, ge=0, le=730),
+                       request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    _contract_scope(request, tenant_id)
+    try:
+        return {"deadlines": contracts.upcoming(tenant_id, within_days=within_days)}
+    except contracts.ContractError as exc:
+        raise _contract_http_error(exc)
+
+
+@app.post("/admin/contracts/import")
+def contracts_import(req: ContractImportRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    scope = _contract_scope(request, req.tenant_id)
+    try:
+        out = contracts.import_extracted(req.tenant_id, req.contract_id, req.extracted, source_doc=req.source_doc,
+                                         created_by=_admin_label(scope))
+    except contracts.ContractError as exc:
+        raise _contract_http_error(exc)
+    _audit_admin(scope, "contract_imported", tenant_id=req.tenant_id, contract_id=req.contract_id,
+                 rejected=sorted(out["rejected"]), kept=out["kept"])
+    return {"contract": _contract_summary(out["contract"]), "rejected": out["rejected"], "kept": out["kept"]}
+
+
+@app.post("/admin/contracts/notify")
+def contracts_notify(req: ContractNotifyRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    scope = _contract_scope(request, req.tenant_id)
+    try:
+        out = contract_notify.run(req.tenant_id, dry_run=req.dry_run)
+    except contracts.ContractError as exc:
+        raise _contract_http_error(exc)
+    _audit_admin(scope, "contract_notify_run", tenant_id=req.tenant_id, dry_run=req.dry_run, due=out["due"], sent=out["sent"],
+                 failed=out["failed"])
+    return out
+
+
+@app.get("/admin/contracts/{contract_id}")
+def contracts_detail(contract_id: str, tenant_id: str = Query("default", max_length=64), request: Request = None,
+                     _admin_auth: None = Depends(require_admin_auth)):
+    _contract_scope(request, tenant_id)
+    try:
+        contract = contracts.get(tenant_id, contract_id)
+    except contracts.ContractError as exc:
+        raise _contract_http_error(exc)
+    return {**contract, "history": contract["history"][-50:], "status": contracts.status_of(contract),
+            "deadlines": contracts.deadlines(contract), "required": list(contracts.REQUIRED)}
+
+
+@app.post("/admin/contracts/{contract_id}/field")
+def contracts_set_field(contract_id: str, req: ContractFieldRequest, request: Request = None,
+                        _admin_auth: None = Depends(require_admin_auth)):
+    scope = _contract_scope(request, req.tenant_id)
+    try:
+        contract = contracts.set_field(req.tenant_id, contract_id, req.name, req.value, by=_admin_label(scope), note=req.note or "")
+    except contracts.ContractError as exc:
+        raise _contract_http_error(exc)
+    _audit_admin(scope, "contract_field_set", tenant_id=req.tenant_id, contract_id=contract_id, field=req.name)
+    return _contract_summary(contract)
+
+
+@app.post("/admin/contracts/{contract_id}/confirm")
+def contracts_confirm_field(contract_id: str, req: ContractFieldRequest, request: Request = None,
+                            _admin_auth: None = Depends(require_admin_auth)):
+    scope = _contract_scope(request, req.tenant_id)
+    try:
+        contract = contracts.confirm_field(req.tenant_id, contract_id, req.name, by=_admin_label(scope))
+    except contracts.ContractError as exc:
+        raise _contract_http_error(exc)
+    _audit_admin(scope, "contract_field_confirmed", tenant_id=req.tenant_id, contract_id=contract_id, field=req.name)
+    return _contract_summary(contract)
+
+
+@app.post("/admin/contracts/{contract_id}/draft")
+def contracts_draft(contract_id: str, req: ContractDraftRequest, request: Request = None,
+                    _admin_auth: None = Depends(require_admin_auth)):
+    scope = _contract_scope(request, req.tenant_id)
+    try:
+        client = outlook_connector.default_client()
+        out = outlook_connector.draft_for_deadline(req.tenant_id, contract_id, req.kind, client=client, mailbox=req.mailbox,
+                                                   by=_admin_label(scope))
+    except contracts.ContractError as exc:
+        raise _contract_http_error(exc)
+    except source_registry.SourceError:
+        raise HTTPException(status_code=409, detail="mail access is not configured (OUTLOOK_ACCESS_TOKEN or the client credentials)")
+    except Exception:  # noqa: BLE001 - a Graph failure is reported without its details
+        logging.exception("contract draft failed contract_id=%s", contract_id)
+        raise HTTPException(status_code=502, detail="the draft could not be created")
+    _audit_admin(scope, "contract_draft_created", tenant_id=req.tenant_id, contract_id=contract_id, kind=req.kind)
+    return out
+
+
+# --- Extraction review (6-3) --------------------------------------------------
+
+
+class ExtractionLineRequest(BaseModel):
+    tenant_id: str = Field("default", max_length=64)
+    source_doc: str = Field(..., max_length=512)
+    page: int = Field(..., ge=1)
+    line_id: str = Field(..., max_length=32)
+    text: Optional[str] = Field(None, max_length=2000)
+    note: Optional[str] = Field(None, max_length=500)
+
+
+class ExtractionDocRequest(BaseModel):
+    tenant_id: str = Field("default", max_length=64)
+    source_doc: str = Field(..., max_length=512)
+
+
+def _extraction_http_error(exc: Exception) -> HTTPException:
+    text = str(exc)
+    if "no extraction record" in text or "no such line" in text or "not available" in text:
+        return HTTPException(status_code=404, detail=text)
+    return HTTPException(status_code=400, detail=text)
+
+
+def _extraction_scope(request, tenant_id: str):
+    scope = _request_scope(request)
+    require_scope(scope, tenant_id)
+    return scope
+
+
+@app.get("/admin/extraction", response_class=HTMLResponse)
+def extraction_page(_admin_auth: None = Depends(require_admin_auth)):
+    path = _STATIC_DIR / "extraction_review.html"
+    try:
+        return HTMLResponse(_admin_page_html(path))
+    except Exception:
+        logging.exception("extraction review page unavailable")
+        raise HTTPException(status_code=500, detail="extraction review page unavailable")
+
+
+@app.get("/admin/extraction/docs")
+def extraction_docs(tenant_id: str = Query("default", max_length=64), request: Request = None,
+                    _admin_auth: None = Depends(require_admin_auth)):
+    _extraction_scope(request, tenant_id)
+    try:
+        return {"documents": extraction_review.documents(tenant_id)}
+    except extraction_store.ExtractionError as exc:
+        raise _extraction_http_error(exc)
+
+
+@app.get("/admin/extraction/items")
+def extraction_items(
+    tenant_id: str = Query("default", max_length=64), max_confidence: Optional[float] = Query(None, ge=0, le=100),
+    include_reviewed: bool = False, source_doc: Optional[str] = Query(None, max_length=512),
+    limit: int = Query(100, ge=1, le=500), request: Request = None, _admin_auth: None = Depends(require_admin_auth),
+):
+    _extraction_scope(request, tenant_id)
+    try:
+        return {"items": extraction_review.review_items(tenant_id, max_confidence=max_confidence,
+                                                        include_reviewed=include_reviewed, source_doc=source_doc, limit=limit)}
+    except extraction_store.ExtractionError as exc:
+        raise _extraction_http_error(exc)
+
+
+@app.get("/admin/extraction/page")
+def extraction_page_data(
+    source_doc: str = Query(..., max_length=512), page: int = Query(..., ge=1), tenant_id: str = Query("default", max_length=64),
+    request: Request = None, _admin_auth: None = Depends(require_admin_auth),
+):
+    _extraction_scope(request, tenant_id)
+    try:
+        record = extraction_store.load_record(tenant_id, source_doc)
+        entry = None if record is None else next((p for p in record["pages"] if p["page"] == page), None)
+        if entry is None:
+            raise extraction_store.ExtractionError("no extraction record for this page")
+        decided = extraction_review._states(tenant_id, source_doc)
+    except extraction_store.ExtractionError as exc:
+        raise _extraction_http_error(exc)
+    return {"source_doc": source_doc, "page": page, "width_px": entry["width_px"], "height_px": entry["height_px"],
+            "confidence": entry["confidence"], "preview_available": bool(record.get("file_path")),
+            "threshold": extraction_store.review_max_confidence(),
+            "lines": [{**line, "state": decided.get((page, line["text"]), "open")} for line in entry["lines"]]}
+
+
+@app.get("/admin/extraction/page-image")
+def extraction_page_image(
+    source_doc: str = Query(..., max_length=512), page: int = Query(..., ge=1), tenant_id: str = Query("default", max_length=64),
+    request: Request = None, _admin_auth: None = Depends(require_admin_auth),
+):
+    _extraction_scope(request, tenant_id)
+    try:
+        record = extraction_store.load_record(tenant_id, source_doc)
+        if record is None:
+            raise extraction_store.ExtractionError("no extraction record for this document")
+        png = extraction_store.render_page_png(record, page)
+    except extraction_store.ExtractionError as exc:
+        raise _extraction_http_error(exc)
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "private, max-age=60"})
+
+
+def _extraction_decision(req: ExtractionLineRequest, request, action: str):
+    scope = _extraction_scope(request, req.tenant_id)
+    who = _admin_label(scope)
+    try:
+        if action == "correct":
+            result = extraction_review.submit_correction(req.tenant_id, req.source_doc, req.page, req.line_id, req.text or "",
+                                                         by=who, note=req.note or "")
+        elif action == "confirm":
+            result = extraction_review.confirm_line(req.tenant_id, req.source_doc, req.page, req.line_id, by=who, note=req.note or "")
+        else:
+            result = {"reverted": extraction_review.revert(req.tenant_id, req.source_doc, req.page, req.line_id)}
+    except extraction_store.ExtractionError as exc:
+        raise _extraction_http_error(exc)
+    _audit_admin(scope, f"extraction_{action}ed",  # corrected / confirmed / reverted
+                 tenant_id=req.tenant_id, source_doc=req.source_doc, page=req.page, line_id=req.line_id)
+    return result
+
+
+@app.post("/admin/extraction/correct")
+def extraction_correct(req: ExtractionLineRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    return _extraction_decision(req, request, "correct")
+
+
+@app.post("/admin/extraction/confirm")
+def extraction_confirm(req: ExtractionLineRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    return _extraction_decision(req, request, "confirm")
+
+
+@app.post("/admin/extraction/revert")
+def extraction_revert(req: ExtractionLineRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    return _extraction_decision(req, request, "revert")
+
+
+@app.post("/admin/extraction/reingest")
+def extraction_reingest(req: ExtractionDocRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    scope = _extraction_scope(request, req.tenant_id)
+    try:
+        sources = extraction_review.request_reingest(req.tenant_id, req.source_doc)
+    except extraction_store.ExtractionError as exc:
+        raise _extraction_http_error(exc)
+    _audit_admin(scope, "extraction_reingest_requested", tenant_id=req.tenant_id, source_doc=req.source_doc, sources=sources)
+    return {"sources": sources, "note": "the document is ingested again by the next apply of those sources"
+            if sources else "no registered source holds this document: upload it again"}
+
+
+# --- Document sources (5-4) ---------------------------------------------------
+
+
+class SourceCreateRequest(BaseModel):
+    source_id: str = Field(..., max_length=48)
+    tenant_id: str = Field(..., max_length=64)
+    kind: str = Field("folder", max_length=16)
+    path: Optional[str] = Field(None, max_length=1024)
+    options: Optional[Dict[str, Any]] = None
+    schedule_minutes: int = 0
+    collection: Optional[str] = Field(None, max_length=128)
+
+
+class SourceApplyRequest(BaseModel):
+    approval: Optional[str] = Field(None, max_length=64)
+
+
+class SourceApproveRequest(BaseModel):
+    plan_sha256: str = Field(..., max_length=64)
+
+
+def _source_http_error(exc: Exception) -> HTTPException:
+    text = str(exc)
+    if "not found" in text:
+        return HTTPException(status_code=404, detail=text)
+    if "already exists" in text or "changed by someone else" in text:
+        return HTTPException(status_code=409, detail=text)
+    return HTTPException(status_code=400, detail=text)
+
+
+def _admin_label(scope) -> str:
+    return "installation" if scope is None else ",".join(sorted(scope))
+
+
+def _owned_source(source_id: str, scope) -> Dict[str, Any]:
+    # A source outside the administrator's tenants is "not found", the same as one that does not exist.
+    try:
+        record = source_registry.get(source_id)
+    except source_registry.SourceError as exc:
+        raise _source_http_error(exc)
+    if scope is not None and record["tenant_id"] not in scope:
+        raise HTTPException(status_code=404, detail=f"source '{source_id}' not found")
+    return record
+
+
+def _source_row(record: Dict[str, Any]) -> Dict[str, Any]:
+    # Never the server path or the options of the source.
+    row = {key: record[key] for key in ("source_id", "tenant_id", "kind", "collection", "schedule_minutes", "enabled", "state")}
+    try:
+        plan = source_apply.plan_source(record["source_id"])
+        row["pending"], row["guard"] = plan["counts"], source_apply.guard(plan)
+    except source_registry.SourceError:
+        row["pending"], row["guard"] = None, None
+    return row
+
+
+@app.get("/admin/sources", response_class=HTMLResponse)
+def sources_page(_admin_auth: None = Depends(require_admin_auth)):
+    path = _STATIC_DIR / "sources.html"
+    try:
+        return HTMLResponse(_admin_page_html(path))
+    except Exception:
+        logging.exception("sources page unavailable")
+        raise HTTPException(status_code=500, detail="sources page unavailable")
+
+
+@app.get("/admin/sources/list")
+def sources_list(request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    scope = _request_scope(request)
+    return {"sources": [_source_row(r) for r in source_registry.list_sources()
+                        if scope is None or r["tenant_id"] in scope]}
+
+
+@app.post("/admin/sources")
+def sources_create(req: SourceCreateRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    scope = _request_scope(request)
+    require_scope(scope, req.tenant_id)
+    try:
+        record = source_registry.create(
+            req.source_id, tenant_id=req.tenant_id, kind=req.kind, path=req.path, options=req.options,
+            schedule_minutes=req.schedule_minutes, collection=req.collection, created_by=_admin_label(scope),
+        )
+    except source_registry.SourceError as exc:
+        raise _source_http_error(exc)
+    _audit_admin(scope, "source_created", tenant_id=req.tenant_id, source_id=req.source_id, kind=req.kind)
+    return _source_row(record)
+
+
+@app.post("/admin/sources/{source_id}/scan")
+def sources_scan(source_id: str, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    scope = _request_scope(request)
+    record = _owned_source(source_id, scope)
+    try:
+        result = source_sync.scan_source(source_id)
+    except Exception as exc:  # noqa: BLE001 - a connector failure is reported without its details
+        if isinstance(exc, source_registry.SourceError):
+            raise _source_http_error(exc)
+        logging.exception("source scan failed source_id=%s", source_id)
+        raise HTTPException(status_code=502, detail="the source could not be scanned")
+    _audit_admin(scope, "source_scanned", tenant_id=record["tenant_id"], source_id=source_id,
+                 counts=result.get("counts"), error=result.get("error"))
+    if "error" in result:
+        return {"error": result["error"], "run_id": result["run_id"]}
+    return {"run_id": result["run_id"], "counts": result["counts"], "total_files": result["total_files"],
+            "skipped": {k: (len(v) if isinstance(v, list) else v) for k, v in result["skipped"].items()},
+            "name_conflicts": len(result["name_conflicts"])}
+
+
+@app.get("/admin/sources/{source_id}/plan")
+def sources_plan(source_id: str, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    _owned_source(source_id, _request_scope(request))
+    try:
+        plan = source_apply.plan_source(source_id)
+    except source_registry.SourceError as exc:
+        raise _source_http_error(exc)
+    plan["guard"] = source_apply.guard(plan)
+    for key in ("added", "modified", "deleted"):
+        plan[key] = plan[key][:200]  # the rest is in the change ledger
+    return plan
+
+
+@app.post("/admin/sources/{source_id}/apply")
+def sources_apply(source_id: str, req: SourceApplyRequest, request: Request = None,
+                  _admin_auth: None = Depends(require_admin_auth)):
+    scope = _request_scope(request)
+    record = _owned_source(source_id, scope)
+    try:
+        result = source_apply.apply_source(source_id, approval=req.approval, actor=_admin_label(scope))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except source_registry.SourceError as exc:
+        raise _source_http_error(exc)
+    except Exception:  # noqa: BLE001
+        logging.exception("source apply failed source_id=%s", source_id)
+        raise HTTPException(status_code=502, detail="the changes could not be applied")
+    _audit_admin(scope, "source_applied", tenant_id=record["tenant_id"], source_id=source_id,
+                 status=result.get("status"), counts=result.get("counts"), reasons=result.get("reasons"))
+    return result
+
+
+@app.post("/admin/sources/{source_id}/approve")
+def sources_approve(source_id: str, req: SourceApproveRequest, request: Request = None,
+                    _admin_auth: None = Depends(require_admin_auth)):
+    scope = _request_scope(request)
+    record = _owned_source(source_id, scope)
+    try:
+        result = source_apply.approve(source_id, req.plan_sha256, actor=_admin_label(scope))
+    except source_registry.SourceError as exc:
+        raise _source_http_error(exc)
+    _audit_admin(scope, "source_approved", tenant_id=record["tenant_id"], source_id=source_id, plan_sha256=req.plan_sha256)
+    return result
+
+
+@app.post("/admin/sources/{source_id}/{action}")
+def sources_switch(source_id: str, action: str, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    if action not in {"enable", "disable", "remove"}:
+        raise HTTPException(status_code=404, detail="unknown action")
+    scope = _request_scope(request)
+    record = _owned_source(source_id, scope)
+    try:
+        if action == "remove":
+            source_registry.remove(source_id)
+            result: Dict[str, Any] = {"removed": source_id}
+        else:
+            result = _source_row(source_registry.set_enabled(source_id, action == "enable"))
+    except source_registry.SourceError as exc:
+        raise _source_http_error(exc)
+    _audit_admin(scope, f"source_{action}d" if action != "remove" else "source_removed",
+                 tenant_id=record["tenant_id"], source_id=source_id)
+    return result
+
+
+@app.get("/admin/sources/{source_id}/changes")
+def sources_changes(source_id: str, limit: int = Query(20, ge=1, le=200), request: Request = None,
+                    _admin_auth: None = Depends(require_admin_auth)):
+    _owned_source(source_id, _request_scope(request))
+    try:
+        entries = source_changes.read_entries(source_id, limit)
+    except source_changes.LedgerError as exc:
+        raise _source_http_error(exc)
+    return {"entries": [{k: e.get(k) for k in ("seq", "at", "kind", "run_id", "summary")} for e in entries]}
+
+
 # --- Synonym candidate review (N8) -------------------------------------------
 
 
@@ -2172,13 +2688,16 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         effective_top_k = _apply_chat_profile_top_k(req.top_k or config.TOP_K, runtime_profile)
         effective_max_context_chars = req.max_context_chars or config.MAX_CONTEXT_CHARS
         _record_chat_profile_metric(runtime_profile)
+        if req.deep:
+            effective_top_k = min(effective_top_k * 2, _MAX_TOP_K)
         cache_key = None
-        if answer_cache.enabled() and not staging_collection and rag_profile_id == "default":
+        if answer_cache.enabled() and not staging_collection and rag_profile_id == "default" and not req.deep:
             cache_key = answer_cache.build_key(
                 question_for_answer,
                 top_k=effective_top_k,
                 max_context_chars=effective_max_context_chars,
                 tenant_id=tenant_id,
+                rag_profile_id=rag_profile_id,
             )
             cached = answer_cache.get(cache_key)
             if cached is not None:
@@ -2222,7 +2741,8 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         if staging_collection:
             answer_kwargs["collection_name"] = staging_collection
         answer_kwargs["rag_profile_id"] = rag_profile_id
-        ans, trace = answer_query_with_trace(question_for_answer, **answer_kwargs)
+        with search_mode.deep_mode(bool(req.deep)):
+            ans, trace = answer_query_with_trace(question_for_answer, **answer_kwargs)
         chat_event = {
             "request_id": trace.get("request_id"),
             "trace_id": req.trace_id or trace.get("request_id"),
@@ -2258,6 +2778,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         if conversation_trace:
             payload["conversation_context"] = conversation_trace
         payload["question_type"] = trace.get("question_type", "other")
+        payload["interpretation"] = trace.get("interpretation")
         payload["profile_validation"] = trace.get(
             "profile_validation",
             {
@@ -2375,12 +2896,15 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
             effective_top_k = _apply_chat_profile_top_k(req.top_k or config.TOP_K, runtime_profile)
             effective_max_context_chars = req.max_context_chars or config.MAX_CONTEXT_CHARS
             _record_chat_profile_metric(runtime_profile)
-            # Stage 14: the answer cache of /chat (same key, same rules).
+            if req.deep:
+                effective_top_k = min(effective_top_k * 2, _MAX_TOP_K)
+            # Stage 14: the answer cache of /chat (same key, same rules); a deep request never uses it.
             cache_key = None
-            if answer_cache.enabled() and not staging_collection and rag_profile_id == "default":
+            if answer_cache.enabled() and not staging_collection and rag_profile_id == "default" and not req.deep:
                 cache_key = answer_cache.build_key(
                     question_for_answer, top_k=effective_top_k,
                     max_context_chars=effective_max_context_chars, tenant_id=tenant_id,
+                    rag_profile_id=rag_profile_id,
                 )
                 cached = answer_cache.get(cache_key)
                 if cached is not None:
@@ -2415,7 +2939,9 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
             }
             if staging_collection:
                 stream_kwargs["collection_name"] = staging_collection
-            for name, payload in answer_query_stream(question_for_answer, **stream_kwargs):
+            for name, payload in search_mode.iterate_in_mode(
+                bool(req.deep), answer_query_stream(question_for_answer, **stream_kwargs)
+            ):
                 if name == "final":
                     result, trace = payload
                     final_payload = result.to_dict()
@@ -2428,6 +2954,7 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                     )
                     final_payload["rag_profile_id"] = trace.get("rag_profile_id", rag_profile_id)
                     final_payload["question_type"] = trace.get("question_type", "other")
+                    final_payload["interpretation"] = trace.get("interpretation")
                     if "profile_validation" in trace:
                         final_payload["profile_validation"] = trace["profile_validation"]
                     if cache_key is not None and result.guard_reason is None and not result.used_fallback:
@@ -2879,12 +3406,25 @@ def chat_feedback(req: ProductFeedbackRequest, api_auth: ApiAuthContext = Depend
 # --- Citation excerpt for the source panel (stage 10) ---------------------------
 
 
-def _approved_source_row(chunk_id: str, tenant: str) -> Optional[Dict[str, Any]]:
-    # "approved_qa_pair:<qa_id>" that is not in the keyword corpus: the
-    # approved question and answer themselves (same tenant only).
-    if not getattr(config, "APPROVED_QA_ENABLED", False) or not str(chunk_id).startswith("approved_qa_pair:"):
+def _approved_pair_qa_id(chunk_id: str, tenant: str) -> Optional[str]:
+    # "approved_qa_pair:<qa_id>" (default tenant, or the form written before tenant prefixes) or
+    # "<tenant>:approved_qa_pair:<qa_id>". The prefix of another tenant is not accepted.
+    head, marker, qa_id = str(chunk_id).partition("approved_qa_pair:")
+    if not marker or not qa_id:
         return None
-    qa_id = str(chunk_id).split(":", 1)[1]
+    if head and head != f"{tenant}:":
+        return None
+    return qa_id
+
+
+def _approved_source_row(chunk_id: str, tenant: str) -> Optional[Dict[str, Any]]:
+    # An approved-QA pair id that is not in the keyword corpus: the
+    # approved question and answer themselves (same tenant only).
+    if not getattr(config, "APPROVED_QA_ENABLED", False):
+        return None
+    qa_id = _approved_pair_qa_id(chunk_id, tenant)
+    if qa_id is None:
+        return None
     loaded = load_approved_qa(str(config.APPROVED_QA_PATH), tenant_id=tenant)
     for answer in loaded.records:
         if answer.qa_id == qa_id:
@@ -2899,6 +3439,23 @@ def _approved_source_row(chunk_id: str, tenant: str) -> Optional[Dict[str, Any]]
                 "doc_version": answer.doc_version,
             }
     return None
+
+
+@app.get("/chat/suggest")
+def chat_suggest(
+    q: str = Query("", max_length=200),
+    tenant_id: Optional[str] = None,
+    limit: int = Query(5, ge=1, le=10),
+    api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited),
+):
+    # Questions of the caller's approved QA that match what is being typed. No answers, and the typed text is
+    # neither logged nor audited.
+    tenant = normalize_tenant_id(tenant_id)
+    enforce_tenant_authorization(api_auth, tenant)
+    index = _approved_qa_index_for(tenant)
+    if index is None:
+        return {"suggestions": []}
+    return {"suggestions": question_suggest.suggest(q, index=index, tenant_id=tenant, limit=limit)}
 
 
 @app.get("/chat/source")

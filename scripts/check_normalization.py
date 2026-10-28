@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Quantitative check of normalization and quantity extraction.
+"""Quantitative checks for Japanese normalization and quantity extraction.
 
-Golden cases (eval/normalization/golden_cases.jsonl) give accuracy per
-category, and every input is checked for idempotence in every profile. With
---corpus (canonical chunk JSONL) the same checks run on real text: change
-rate and idempotence per profile, and quantity counts by kind. Exit code 1
-when a golden case fails or idempotence breaks, so it can gate CI.
+Default golden cases are synthetic, embedded in Python rather than stored as
+public JSONL files. A caller may supply --golden path/to/private.jsonl explicitly
+for its own local evaluation. Nothing uploads that private file to GitHub.
 """
 
 from __future__ import annotations
@@ -27,8 +25,34 @@ from rag_core.ja_numbers import decimal_to_str, parse_japanese_number
 from rag_core.quantities import extract_quantities
 from rag_core.text_normalize import PROFILES, normalize
 
-DEFAULT_GOLDEN = _ROOT / "eval" / "normalization" / "golden_cases.jsonl"
 _MAX_EXAMPLES = 20
+
+# Synthetic, explicitly authored test inputs; none is extracted from user PDFs.
+# The default CI regression gate must not silently disappear when source-data
+# JSONL files are deliberately removed from public Git history.
+_SYNTHETIC_GOLDEN: List[Dict[str, Any]] = [
+    {"id": "number-fullwidth-man", "category": "number", "input": "１万", "expected": "10000"},
+    {"id": "number-mixed-man-sen", "category": "number", "input": "1万5千", "expected": "15000"},
+    {"id": "number-decimal-oku", "category": "number", "input": "3.5億", "expected": "350000000"},
+    {"id": "number-kanji-year", "category": "number", "input": "二〇二四", "expected": "2024"},
+    {"id": "number-malformed-order", "category": "number", "input": "十百", "expected": None},
+    {"id": "number-decimal-trailing", "category": "number", "input": "2.50", "expected": "2.5"},
+    {"id": "normalize-legal-amount", "category": "normalize", "input": "第三条　１，２００円", "profile": "index", "expected": "第3条 1200円"},
+    {"id": "normalize-display-spaces", "category": "normalize", "input": "  alpha　 beta ", "profile": "display", "expected": "alpha beta"},
+    {"id": "normalize-dense-width", "category": "normalize", "input": "ＡＢＣ", "profile": "dense", "expected": "ABC"},
+    {"id": "normalize-katakana-hyphen", "category": "normalize", "input": "サ-バ", "profile": "index", "expected": "サーバ"},
+    {"id": "normalize-match-long-vowel", "category": "normalize", "input": "サーバー", "profile": "match", "expected": "サーバ"},
+    {"id": "quantity-jpy", "category": "quantity", "input": "15,000円", "expected": [["money", "15000JPY", True]]},
+    {"id": "quantity-percent", "category": "quantity", "input": "10%", "expected": [["percent", "10%", True]]},
+    {"id": "quantity-article", "category": "quantity", "input": "第三条", "expected": [["article", "3条", True]]},
+    {"id": "quantity-people", "category": "quantity", "input": "二人", "expected": [["count", "2人", True]]},
+    {"id": "date-iso", "category": "date", "input": "2024年4月5日", "expected": [["date", "2024-04-05", True]]},
+]
+
+
+def synthetic_golden_cases() -> List[Dict[str, Any]]:
+    """Return fresh, deterministic synthetic golden cases for CI and pytest."""
+    return [dict(item) for item in _SYNTHETIC_GOLDEN]
 
 
 def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -111,13 +135,19 @@ def corpus_report(path: Path, limit: Optional[int]) -> Dict[str, Any]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--golden", type=Path, default=DEFAULT_GOLDEN)
+    parser.add_argument("--golden", type=Path, default=None, help="Optional private golden JSONL; default: in-code synthetic cases")
     parser.add_argument("--corpus", type=Path, default=None, help="canonical chunk JSONL to profile")
     parser.add_argument("--corpus-limit", type=int, default=None)
     parser.add_argument("--report", type=Path, default=None, help="write the JSON report here")
     args = parser.parse_args(argv)
 
-    report: Dict[str, Any] = {"golden": golden_report(_read_jsonl(args.golden))}
+    cases = _read_jsonl(args.golden) if args.golden is not None else synthetic_golden_cases()
+    if not cases:
+        parser.error("golden cases cannot be empty")
+    report: Dict[str, Any] = {
+        "golden_source": str(args.golden) if args.golden is not None else "synthetic_builtin",
+        "golden": golden_report(cases),
+    }
     if args.corpus is not None:
         report["corpus"] = corpus_report(args.corpus, args.corpus_limit)
     serialized = json.dumps(report, ensure_ascii=False, indent=2)

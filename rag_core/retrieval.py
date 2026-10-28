@@ -10,13 +10,15 @@ import re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Sequence, Tuple
 
 import config
 from rank_bm25 import BM25Okapi
-from rag_core import embedder, ja_terms, ja_tokenizer, quantities, store
+from rag_core import embedder, index_generation, ja_terms, ja_tokenizer, quantities, store
 from rag_core.bm25_index import InvertedBM25
 from rag_core.ja_text import (
     active_normalization_version,
@@ -126,7 +128,7 @@ def keyword_index_status() -> Dict[str, Any]:
     return {
         "keyword_index_loaded": records > 0,
         "keyword_index_records": records,
-        "keyword_index_path": str(config.CHUNKS_JSONL_PATH),
+        "keyword_index_path": index_generation.served_keyword_path(),
     }
 
 
@@ -332,21 +334,8 @@ _COLLECTION_INDEX_CACHE: Dict[str, Dict[str, object]] = {}
 _COLLECTION_INDEX_CACHE_MAX = 8
 
 
-def keyword_index_path_for_collection(collection_name: Optional[str]) -> str:
-    """Keyword corpus that belongs to a vector collection.
-
-    The served collection uses CHUNKS_JSONL_PATH. Every other collection has
-    its own corpus under INDEX_DIR/collections/, so a staging query never
-    scores production documents (and the reverse).
-    """
-    name = str(collection_name or "").strip()
-    served = {
-        str(getattr(config, "VECTORSTORE_COLLECTION_NAME", "") or "").strip(),
-        str(config.getenv_first("CHROMA_COLLECTION") or "").strip(),
-        "default",
-    }
-    if not name or name in served:
-        return str(config.CHUNKS_JSONL_PATH)
+def collection_corpus_path(name: str) -> str:
+    """INDEX_DIR/collections/<name>.jsonl: the keyword corpus of a collection that is not the served one."""
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
     if safe != name:
         # Stage 15: a name changed by sanitizing gets a hash suffix, so "a b"
@@ -355,11 +344,34 @@ def keyword_index_path_for_collection(collection_name: Optional[str]) -> str:
     return os.path.join(str(config.INDEX_DIR), "collections", f"{safe}.jsonl")
 
 
+def keyword_index_path_for_collection(collection_name: Optional[str]) -> str:
+    """Keyword corpus that belongs to a vector collection.
+
+    The served collection uses CHUNKS_JSONL_PATH (or, while a generation is
+    active, the corpus of that generation). Every other collection has its own
+    corpus under INDEX_DIR/collections/, so a staging query never scores
+    production documents (and the reverse).
+    """
+    name = str(collection_name or "").strip()
+    pointed = index_generation.active_collection()
+    if pointed:
+        served = {pointed, "default"}
+    else:
+        served = {
+            str(getattr(config, "VECTORSTORE_COLLECTION_NAME", "") or "").strip(),
+            str(config.getenv_first("CHROMA_COLLECTION") or "").strip(),
+            "default",
+        }
+    if not name or name in served:
+        return index_generation.served_keyword_path()
+    return collection_corpus_path(name)
+
+
 def _index_for_collection(collection_name: Optional[str]) -> _KeywordIndex:
     # Called without arguments for the served corpus so tests that replace
     # _load_keyword_index with a zero-argument stub keep working.
     path = keyword_index_path_for_collection(collection_name)
-    if path == str(config.CHUNKS_JSONL_PATH):
+    if path == index_generation.served_keyword_path():
         return _load_keyword_index()
     return _load_keyword_index(path)
 
@@ -446,9 +458,10 @@ def _cached_or_build(path: str, read_slot, write_slot) -> _KeywordIndex:
 
 
 def _load_keyword_index(path: Optional[str] = None) -> _KeywordIndex:
-    if path is not None and path != str(config.CHUNKS_JSONL_PATH):
+    served = index_generation.served_keyword_path()
+    if path is not None and path != served:
         return _load_collection_keyword_index(path)
-    return _cached_or_build(str(config.CHUNKS_JSONL_PATH), lambda: _INDEX_CACHE, _INDEX_CACHE.update)
+    return _cached_or_build(served, lambda: _INDEX_CACHE, _INDEX_CACHE.update)
 
 
 def _reading_lane_enabled() -> bool:
@@ -987,17 +1000,32 @@ _FUSION_LANES = (
 )
 
 
+# Multipliers for the lane weights of the fusion, for the retrievals made inside fusion_scale() (query routing).
+_FUSION_SCALE: ContextVar[Optional[Dict[str, float]]] = ContextVar("fusion_scale", default=None)
+
+
+@contextmanager
+def fusion_scale(scale: Optional[Dict[str, float]]) -> Iterator[None]:
+    """Multiply the dense / keyword / exact weights of the fusion by scale["dense" | "keyword" | "exact"]."""
+    token = _FUSION_SCALE.set(dict(scale) if scale else None)
+    try:
+        yield
+    finally:
+        _FUSION_SCALE.reset(token)
+
+
 def _fusion_settings() -> Dict[str, Any]:
     method = str(getattr(config, "HYBRID_FUSION", "weighted_rrf") or "weighted_rrf").strip().lower()
     if method not in _FUSION_METHODS:
         raise ValueError(
             f"Unknown HYBRID_FUSION '{method}' (supported: {', '.join(_FUSION_METHODS)})"
         )
+    scale = _FUSION_SCALE.get() or {}
     return {
         "method": method,
-        "dense_weight": float(getattr(config, "HYBRID_DENSE_WEIGHT", 1.0)),
-        "keyword_weight": float(getattr(config, "HYBRID_KEYWORD_WEIGHT", 1.0)),
-        "exact_weight": float(getattr(config, "HYBRID_EXACT_WEIGHT", 1.0)),
+        "dense_weight": float(getattr(config, "HYBRID_DENSE_WEIGHT", 1.0)) * float(scale.get("dense", 1.0)),
+        "keyword_weight": float(getattr(config, "HYBRID_KEYWORD_WEIGHT", 1.0)) * float(scale.get("keyword", 1.0)),
+        "exact_weight": float(getattr(config, "HYBRID_EXACT_WEIGHT", 1.0)) * float(scale.get("exact", 1.0)),
     }
 
 
@@ -1024,6 +1052,24 @@ def _dbsf_normalize(scores: Dict[str, float]) -> Dict[str, float]:
         return {key: 0.5 for key in scores}
     low = mean - 3.0 * std
     return {key: (value - low) / (6.0 * std) for key, value in scores.items()}
+
+
+def _rank_buckets(merged: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Final order of the fused candidates: child chunks first, then the fused score, then lexical presence.
+
+    Ties are broken by chunk key (ascending), never by the order in which the dense and lexical lanes
+    returned their hits, so the same candidates always give the same ranking."""
+    by_key = sorted(merged.items(), key=lambda item: item[0])
+    ranked = sorted(
+        by_key,
+        key=lambda item: (
+            _bucket_child_priority(item[1]),
+            float(item[1]["fused"]),
+            1 if item[1].get("keyword") is not None else 0,
+        ),
+        reverse=True,  # sorted() keeps the order of equal keys, so ties stay in chunk-key order
+    )
+    return [bucket for _key, bucket in ranked]
 
 
 def _fuse_hybrid_buckets(merged: Dict[str, Dict[str, Any]], *, k_rrf: int, settings: Dict[str, Any]) -> None:
@@ -1157,15 +1203,7 @@ def hybrid_retrieve(
 
     _fuse_hybrid_buckets(merged, k_rrf=k_rrf, settings=settings)
 
-    ranked_items = sorted(
-        merged.values(),
-        key=lambda x: (
-            _bucket_child_priority(x),
-            float(x["fused"]),
-            1 if x.get("keyword") is not None else 0,
-        ),
-        reverse=True,
-    )
+    ranked_items = _rank_buckets(merged)
     selected_items = ranked_items[:top_k]
     if top_k > 1 and vector_hits and not any(item.get("vector") is not None for item in selected_items):
         best_vector_item = next((item for item in ranked_items if item.get("vector") is not None), None)

@@ -13,7 +13,7 @@ import pytest
 from scripts import generate_real_vector_quality_baseline as baseline
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_PATH = ROOT / "config/evaluation/real_vector_quality_baseline.contract.json"
+CONTRACT_PATH = ROOT / "config/evaluation/real_vector_quality_baseline_v2.contract.json"
 
 
 def contract(): return baseline.load(CONTRACT_PATH)
@@ -197,9 +197,10 @@ def test_stale_implementation_hash_is_rejected():
         ROOT / "reports/current_real_vector_quality_baseline.json"
     )
     report["implementation_sources"][0]["sha256"] = "0" * 64
+    report["contract_sha256"] = baseline.sha(CONTRACT_PATH)
 
     with pytest.raises(
         baseline.QualityViolationError,
         match="implementation source fingerprint mismatch",
     ):
-        baseline.validate_report(report)
+        baseline.validate_report(report, CONTRACT_PATH)

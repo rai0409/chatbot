@@ -22,7 +22,7 @@ repo root、remote、branch、HEAD、upstream、base、AGENTS.md、dirty/untrack
 reset/restore/clean/stash/rebase、無関係差分破棄、main直接commit/push、Docker/WSL/serviceの停止・再起動、本番DB/既存索引の変更、dependencyとLICENSEの無断更新、secret/visibility変更、merge/tag、force push。
 
 ## 実装要件
-1. **必須要件→変更path→既存test/fixture/consumer→変更許可→検証方法→両立可否**を先に照合。schema・JSON key・CLI・固定パス・固定集合・API参照をrepo全体でexact検索。/tmpへ作業前diffを保存。
+1. **必須要件→変更path→既存test/fixture/consumer→変更許可→検証方法→両立可否**を先に照合。schema・JSON key・CLI・固定パス・固定集合・API参照をrepo全体でexact検索。`.phase_work/phase2/`（リポジトリ内・追跡対象外）へ作業前diffを保存。
 2. 既存Provider/Backendに追加する最小の共通契約だけ実装し、余分な抽象層を作らない。文書/チャンクの正式IDはbackend point IDと分離。
 3. Embedding Profile: provider/model ID/revision/dimension/query-prefix/document-prefix/normalization/distanceを記録。未宣言・不一致は厳格モードで拒否。
 4. Index Manifest: source hash、chunking schema/version、Embedding Profile fingerprint、backend、collection、generation、point count、検証状態、権限metadata要件を記録。既存fingerprintと互換の読込/出力を提供。
@@ -41,7 +41,7 @@ mockまたは完全に隔離した小規模fixtureで、Ruri Profile、別Profil
 大規模索引作成、実Embeddingロード、外部API、本番切替は一切実行しない。既存サービスを変更しない。
 
 ## artifact
-/tmpに新旧索引プロファイルの例、互換性判定、テスト実測結果、手動切替手順を保存し読戻す。
+`.phase_work/phase2/`に新旧索引プロファイルの例、互換性判定、テスト実測結果、手動切替手順を保存し読戻す。
 
 ## commit / push / PR / tag 権限
 **条件付き許可**：必要な関連検証PASS時のみ`feat/chatbot-phase2-pluggable-index`へ対象変更をcommit・通常push、main向けPR作成可。CI未確定ならdraft。merge/tag/force-push禁止。

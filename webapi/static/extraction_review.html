@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>抽出レビュー</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 16px; color: #1f2933; background: #f7f8fa; }
+  h1 { font-size: 1.3rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  input, button { font: inherit; padding: 4px 8px; }
+  .layout { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 2fr); gap: 16px; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td { border: 1px solid #d9dee5; padding: 4px 6px; text-align: left; vertical-align: top; font-size: 0.9rem; }
+  tr.pick { cursor: pointer; }
+  tr.pick:hover { background: #eef6ff; }
+  .low { color: #a3261b; font-weight: 600; }
+  #message { min-height: 1.4em; color: #3b5bdb; }
+  #stage { position: relative; display: inline-block; background: #fff; border: 1px solid #d9dee5; max-width: 100%; }
+  #stage img { display: block; max-width: 100%; height: auto; }
+  .box { position: absolute; border: 1px solid rgba(59, 91, 219, .7); box-sizing: border-box; }
+  .box.weak { border-color: #d6336c; background: rgba(214, 51, 108, .12); }
+  .box.sel { border: 3px solid #e8590c; }
+  #form { margin-top: 8px; background: #fff; border: 1px solid #d9dee5; padding: 8px; display: none; }
+  #form textarea { width: 100%; min-height: 3.5em; font: inherit; }
+  #ocr { color: #6b7280; margin: 0 0 6px; }
+</style>
+</head>
+<body>
+<!--admin-nav-->
+<h1>抽出レビュー</h1>
+<p>スキャンした文書の OCR で、信頼度の低い行を確認・補正します。補正は<b>次の取り込みでインデックスに反映</b>されます
+（登録したソースの文書は「再取り込みを予約」で、手でアップロードした文書はアップロードし直します）。</p>
+<div class="bar">
+  <label>管理トークン（任意） <input id="token" type="password" autocomplete="off"></label>
+  <label>テナント <input id="tenant" size="14" value="default"></label>
+  <label>この信頼度未満 <input id="maxconf" size="4" placeholder="80"></label>
+  <label><input type="checkbox" id="reviewed"> 判断済みも表示</label>
+  <button id="reload">読み込み</button>
+</div>
+<div id="message"></div>
+<div class="layout">
+  <div>
+    <table>
+      <thead><tr><th>文書</th><th>頁</th><th>信頼度</th><th>OCR の文字</th><th>状態</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div id="work">
+    <div id="stage"></div>
+    <div id="form">
+      <p id="ocr"></p>
+      <textarea id="text"></textarea>
+      <div>
+        <button id="save">補正を保存</button>
+        <button id="confirm">このまま正しい</button>
+        <button id="revert">判断を取り消す</button>
+        <button id="reingest">この文書の再取り込みを予約</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const doFetch = (url, options) => (window.adminFetch || fetch)(url, options);
+  let current = null;
+  function headers() {
+    const h = { "Content-Type": "application/json" };
+    if ($("token").value) h["X-Admin-Token"] = $("token").value;
+    return h;
+  }
+  function tenant() { return $("tenant").value.trim() || "default"; }
+  function show(text) { $("message").textContent = text; }
+  async function call(method, url, body) {
+    const resp = await doFetch(url, { method: method, headers: headers(), body: body ? JSON.stringify(body) : undefined });
+    let data = null;
+    try { data = await resp.json(); } catch (_) { data = null; }
+    return { ok: resp.ok, status: resp.status, data: data };
+  }
+  function cell(text, cls) {
+    const td = document.createElement("td");
+    td.textContent = text == null ? "" : String(text);
+    if (cls) td.className = cls;
+    return td;
+  }
+  const STATE = { open: "未確認", corrected: "補正済み", confirmed: "確認済み" };
+  async function load() {
+    const q = new URLSearchParams({ tenant_id: tenant() });
+    if ($("maxconf").value) q.set("max_confidence", $("maxconf").value);
+    if ($("reviewed").checked) q.set("include_reviewed", "true");
+    const res = await call("GET", "/admin/extraction/items?" + q.toString());
+    if (!res.ok) { show("読み込みに失敗しました (" + res.status + ")"); return; }
+    const body = $("rows");
+    body.textContent = "";
+    for (const item of res.data.items) {
+      const tr = document.createElement("tr");
+      tr.className = "pick";
+      tr.appendChild(cell(item.source_doc));
+      tr.appendChild(cell(item.page));
+      tr.appendChild(cell(item.confidence == null ? "なし" : item.confidence.toFixed(1), "low"));
+      tr.appendChild(cell(item.text));
+      tr.appendChild(cell(STATE[item.state] || item.state));
+      tr.addEventListener("click", () => openLine(item));
+      body.appendChild(tr);
+    }
+    show("対象の行: " + res.data.items.length);
+  }
+  async function openLine(item) {
+    const q = new URLSearchParams({ tenant_id: tenant(), source_doc: item.source_doc, page: String(item.page) });
+    const res = await call("GET", "/admin/extraction/page?" + q.toString());
+    if (!res.ok) { show("ページを取得できませんでした (" + res.status + ")"); return; }
+    current = { item: item, page: res.data };
+    const stage = $("stage");
+    stage.textContent = "";
+    if (res.data.preview_available) {
+      const img = document.createElement("img");
+      img.alt = "ページ " + item.page;
+      img.src = "/admin/extraction/page-image?" + q.toString();
+      img.addEventListener("load", () => drawBoxes(stage, img));
+      stage.appendChild(img);
+    } else {
+      stage.textContent = "ページ画像は表示できません（元のファイルが見つかりません）。";
+    }
+    $("form").style.display = "block";
+    $("ocr").textContent = "OCR の文字: " + item.text;
+    $("text").value = item.text;
+  }
+  function drawBoxes(stage, img) {
+    const page = current.page;
+    if (!page.width_px) return;
+    const scale = img.clientWidth / page.width_px;
+    for (const line of page.lines) {
+      if (!line.bbox) continue;
+      const box = document.createElement("div");
+      const weak = line.confidence == null || line.confidence < page.threshold;
+      box.className = "box" + (weak ? " weak" : "") + (line.id === current.item.line_id ? " sel" : "");
+      box.style.left = line.bbox[0] * scale + "px";
+      box.style.top = line.bbox[1] * scale + "px";
+      box.style.width = (line.bbox[2] - line.bbox[0]) * scale + "px";
+      box.style.height = (line.bbox[3] - line.bbox[1]) * scale + "px";
+      box.title = line.text;
+      stage.appendChild(box);
+    }
+  }
+  function base() {
+    return { tenant_id: tenant(), source_doc: current.item.source_doc, page: current.item.page, line_id: current.item.line_id };
+  }
+  async function decide(kind, extra) {
+    if (!current) return;
+    const res = await call("POST", "/admin/extraction/" + kind, Object.assign(base(), extra || {}));
+    show(res.ok ? "保存しました" : "保存できませんでした: " + ((res.data && res.data.detail) || res.status));
+    if (res.ok) { $("form").style.display = "none"; load(); }
+  }
+  $("save").addEventListener("click", () => decide("correct", { text: $("text").value }));
+  $("confirm").addEventListener("click", () => decide("confirm"));
+  $("revert").addEventListener("click", () => decide("revert"));
+  $("reingest").addEventListener("click", async () => {
+    if (!current) return;
+    const res = await call("POST", "/admin/extraction/reingest", { tenant_id: tenant(), source_doc: current.item.source_doc });
+    show(res.ok ? res.data.note : "予約できませんでした (" + res.status + ")");
+  });
+  $("reload").addEventListener("click", load);
+  load();
+})();
+</script>
+</body>
+</html>

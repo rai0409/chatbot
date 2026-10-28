@@ -23,7 +23,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from rag_core.profile_loader import PROFILE_ROOT, is_valid_rag_profile_id, reload_rag_profile_cache
+from rag_core.profile_loader import PROFILE_ROOT, is_valid_rag_profile_id, pin_state, reload_rag_profile_cache
 
 
 def _approved_rows(path: Path) -> List[Dict[str, Any]]:
@@ -81,6 +81,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "entries_before": len(existing.get("synonyms") or []),
         "entries_after": len(merged["synonyms"]),
         "dry_run": bool(args.dry_run),
+        # when a version is pinned, this edit of config/ is live only after a new version is created and activated
+        "pinned_version": pin_state(args.profile) or None,
     }
     if not args.dry_run:
         target.parent.mkdir(parents=True, exist_ok=True)

@@ -133,7 +133,7 @@ A leaked key is removed immediately, not rotated gracefully:
   written from scratch**, so a successful smoke run demonstrates the image
   itself carries no secrets and gets everything from runtime env.
 - **Placeholder discipline**: docs, tests, and smoke scripts use clearly
-  fake values (`sk-REPLACE_ME`, `sk-smoke-placeholder-not-a-real-key`).
+  fake values (`sk-REPLACE_ME`, `YOUR_API_KEY_HERE`).
   Anything that looks real in a committed file is a finding.
 - Raw API keys must never appear in logs, `/metrics`, audit events, error
   bodies, or rate-limiter state; only sha256-derived fingerprints are used

@@ -3,18 +3,36 @@ from __future__ import annotations
 # N5 / N9: query preprocessing pipeline and its golden cases.
 
 import json
-from pathlib import Path
 
 import pytest
 
-import config
 from rag_core import query_preprocess as qp
 
-GOLDEN = Path(config.BASE_DIR) / "eval" / "normalization" / "golden_query_cases.jsonl"
+# Independent synthetic cases only. Do not reintroduce the removed source JSONL.
+# These are explicit expected outputs, not values calculated from the implementation.
+_SYNTHETIC_QUERY_CASES = (
+    {"case_id": "colloquial_filler", "category": "colloquial", "input": "あの、退職について教えてください", "expected_query": "退職"},
+    {"case_id": "colloquial_expense", "category": "colloquial", "input": "えっと、経費を教えてください", "expected_query": "経費"},
+    {"case_id": "colloquial_intro", "category": "colloquial", "input": "質問です、勤怠について教えてください", "expected_query": "勤怠"},
+    {"case_id": "colloquial_suffix", "category": "colloquial", "input": "退職なんだけど", "expected_query": "退職"},
+    {"case_id": "colloquial_request", "category": "colloquial", "input": "給与について教えてください", "expected_query": "給与"},
+    {"case_id": "id_ascii", "category": "id", "input": "ABC-123", "expected_query": "abc-123"},
+    {"case_id": "id_mixed", "category": "id", "input": "申請ID PR-2048", "expected_query": "申請id pr-2048"},
+    {"case_id": "id_embedded", "category": "id", "input": "ZZ-10を確認", "expected_query": "zz-10を確認"},
+    {"case_id": "id_fullwidth", "category": "id", "input": "第３条について教えてください", "expected_query": "第3条"},
+    {"case_id": "formal_retirement", "category": "formal", "input": "退職手続き", "expected_query": "退職手続き"},
+    {"case_id": "formal_application", "category": "formal", "input": "在宅勤務の申請方法", "expected_query": "在宅勤務の申請方法"},
+    {"case_id": "formal_no_request", "category": "formal", "input": "勤怠管理について", "expected_query": "勤怠管理について"},
+    {"case_id": "variant_fullwidth", "category": "variant", "input": "ＡＢＣ－１２３", "expected_query": "abc-123"},
+    {"case_id": "variant_spaces", "category": "variant", "input": "　入社手続き　", "expected_query": "入社手続き"},
+    {"case_id": "variant_space_between", "category": "variant", "input": "退職　手続き", "expected_query": "退職 手続き"},
+    {"case_id": "variant_kanji_space", "category": "variant", "input": "社内　規程", "expected_query": "社内 規程"},
+    {"case_id": "variant_mixed", "category": "variant", "input": "勤怠ＡＢＣ", "expected_query": "勤怠abc"},
+)
 
 
 def _golden():
-    return [json.loads(line) for line in GOLDEN.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return list(_SYNTHETIC_QUERY_CASES)
 
 
 @pytest.fixture(autouse=True)

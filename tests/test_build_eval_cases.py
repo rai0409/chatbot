@@ -143,7 +143,7 @@ def test_generated_cases_load_through_eval_runner(tmp_path):
 
 
 def test_committed_real_corpus_case_file_loads_and_is_unique():
-    path = Path("eval/cases/real_corpus_cases.jsonl")
+    path = Path("eval/cases/real_corpus_v2_cases.jsonl")
     cases = load_cases(path)
 
     assert len(cases) >= 50

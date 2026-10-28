@@ -44,13 +44,15 @@ def _keyword_rows(path: str) -> List[Dict[str, Any]]:
     return rows
 
 
-def check_collection(collection_name: Optional[str], *, sample: int = 2000) -> Dict[str, Any]:
-    path = keyword_index_path_for_collection(collection_name)
+def check_collection(
+    collection_name: Optional[str], *, sample: int = 2000, full: bool = False, keyword_path: Optional[str] = None
+) -> Dict[str, Any]:
+    path = keyword_path or keyword_index_path_for_collection(collection_name)
     rows = _keyword_rows(path)
     collection = store.get_vectorstore(
         collection_name=collection_name, create_if_missing=False, verify_embedding_fingerprint=False
     )
-    checked = rows[: max(1, int(sample))] if rows else []
+    checked = (rows if full else rows[: max(1, int(sample))]) if rows else []
     by_id = {str(r["id"]): r for r in checked}
     found: Dict[str, Dict[str, Any]] = {}
     ids = list(by_id)
@@ -73,6 +75,10 @@ def check_collection(collection_name: Optional[str], *, sample: int = 2000) -> D
         if str(row.get("index_generation") or "") != str(meta.get("index_generation") or ""):
             mismatched.append(chunk_id)
     vector_count = int(collection.count())
+    vector_only: List[str] = []
+    if full:
+        keyword_ids = {str(r["id"]) for r in rows}
+        vector_only = [str(i) for i in (collection.get(include=[]).get("ids") or []) if str(i) not in keyword_ids]
     report = {
         "collection": collection_name,
         "keyword_index_path": path,
@@ -82,9 +88,15 @@ def check_collection(collection_name: Optional[str], *, sample: int = 2000) -> D
         "missing_in_vector": len(missing_other),
         "parents_not_in_vector": missing_parents,
         "generation_mismatch": len(mismatched),
-        "examples": {"missing_in_vector": missing_other[:10], "generation_mismatch": mismatched[:10]},
+        "vector_only": len(vector_only),
+        "full": bool(full),
+        "examples": {
+            "missing_in_vector": missing_other[:10],
+            "generation_mismatch": mismatched[:10],
+            "vector_only": vector_only[:10],
+        },
     }
-    report["consistent"] = not missing_other and not mismatched and bool(rows)
+    report["consistent"] = not missing_other and not mismatched and not vector_only and bool(rows)
     return report
 
 
@@ -92,8 +104,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--collection", default=None, help="vector collection (default: served collection)")
     parser.add_argument("--sample", type=int, default=2000)
+    parser.add_argument("--full", action="store_true", help="check every keyword row and also vector rows missing from the keyword corpus")
     args = parser.parse_args(argv)
-    report = check_collection(args.collection, sample=args.sample)
+    report = check_collection(args.collection, sample=args.sample, full=args.full)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["consistent"] else 1
 

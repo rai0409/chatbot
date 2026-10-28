@@ -27,6 +27,8 @@ import numpy as np
 import config
 from rag_core.retrieval import RetrievedChunk, _fuse_hybrid_buckets
 from eval.bench import corpus as corpus_mod
+from eval.bench import conditions
+from eval.bench import holdout
 from eval.bench.backends import make_backend
 from eval.bench.dataset import EvalQuery, check_match_mode, file_fingerprint, load_eval_set
 from eval.bench.encoders import DenseIndex, EmbeddingSpec, Projection, encode, single_query_latency
@@ -79,6 +81,7 @@ def _valid_dense(backend: Dict[str, Any], quant: Dict[str, Any]) -> bool:
 
 
 def plan(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    cfg, _generation = conditions.apply_generation(cfg)
     g = grid(cfg)
     dense = sum(
         1
@@ -112,9 +115,16 @@ def _fusion_settings(spec: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
 
 
 def fuse_one(
-    dense_hits: Sequence[Tuple[int, float]], lexical_hits: Sequence[LexicalHit], settings: Dict[str, Any], k_rrf: int
+    dense_hits: Sequence[Tuple[int, float]],
+    lexical_hits: Sequence[LexicalHit],
+    settings: Dict[str, Any],
+    k_rrf: int,
+    ids: Optional[Sequence[str]] = None,
 ) -> Tuple[List[int], List[float]]:
-    """Fused ranking (chunk indexes) and scores, highest first."""
+    """Fused ranking (chunk indexes) and scores, highest first.
+
+    ids: chunk ids by index. Ties are broken by lexical presence, then by chunk id as in production
+    (rag_core.retrieval._rank_buckets); without ids, by chunk index."""
     if settings["method"] == "dense_only":
         return [i for i, _ in dense_hits], [s for _, s in dense_hits]
     if settings["method"] == "lexical_only":
@@ -140,7 +150,9 @@ def fuse_one(
         _bucket(hit.index)["exact_rank"] = rank
     _fuse_hybrid_buckets(merged, k_rrf=k_rrf, settings=settings)
     order = sorted(
-        merged.items(), key=lambda kv: (kv[1]["fused"], kv[1]["keyword"] is not None, -kv[0]), reverse=True
+        sorted(merged.items(), key=(lambda kv: ids[kv[0]]) if ids is not None else (lambda kv: kv[0])),
+        key=lambda kv: (kv[1]["fused"], kv[1]["keyword"] is not None),
+        reverse=True,  # sorted() keeps the order of equal keys: ties stay in chunk-id (or index) order
     )
     return [idx for idx, _ in order], [float(bucket["fused"]) for _, bucket in order]
 
@@ -233,9 +245,17 @@ class _Writer:
         latency = {name: latency_summary(list(stage.values())) for name, stage in stage_ms.items()}
         latency["total"] = latency_summary([row["total_ms"] for row in rows.values()])
         config_id = short_hash(record["config"])
+        # Share of answerable questions without any relevant evidence among the candidates (the first `depth`
+        # for a reranked configuration, else the first max(ks) of the ranking): nothing downstream can rescue them.
+        misses = [row["candidate_miss"] for row in rows.values() if row.get("candidate_miss") is not None]
+        if not misses:
+            hit_key = f"hit@{max_k}"
+            misses = [1.0 - row["metrics"][hit_key] for row in rows.values() if "metrics" in row and hit_key in row["metrics"]]
+        candidate_miss_rate = sum(misses) / len(misses) if misses else None
         summary = dict(
             record,
             config_id=config_id,
+            candidate_miss_rate=candidate_miss_rate,
             metrics=aggregate({qid: row["metrics"] for qid, row in rows.items() if "metrics" in row}, self.queries),
             ci=ci,
             latency=latency,
@@ -260,6 +280,7 @@ def _json_default(value: Any) -> Any:
 
 
 def run(cfg: Dict[str, Any]) -> Path:
+    cfg, generation = conditions.apply_generation(cfg)
     summary_plan = plan(cfg)
     limit = int(cfg.get("max_evaluations", 500))
     if summary_plan["evaluations"] > limit:
@@ -278,12 +299,21 @@ def run(cfg: Dict[str, Any]) -> Path:
     cache_dir = Path(cfg.get("cache_dir") or Path(config.RUNS_DIR) / "bench_cache")
     out_root = Path(cfg.get("output_dir") or Path(config.RUNS_DIR) / "bench")
     run_dir = out_root / f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}_{short_hash(cfg)}"
+    split = cfg.get("split", "dev")
+    eval_set_sha256 = file_fingerprint(cfg["eval_set"])
+    # The held-out split is claimed before anything is written or computed (see eval/bench/holdout.py).
+    test_claim = holdout.claim_test_split(cfg, eval_set_sha256, run_id=run_dir.name) if split == "test" else None
     (run_dir / "per_query").mkdir(parents=True, exist_ok=False)
     meta = {
         "schema": RUN_SCHEMA,
         "config": cfg,
         "plan": summary_plan,
-        "eval_set_sha256": file_fingerprint(cfg["eval_set"]),
+        "split": split,
+        "test_claim": test_claim,
+        "tie_break": "chunk_id",
+        "generation": generation,
+        "required_metrics_missing": conditions.missing_required_metrics(ks),
+        "eval_set_sha256": eval_set_sha256,
         "git_commit": _git_commit(),
         "queries": len(queries),
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -292,11 +322,15 @@ def run(cfg: Dict[str, Any]) -> Path:
 
     g = grid(cfg)
     scorers: Dict[Tuple[str, int], CrossEncoderScorer] = {}
+    corpus_hashes: set = set()
     for chunk_cfg in g["chunking"]:
         chunks = corpus_mod.build_chunks(chunk_cfg, cfg["corpus"]["chunks_jsonl"], cfg["corpus"].get("documents_jsonl"))
         if not chunks:
             raise ValueError(f"chunking {chunk_cfg} produced no chunks")
         views = [RankedChunk(c.chunk_id, c.doc_id, c.text_key) for c in chunks]
+        chunk_ids = [c.chunk_id for c in chunks]
+        corpus_sha256 = corpus_mod.corpus_fingerprint(chunks)
+        corpus_hashes.add(corpus_sha256)
         tenants = [c.tenant_id for c in chunks]
         writer = _Writer(
             run_dir,
@@ -333,7 +367,9 @@ def run(cfg: Dict[str, Any]) -> Path:
                                 ranked, scores, fusion_ms = {}, {}, {}
                                 for q in queries:
                                     started = time.perf_counter()
-                                    order, fused = fuse_one(dense["results"][q.query_id], lex["results"][q.query_id], settings, k_rrf)
+                                    order, fused = fuse_one(
+                                        dense["results"][q.query_id], lex["results"][q.query_id], settings, k_rrf, ids=chunk_ids
+                                    )
                                     fusion_ms[q.query_id] = (time.perf_counter() - started) * 1000.0
                                     ranked[q.query_id], scores[q.query_id] = order[:fused_top], fused[:fused_top]
                                 base_config = {
@@ -345,12 +381,15 @@ def run(cfg: Dict[str, Any]) -> Path:
                                 record = {
                                     "config": base_config,
                                     "index": {"dense": dense_info, "lexical": lex["describe"], "encode": encode_stats,
-                                              "projection": {"spec": dim_spec, "explained_variance": getattr(projection, "explained_variance", None)}},
+                                              "projection": {"spec": dim_spec, "explained_variance": getattr(projection, "explained_variance", None)},
+                                              "corpus_sha256": corpus_sha256,
+                                              "embedding_profile": conditions.embedding_profile(emb, int(corpus_m.shape[1]))},
                                     "memory_bytes": dense_info.get("memory_bytes_estimate"),
                                 }
                                 writer.evaluate(record, ranked, scores, stage_ms)
                                 _run_reranks(cfg, g["rerank"], scorers, cache_dir, chunks, queries, writer, record, ranked, scores, stage_ms)
     meta["finished_at"] = datetime.now(timezone.utc).isoformat()
+    meta["corpus_sha256"] = sorted(corpus_hashes)
     (run_dir / "run.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return run_dir
 
@@ -382,6 +421,8 @@ def _run_reranks(cfg, rerank_cfgs, scorers, cache_dir, chunks, queries, writer, 
                 # config's per-query file; calibrate pairs the two by query_id.
                 extras[q.query_id] = {
                     "fused_margin": (base_scores[0] - base_scores[1]) if len(base_scores) > 1 else None,
+                    "candidate_depth": depth,
+                    "candidate_miss": conditions.candidate_miss([writer.views[i] for i in head], q, writer.s["match_mode"]),
                 }
             rerank_record = dict(record, config=dict(record["config"], rerank=dict(rr, depth=depth)))
             stages = dict(stage_ms, rerank_estimated=rerank_ms)

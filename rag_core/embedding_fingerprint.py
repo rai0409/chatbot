@@ -14,6 +14,9 @@ EXTENDED_FINGERPRINT_KEYS = (
     "embed_provider",
     "embed_model",
     "embed_prefix_scheme",
+    "embed_normalize",
+    "embed_distance",
+    "profile_version",
     "embedding_dim",
     "source_jsonl_path",
     "source_jsonl_sha256",
@@ -46,6 +49,7 @@ def build_collection_fingerprint_metadata(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = dict(active_core_fingerprint(provider_name))
     payload["embed_prefix_scheme"] = embedding_provider.active_prefix_scheme(provider_name)
+    payload.update(embedding_provider.active_profile(provider_name))
     if embedding_dim is not None:
         payload["embedding_dim"] = int(embedding_dim)
     if source_jsonl_path is not None:
@@ -122,6 +126,9 @@ def fingerprint_status(metadata: Mapping[str, Any] | None, *, provider_name: str
     extended = collection_extended_fingerprint(metadata)
     active_scheme = embedding_provider.active_prefix_scheme(provider_name)
     stamped_scheme = extended.get("embed_prefix_scheme")
+    active_profile = embedding_provider.active_profile(provider_name)
+    stamped_profile = {k: str(extended[k]) for k in embedding_provider.PROFILE_KEYS if k in extended}
+    profile_matches = all(active_profile[k] == v for k, v in stamped_profile.items()) if stamped_profile else None
     return {
         "present": stamped is not None,
         "matches_active": stamped == active if stamped is not None else False,
@@ -132,4 +139,6 @@ def fingerprint_status(metadata: Mapping[str, Any] | None, *, provider_name: str
         # None when the collection predates prefix stamping.
         "prefix_scheme_matches": (stamped_scheme == active_scheme) if stamped_scheme else None,
         "active_prefix_scheme": active_scheme,
+        # None when the collection predates profile stamping.
+        "profile_matches_active": profile_matches,
     }

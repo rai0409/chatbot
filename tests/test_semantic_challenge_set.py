@@ -3,7 +3,7 @@ import copy
 from pathlib import Path
 import pytest
 from scripts import validate_semantic_challenge_set as v
-ROOT=Path(__file__).resolve().parents[1]; C=ROOT/"config/evaluation/semantic_challenge_set.contract.json"; CASES=ROOT/"eval/cases/semantic_challenge_cases.jsonl"; CHUNKS=ROOT/"eval/cases/semantic_challenge_chunks.jsonl"
+ROOT=Path(__file__).resolve().parents[1]; C=ROOT/"config/evaluation/semantic_challenge_set_v2.contract.json"; CASES=ROOT/"eval/cases/semantic_challenge_v2_cases.jsonl"; CHUNKS=ROOT/"eval/cases/semantic_challenge_v2_chunks.jsonl"
 def data(): return v.load_json(C),v.load_lines(CASES),v.load_lines(CHUNKS)
 def invalid(change):
  c,cases,chunks=data(); change(c,cases,chunks)
@@ -55,7 +55,7 @@ def test_abstain_challenge_category_must_match():
 def test_report_contains_exact_construction_policy(tmp_path):
  c,a,b=data();p=tmp_path/'report';r=v.run(C,CASES,CHUNKS,p);assert r['construction_policy']==c['construction_policy']
 def test_all_immutable_baselines():
- expected={'reports/current_retrieval_baseline.json':'24d160979b05f2383db11033f1d830ca5e943bb75629a341fe9832ce2fc5672d','config/evaluation/real_vector_quality_baseline.contract.json':'31709e7351e7055d68a50e07c5ad9e8120b8e4b9b9009c91286a1b7778690d17','reports/current_real_vector_quality_baseline.json':'82eb9254751f6973c08b2b76dc55972b69abf5b62287471950b116f4cfcbc449','eval/cases/retrieval_cases.jsonl':'0ca8662bddaac728aa3b91791923cc7a7f1ff105e6b5c657669cb5413f75d30e','eval/cases/smoke_chunks.jsonl':'74a890a597b8b6a84f5f437f5c37ad932a371d0c3e067e3807eeb94f338d7550'}
+ expected={'reports/current_retrieval_baseline.json':'24d160979b05f2383db11033f1d830ca5e943bb75629a341fe9832ce2fc5672d','config/evaluation/real_vector_quality_baseline.contract.json':'31709e7351e7055d68a50e07c5ad9e8120b8e4b9b9009c91286a1b7778690d17','reports/current_real_vector_quality_baseline.json':'82eb9254751f6973c08b2b76dc55972b69abf5b62287471950b116f4cfcbc449','eval/cases/semantic_challenge_v2_cases.jsonl':'db52bffa378b70794b7c8bddd9898c17b7a4b59f11278c92484c933c7654d753','eval/cases/semantic_challenge_v2_chunks.jsonl':'f1db79d1ff891e2e0399f00961afefdd994cef07977c7f4eaf9080d4f9aff222'}
  assert all(v.digest(ROOT/p)==h for p,h in expected.items())
 @pytest.mark.parametrize("value",[True,False,None])
 def test_numeric_threshold_rejects_non_numbers(value):

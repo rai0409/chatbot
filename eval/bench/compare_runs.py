@@ -27,7 +27,7 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from eval.bench.report import load_per_query
+from eval.bench.report import load_per_query, load_summaries
 from eval.bench.stats import holm, mcnemar_from_hits, non_inferior, paired_bootstrap_diff, sign_flip_test
 
 OVERALL = "(all)"
@@ -68,6 +68,82 @@ def _paired(
     }
 
 
+_CONDITION_NAMES = {
+    "eval_set_sha256": "same_eval_set",
+    "split": "same_split",
+    "queries": "same_queries",
+    "match_mode": "same_match_mode",
+    "generation_id": "same_generation",
+    "corpus_sha256": "same_corpus",
+    "embedding_profile": "same_embedding_profile",
+    "tie_break": "same_tie_break",
+}
+
+
+def _read_run_json(run_dir: str | Path) -> Dict[str, Any]:
+    try:
+        return json.loads((Path(run_dir) / "run.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def run_conditions(run_dir: str | Path, config_id: str) -> Dict[str, Any]:
+    """What a run was measured on. A value that older runs did not record is None (unknown)."""
+    meta = _read_run_json(run_dir)
+    try:
+        summary = next((row for row in load_summaries(run_dir) if row.get("config_id") == config_id), {})
+    except FileNotFoundError:
+        summary = {}
+    index = summary.get("index") or {}
+    generation = (meta.get("generation") or {}).get("generation_id") or "(none)" if "generation" in meta else None
+    return {
+        "eval_set_sha256": meta.get("eval_set_sha256"),
+        "split": meta.get("split"),
+        "queries": meta.get("queries"),
+        "match_mode": (meta.get("config") or {}).get("match_mode", "evidence") if meta else None,
+        "generation_id": generation,
+        "corpus_sha256": index.get("corpus_sha256"),
+        "embedding_profile": index.get("embedding_profile"),
+        "tie_break": meta.get("tie_break"),
+    }
+
+
+def compare_conditions(baseline: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
+    differences, unknown = [], []
+    same: Dict[str, Optional[bool]] = {}
+    for key, name in _CONDITION_NAMES.items():
+        a, b = baseline.get(key), candidate.get(key)
+        if a is None or b is None:
+            unknown.append(key)
+            same[name] = None
+        else:
+            same[name] = a == b
+            if a != b:
+                differences.append(key)
+    return {
+        **same,
+        "differences": differences,
+        "unknown": unknown,
+        "comparable": not differences and not unknown,
+        "baseline": baseline,
+        "candidate": candidate,
+    }
+
+
+def _paired_changes(
+    base: Dict[str, Dict[str, Any]], cand: Dict[str, Dict[str, Any]], common: Sequence[str], metric: str, *, limit: int = 200
+) -> Dict[str, Any]:
+    """The questions the candidate answers better / worse than the baseline on the metric."""
+    improved = [q for q in common if cand[q]["metrics"][metric] > base[q]["metrics"][metric] + 1e-12]
+    worsened = [q for q in common if cand[q]["metrics"][metric] < base[q]["metrics"][metric] - 1e-12]
+    return {
+        "metric": metric,
+        "improved": {"count": len(improved), "query_ids": improved[:limit]},
+        "worsened": {"count": len(worsened), "query_ids": worsened[:limit]},
+        "unchanged": len(common) - len(improved) - len(worsened),
+    }
+
+
 def compare_runs(
     baseline_run: str | Path,
     baseline_config: str,
@@ -80,9 +156,16 @@ def compare_runs(
     alpha: float = 0.05,
     seed: int = 0,
     min_slice_queries: int = _MIN_SLICE_QUERIES,
+    require_same_conditions: bool = False,
 ) -> Dict[str, Any]:
     base = load_per_query(baseline_run, baseline_config)
     cand = load_per_query(candidate_run, candidate_config)
+    conditions = compare_conditions(run_conditions(baseline_run, baseline_config), run_conditions(candidate_run, candidate_config))
+    if require_same_conditions and not conditions["comparable"]:
+        raise ValueError(
+            "the runs were not measured under the same conditions: "
+            f"different {conditions['differences']}, unknown {conditions['unknown']}"
+        )
     common = sorted(q for q, r in base.items() if r.get("metrics") and cand.get(q, {}).get("metrics"))
     only_baseline = sorted(set(base) - set(cand))
     only_candidate = sorted(set(cand) - set(base))
@@ -115,6 +198,8 @@ def compare_runs(
         "baseline": {"run": str(baseline_run), "config_id": baseline_config},
         "candidate": {"run": str(candidate_run), "config_id": candidate_config},
         "paired_queries": len(common),
+        "conditions": conditions,
+        "paired_changes": _paired_changes(base, cand, common, metric),
         "only_in_baseline": len(only_baseline),
         "only_in_candidate": len(only_candidate),
         "slices_skipped_small": skipped,
@@ -146,6 +231,19 @@ def to_markdown(report: Dict[str, Any]) -> str:
         )
     if report["slices_skipped_small"]:
         lines += ["", f"slices with fewer than the minimum queries (not tested): {report['slices_skipped_small']}"]
+    conditions = report.get("conditions")
+    if conditions:
+        lines += [
+            "",
+            f"same conditions: {conditions['comparable']} (different: {conditions['differences']}, unknown: {conditions['unknown']})",
+        ]
+    changes = report.get("paired_changes")
+    if changes:
+        lines += [
+            "",
+            f"improved: {changes['improved']['count']}  worsened: {changes['worsened']['count']}  "
+            f"unchanged: {changes['unchanged']}  ({changes['metric']})",
+        ]
     verdict = report["verdict"]
     lines += [
         "",
@@ -166,6 +264,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--min-slice-queries", type=int, default=_MIN_SLICE_QUERIES)
     parser.add_argument("--markdown", action="store_true")
     parser.add_argument("--out", default=None)
+    parser.add_argument(
+        "--require-same-conditions",
+        action="store_true",
+        help="refuse unless both runs used the same evaluation set, corpus, embedding profile and generation",
+    )
     args = parser.parse_args(argv)
     report = compare_runs(
         args.baseline_run,
@@ -176,6 +279,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         margin=args.margin,
         resamples=args.resamples,
         min_slice_queries=args.min_slice_queries,
+        require_same_conditions=args.require_same_conditions,
     )
     text = to_markdown(report) if args.markdown else json.dumps(report, ensure_ascii=False, indent=2)
     if args.out:

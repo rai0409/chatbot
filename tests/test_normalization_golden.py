@@ -7,7 +7,13 @@ from rag_core.quantities import kanji_numeral_spans, quantity_tokens
 from rag_core.text_normalize import normalize
 from scripts import check_normalization
 
-_CASES = check_normalization._read_jsonl(check_normalization.DEFAULT_GOLDEN)
+_CASES = check_normalization.synthetic_golden_cases()
+
+
+def test_synthetic_golden_suite_has_required_coverage():
+    assert len(_CASES) >= 16
+    assert len({case["id"] for case in _CASES}) == len(_CASES)
+    assert {case["category"] for case in _CASES} == {"number", "normalize", "quantity", "date"}
 
 
 @pytest.mark.parametrize("case", _CASES, ids=[case["id"] for case in _CASES])

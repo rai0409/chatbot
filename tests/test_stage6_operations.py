@@ -39,6 +39,8 @@ def test_production_guard_accepts_a_complete_configuration(monkeypatch):
     monkeypatch.setenv("SEARCH_DEBUG_ENABLED", "false")
     monkeypatch.setenv("ALLOWED_HOSTS", "rag.example.co.jp")
     monkeypatch.setenv("METRICS_TOKEN", "m" * 40)
+    monkeypatch.setenv("TENANT_FILTER_STRICT", "true")
+    monkeypatch.setenv("EMBED_FINGERPRINT_STRICT", "true")
     for name in (
         "ADMIN_AUTH_ALLOW_INSECURE_DEV", "DISABLE_GUARD", "CORS_ALLOW_ORIGINS", "ENTERPRISE_OIDC_ENABLED",
         "API_AUTH_ALLOW_ANY_TENANT_WITHOUT_MAP", "OIDC_ALLOW_ANY_TENANT_WITHOUT_MAP", "OIDC_COOKIE_SECURE",

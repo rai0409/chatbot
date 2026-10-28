@@ -71,7 +71,9 @@ def resolve_chroma_collection_name(explicit: Optional[str] = None) -> str:
     Precedence:
     1. Explicit function argument.
     2. CHROMA_COLLECTION runtime override.
-    3. The already-resolved VECTORSTORE_COLLECTION_NAME setting.
+    3. The collection of the active generation (rag_core.index_generation; only
+       when its pointer file exists and CHROMA_COLLECTION is not set).
+    4. The already-resolved VECTORSTORE_COLLECTION_NAME setting.
 
     VECTORSTORE_COLLECTION_NAME is intentionally not re-read from os.environ
     here. This preserves config monkeypatches and other controlled runtime
@@ -84,6 +86,12 @@ def resolve_chroma_collection_name(explicit: Optional[str] = None) -> str:
     env_override = str(os.getenv("CHROMA_COLLECTION") or "").strip()
     if env_override:
         return env_override
+
+    from rag_core import index_generation
+
+    pointed = index_generation.active_collection()
+    if pointed:
+        return pointed
 
     configured = str(VECTORSTORE_COLLECTION_NAME or "").strip()
     return configured or DEFAULT_CHROMA_COLLECTION
@@ -240,6 +248,36 @@ RERANK_MAX_LIFT_OTHER_WEAK = int(getenv_first("RERANK_MAX_LIFT_OTHER_WEAK", defa
 KEYWORD_BOOST_ENABLED = _get_bool("KEYWORD_BOOST_ENABLED", default=True)
 KEYWORD_BOOST_QUERY_TYPES = _get_list("KEYWORD_BOOST_QUERY_TYPES", ["exact_lookup", "identifier"])
 KEYWORD_BOOST_MAX_DELTA = _get_float("KEYWORD_BOOST_MAX_DELTA", default=0.05)
+# Run the retrieval_boost_rules of the RAG profile (rag_core/profile_engine.py). Off until a profile is evaluated
+# with it. Largest score (distance) change the rules can make to one chunk.
+PROFILE_BOOST_ENABLED = _get_bool("PROFILE_BOOST_ENABLED", default=False)
+PROFILE_BOOST_MAX_DELTA = _get_float("PROFILE_BOOST_MAX_DELTA", default=0.05)
+# Multi-query retrieval with RRF (rag_core/multi_query.py). Off until evaluated; a "deep" request turns it on for itself.
+# MAX_VARIANTS counts the queries in all, the question included.
+MULTI_QUERY_ENABLED = _get_bool("MULTI_QUERY_ENABLED", default=False)
+MULTI_QUERY_MAX_VARIANTS = int(getenv_first("MULTI_QUERY_MAX_VARIANTS", default="3"))
+MULTI_QUERY_RRF_K = int(getenv_first("MULTI_QUERY_RRF_K", default="60"))
+MULTI_QUERY_VARIANT_PENALTY = _get_float("MULTI_QUERY_VARIANT_PENALTY", default=0.05)
+# Pick the weights of the hybrid lanes by query type (rag_core/query_route.py). Off until evaluated.
+QUERY_ROUTING_ENABLED = _get_bool("QUERY_ROUTING_ENABLED", default=False)
+# Where an LLM may be used (rag_core/llm.py). LLM_ENABLED unset: the historical switch decides (CHAT_GENERATION_MODE=llm
+# is on); LLM_ENABLED=false is a kill switch. Tenant lists: empty allowlist = every tenant. LLM_FEATURES: what may use it
+# (generate | rewrite | verify | judge). In production an external endpoint needs LLM_EXTERNAL_ALLOWED=true.
+LLM_ENABLED = _get_bool("LLM_ENABLED", default=False) if os.getenv("LLM_ENABLED", "").strip() else None
+LLM_TENANT_ALLOWLIST = _get_list("LLM_TENANT_ALLOWLIST", [])
+LLM_TENANT_DENYLIST = _get_list("LLM_TENANT_DENYLIST", [])
+LLM_FEATURES = _get_list("LLM_FEATURES", ["generate"])
+LLM_EXTERNAL_ALLOWED = _get_bool("LLM_EXTERNAL_ALLOWED", default=False)
+LLM_INTERNAL_HOSTS = _get_list("LLM_INTERNAL_HOSTS", ["localhost"])
+LLM_FEATURE_MAX_TOKENS = int(getenv_first("LLM_FEATURE_MAX_TOKENS", default="512"))
+# Sentence-level grounding check of LLM-generated answers (rag_core/grounding.py). Off until evaluated.
+GROUNDING_VERIFY_ENABLED = _get_bool("GROUNDING_VERIFY_ENABLED", default=False)
+GROUNDING_MIN_COVERAGE = _get_float("GROUNDING_MIN_COVERAGE", default=0.5)
+# Mass-change guard of source sync (rag_core/source_apply.py): a plan with at least MIN_DELETES deletions that are more
+# than MAX_DELETE_FRACTION of the applied files, or more than MAX_CHANGES changes, is held for approval.
+SOURCE_MAX_DELETE_FRACTION = _get_float("SOURCE_MAX_DELETE_FRACTION", default=0.2)
+SOURCE_MIN_DELETES_FOR_GUARD = int(getenv_first("SOURCE_MIN_DELETES_FOR_GUARD", default="5"))
+SOURCE_MAX_CHANGES = int(getenv_first("SOURCE_MAX_CHANGES", default="500"))
 
 # Optional semantic rerank stage (off by default; needs the optional
 # sentence-transformers dependency only when enabled). The default model is

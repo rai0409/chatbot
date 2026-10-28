@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from collections import OrderedDict
@@ -42,7 +43,9 @@ def _file_state(path: str) -> Tuple:
 
 
 def _corpus_state() -> Tuple:
-    chunks_state = _file_state(str(getattr(config, "CHUNKS_JSONL_PATH", "") or ""))
+    from rag_core import index_generation
+
+    chunks_state = _file_state(index_generation.served_keyword_path())
     if getattr(config, "APPROVED_QA_ENABLED", False):
         approved_state = _file_state(str(getattr(config, "APPROVED_QA_PATH", "") or ""))
     else:
@@ -79,12 +82,91 @@ def _pipeline_state() -> Tuple:
     )
 
 
-def build_key(question: str, *, top_k: int, max_context_chars: int, tenant_id: str = "default") -> Tuple:
+# Settings that change the answer for the same question, corpus and models: retrieval fusion, boosts,
+# guard distances, context limits, the LLM endpoint and output length. The environment-only switches
+# that qa.py reads by name are listed too. A changed value starts a fresh key (only a digest is kept).
+_SETTING_NAMES = (
+    "ENABLE_HYBRID_RETRIEVAL", "VECTOR_TOP_K", "BM25_TOP_K", "HYBRID_RRF_K", "HYBRID_FUSION",
+    "HYBRID_DENSE_WEIGHT", "HYBRID_KEYWORD_WEIGHT", "HYBRID_EXACT_WEIGHT",
+    "CHILD_RETRIEVAL_OVERSAMPLE", "MAX_PARENT_EXPANDED_CHUNKS", "MAX_PARENT_CONTEXT_CHARS",
+    "PROCEDURE_MAX_PER_PAGE", "CHANGE_RESET_MAX_PER_PAGE", "OTHER_QUERY_BOOST_TERMS",
+    "KEYWORD_BOOST_ENABLED", "KEYWORD_BOOST_QUERY_TYPES", "KEYWORD_BOOST_MAX_DELTA",
+    "PROFILE_BOOST_ENABLED", "PROFILE_BOOST_MAX_DELTA", "CROSS_ENCODER_RERANK_ENABLED",
+    "MULTI_QUERY_ENABLED", "MULTI_QUERY_MAX_VARIANTS", "MULTI_QUERY_RRF_K", "MULTI_QUERY_VARIANT_PENALTY",
+    "QUERY_ROUTING_ENABLED",
+    "LLM_ENABLED", "LLM_TENANT_ALLOWLIST", "LLM_TENANT_DENYLIST", "LLM_FEATURES", "LLM_FEATURE_MAX_TOKENS",
+    "GROUNDING_VERIFY_ENABLED", "GROUNDING_MIN_COVERAGE",
+    "RAG_HARD_MAX_DIST", "RAG_HARD_MAX_DIST_PROCEDURE_DELTA", "RAG_SOFT_DIST_OTHER",
+    "RAG_SOFT_DIST_RESET", "RAG_SOFT_DIST_CHANGE", "RAG_SOFT_DIST_PROCEDURE",
+    "CROSS_ENCODER_TOP_N", "CROSS_ENCODER_MAX_LENGTH", "CROSS_ENCODER_SKIP_MARGIN",
+    "OPENAI_BASE_URL", "CHAT_COMPLETION_MAX_TOKENS",
+)
+_SETTING_ENV_NAMES = (
+    "INTENT_RULES", "COMPOSE_QUERY_MODE", "PREFER_SORT_MODE", "EXTRACTIVE_TERM_MODE",
+    "EXTRACTIVE_EVIDENCE_RULE", "STAGED_RETRIEVAL_MARGIN", "QUERY_PREPROCESS_ENABLED",
+)
+
+
+def _settings_state() -> str:
+    values = [(name, repr(getattr(config, name, None))) for name in _SETTING_NAMES]
+    # a config attribute (set by an evaluation run) wins over the environment, as in qa._setting
+    values += [(name, str(getattr(config, name)) if hasattr(config, name) else os.getenv(name, ""))
+               for name in _SETTING_ENV_NAMES]
+    return hashlib.sha256(repr(values).encode("utf-8")).hexdigest()[:16]
+
+
+def _index_state() -> Tuple:
+    # Which vector collection answers (and on which backend), and the active generation: switching either
+    # changes the answers while the keyword-corpus file may stay the same.
+    from rag_core import index_generation, vector_backend
+
+    pointer = index_generation.active_pointer() or {}
     return (
-        str(tenant_id or "").strip() or "default",
+        config.resolve_chroma_collection_name(),
+        vector_backend.backend_name(),
+        str(pointer.get("generation_id") or ""),
+    )
+
+
+def _profile_state(tenant_id: str, rag_profile_id: str) -> Tuple:
+    # The files of the RAG profile (synonyms, question types, ...) and the query-preprocessing rule files
+    # (global and of this tenant), each as path + mtime_ns + size; a missing file is its own state.
+    from rag_core import profile_loader, query_preprocess
+
+    profile = str(rag_profile_id or "").strip() or "default"
+    if profile_loader.is_valid_rag_profile_id(profile):
+        directory = profile_loader.active_profile_dir(profile)
+        profile_files = [str(directory / filename) for filename, _root in profile_loader.JSON_FILES.values()]
+        pinned = profile_loader.pin_state(profile)
+    else:
+        profile_files = []
+        pinned = ""
+    rule_files = query_preprocess._rule_files(tenant_id)
+    return (
+        profile,
+        pinned,
+        tuple(_file_state(path) for path in profile_files),
+        tuple(_file_state(path) for path in rule_files),
+    )
+
+
+def build_key(
+    question: str,
+    *,
+    top_k: int,
+    max_context_chars: int,
+    tenant_id: str = "default",
+    rag_profile_id: str = "default",
+) -> Tuple:
+    tenant = str(tenant_id or "").strip() or "default"
+    return (
+        tenant,
         normalize_question_for_exact_match(question or ""),
         _corpus_state(),
+        _index_state(),
+        _profile_state(tenant, rag_profile_id),
         _pipeline_state(),
+        _settings_state(),
         int(top_k),
         int(max_context_chars),
     )

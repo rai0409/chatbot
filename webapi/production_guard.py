@@ -63,6 +63,12 @@ def production_problems() -> List[str]:
         problems.append("OIDC_COOKIE_SECURE must not be false")
     if _enabled("DISABLE_GUARD"):
         problems.append("DISABLE_GUARD must not be enabled")
+    if not _enabled("TENANT_FILTER_STRICT"):
+        problems.append(
+            "TENANT_FILTER_STRICT=true (run scripts/backfill_tenant_id.py --apply on existing collections first)"
+        )
+    if not _enabled("EMBED_FINGERPRINT_STRICT"):
+        problems.append("EMBED_FINGERPRINT_STRICT=true (a collection without a complete embedding stamp must be refused)")
     if _env("CORS_ALLOW_ORIGINS") == "*":
         problems.append("CORS_ALLOW_ORIGINS must list origins, not *")
     if _env("ALLOWED_HOSTS") == "*" or "*" in [h.strip() for h in _env("ALLOWED_HOSTS").split(",")]:
@@ -75,6 +81,11 @@ def production_problems() -> List[str]:
         workers = 1
     if workers > 1 and (_env("VECTOR_BACKEND") or "chroma").lower() == "chroma":
         problems.append("VECTOR_BACKEND=qdrant when WEB_CONCURRENCY > 1 (Chroma is single-process)")
+    from rag_core import llm
+
+    llm_problem = llm.production_problem()
+    if llm_problem:
+        problems.append(llm_problem)
     return problems
 
 

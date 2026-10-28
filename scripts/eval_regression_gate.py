@@ -29,7 +29,7 @@ from typing import Any, Dict, Optional, Sequence
 import config
 from eval import runner
 
-BASELINE = Path(config.BASE_DIR) / "eval" / "baselines" / "retrieval_gate_baseline.json"
+BASELINE = Path(config.BASE_DIR) / "eval" / "baselines" / "retrieval_gate_baseline_v2.json"
 MODES = ("bm25_only", "hybrid_rerank")
 _FLOAT_KEYS = ("mean_mrr_at_k", "mean_ndcg_at_k")
 _COUNT_KEYS = ("gold_chunk_hits", "gold_doc_hits", "abstain_passes")
@@ -38,8 +38,8 @@ _COUNT_KEYS = ("gold_chunk_hits", "gold_doc_hits", "abstain_passes")
 def current_metrics(eval_k: int = 5) -> Dict[str, Dict[str, Any]]:
     out_dir = Path(config.RUNS_DIR) / "eval_gate"
     payload = runner.run_retrieval_aware_eval(
-        cases_path=Path(config.BASE_DIR) / "eval" / "cases" / "retrieval_cases.jsonl",
-        chunks_jsonl=runner._default_chunks_path(),
+        cases_path=Path(config.BASE_DIR) / "eval" / "cases" / "retrieval_v2_cases.jsonl",
+        chunks_jsonl=Path(config.BASE_DIR) / "eval" / "cases" / "smoke_v2_chunks.jsonl",
         per_query_output_path=out_dir / "rows.jsonl",
         summary_output_path=out_dir / "summary.json",
         modes=list(MODES),

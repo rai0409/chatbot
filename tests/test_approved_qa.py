@@ -173,10 +173,34 @@ def test_approved_chat_lookup_does_not_call_llm(monkeypatch, tmp_path):
 
 
 def test_approved_qa_runner_passes_sample_file(tmp_path):
+    # Invented QA only: create temporary JSONL, never restore removed source data.
+    cases = tmp_path / "synthetic_approved_cases.jsonl"
+    _write_jsonl(
+        cases,
+        [
+            _record(
+                qa_id="synthetic-reset",
+                question="合成アカウントのパスワードを再設定するには？",
+                approved_answer="合成設定画面から再設定します。",
+            ),
+            _record(
+                qa_id="synthetic-help",
+                question="合成アカウントのヘルプを開くには？",
+                approved_answer="合成ヘルプ画面を開きます。",
+            ),
+            _record(
+                qa_id="synthetic-draft",
+                question="合成アカウントの未承認情報は？",
+                approved_answer="未承認の合成回答です。",
+                status="draft",
+            ),
+        ],
+    )
     output = tmp_path / "approved_results.json"
-    payload = run_approved_qa_eval("eval/cases/approved_qa_sample.jsonl", output)
+    payload = run_approved_qa_eval(cases, output)
 
     assert output.exists()
-    assert payload["summary"]["total"] > 0
-    assert payload["summary"]["failed"] == 0
-    assert payload["summary"]["pass_rate"] == 1.0
+    assert payload["summary"] == {"passed": 2, "failed": 0, "total": 2, "pass_rate": 1.0}
+    assert {item["qa_id"] for item in payload["results"]} == {"synthetic-reset", "synthetic-help"}
+    assert all(item["answer_exact_match"] and item["passed"] for item in payload["results"])
+    assert json.loads(output.read_text(encoding="utf-8"))["summary"] == payload["summary"]

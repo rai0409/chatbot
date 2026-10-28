@@ -360,8 +360,8 @@ def test_repo_smoke_cases_run_and_include_rerank_movement(
     _install_deterministic_rerank_movement(monkeypatch)
     out_path = tmp_path / "smoke_results.json"
     payload = runner.run_eval(
-        cases_path=runner._default_cases_path(),
-        chunks_jsonl=runner._default_chunks_path(),
+        cases_path=Path("eval/cases/smoke_v2_cases.jsonl"),
+        chunks_jsonl=Path("eval/cases/smoke_v2_chunks.jsonl"),
         output_path=out_path,
         top_k=20,
         max_context_chars=8000,
@@ -757,7 +757,7 @@ def test_run_retrieval_aware_eval_rejects_unknown_mode(tmp_path):
 
 
 def test_retrieval_cases_file_has_labels_and_abstain_coverage(tmp_path):
-    cases_path = Path("eval/cases/retrieval_cases.jsonl")
+    cases_path = Path("eval/cases/retrieval_v2_cases.jsonl")
     cases = runner.load_cases(cases_path)
     assert 20 <= len(cases) <= 30
 

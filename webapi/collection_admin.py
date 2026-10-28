@@ -23,6 +23,13 @@ from webapi import ingestion_jobs
 _BATCH = 256
 
 
+def _mark_stale(collection: str) -> None:
+    # The manifest of a generation that was just changed in place no longer matches its counts.
+    from rag_core import index_manifest
+
+    index_manifest.mark_stale(collection)
+
+
 def _served_name() -> str:
     return config.resolve_chroma_collection_name()
 
@@ -88,11 +95,12 @@ def delete_documents(collection: Optional[str], *, tenant: str, source_docs: Seq
             "chunks": sum(len(ids) for ids in found.values()),
         }
         if execute:
-            for ids in found.values():
+            for doc, ids in found.items():
                 for part in _chunks(ids, 1000):
-                    vectors.delete(ids=list(part))
+                    vectors.delete(ids=list(part), where=_doc_where(tenant, doc))
             keyword = remove_keyword_documents(_keyword_path(target), [(tenant, doc) for doc in docs])
             report["keyword_rows_removed"] = keyword.get("removed", 0)
+            _mark_stale(target or _served_name())
     return report
 
 
@@ -155,4 +163,5 @@ def _promote_locked(collection: str, tenant: str, execute: bool) -> Dict[str, An
         keyword_rows = read_keyword_documents(_keyword_path(collection), doc_ids.keys())
         keyword = write_keyword_rows(_keyword_path(None), keyword_rows, generation_id=generation)
         report.update({"keyword_rows_written": keyword["written"], "index_generation": generation})
+        _mark_stale(served)
     return report

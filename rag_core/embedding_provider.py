@@ -151,6 +151,8 @@ def _create_openai_client():
 
 class LocalEmbeddingProvider:
     name = LOCAL_PROVIDER
+    normalize_embeddings = True
+    distance = "cosine"
 
     def __init__(self, model_name: str | None = None):
         self.model_name = model_name or config.getenv_first(
@@ -187,6 +189,8 @@ class LocalEmbeddingProvider:
 class BgeM3EmbeddingProvider:
     name = BGE_M3_PROVIDER
     prefix_scheme = PREFIX_SCHEME_NONE
+    normalize_embeddings = True
+    distance = "cosine"
 
     def __init__(self, model_name: str | None = None):
         self.model_name = model_name or BGE_M3_MODEL_NAME
@@ -205,6 +209,8 @@ class BgeM3EmbeddingProvider:
 class OpenAIEmbeddingProvider:
     name = OPENAI_PROVIDER
     prefix_scheme = PREFIX_SCHEME_NONE
+    normalize_embeddings = True
+    distance = "cosine"
 
     def __init__(self, model_name: str | None = None):
         self.model_name = model_name or config.getenv_first(
@@ -266,6 +272,24 @@ def active_fingerprint(provider_name: str | None = None) -> Dict[str, str]:
 def active_prefix_scheme(provider_name: str | None = None) -> str:
     provider = get_embedding_provider(provider_name)
     return str(getattr(provider, "prefix_scheme", PREFIX_SCHEME_NONE) or PREFIX_SCHEME_NONE)
+
+
+# Facts of the code that decide whether stored vectors and query vectors are comparable.
+# (The model revision is not part of the profile yet: the loaders do not pin it.)
+PROFILE_VERSION = "1"
+PROFILE_KEYS = ("embed_normalize", "embed_distance", "profile_version")
+
+
+def provider_profile(provider) -> Dict[str, str]:
+    return {
+        "embed_normalize": "true" if getattr(provider, "normalize_embeddings", True) else "false",
+        "embed_distance": str(getattr(provider, "distance", "cosine") or "cosine"),
+        "profile_version": PROFILE_VERSION,
+    }
+
+
+def active_profile(provider_name: str | None = None) -> Dict[str, str]:
+    return provider_profile(get_embedding_provider(provider_name))
 
 
 def embed_queries(

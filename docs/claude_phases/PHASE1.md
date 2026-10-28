@@ -23,7 +23,7 @@ reset/restore/clean/stash/rebase、無関係な変更の削除、稼働中Docker
 
 ## 実装要件
 1. 最初に**必須要件→変更path→既存test/fixture/consumer→変更許可→検証方法→両立可否**を実コードで照合。adapterのメソッド・API・ID・payload key・assertionをrepository全体でexact検索。
-2. 作業前のtracked/staged binary patch、対象untrackedのコピー、HEAD/statusを固有`/tmp`に保持。
+2. 作業前のtracked/staged binary patch、対象untrackedのコピー、HEAD/statusをリポジトリ内の`.phase_work/phase1/`（追跡対象外）に保持。
 3. get(ids,where)は両条件を同時適用し、`ids=[]`では何も返さない。whereのみ/idsのみ、Chroma互換include/limit/offset/戻り値を検証。
 4. delete(ids,where)はQdrant側の単一フィルタ条件で選別し、read→deleteの競合を作らない。空IDsによる全件削除を禁止。呼び出し元のtenant/source_doc条件を最終削除へ伝播する。
 5. upsertは外部書込みより前に全入力の長さ、ID、ベクトル次元、finite値を検査し、不正入力で部分書込みをしない。
@@ -41,7 +41,7 @@ ChromaとQdrant両方の既存API契約、metadata、結果JSON key、文書ID�
 既存Docker・Qdrant・PostgreSQLへ接続しない。テスト専用の一時ディレクトリ/インメモリQdrantのみ。必要な外部接続が生じたらBLOCKED。
 
 ## artifact
-`/tmp/chatbot-phase1-*`へ実測テスト結果・変更path・整合チェック・残件を保存し、実際に読戻す。生成物は追跡対象へ無断追加しない。
+`.phase_work/phase1/`へ実測テスト結果・変更path・整合チェック・残件を保存し、実際に読戻す。生成物は追跡対象へ無断追加しない。
 
 ## commit / push / PR / tag 権限
 **条件付き許可**：必要な関連テストがPASSし、変更pathを検査してから、`feat/chatbot-phase1-qdrant-safety`に対象変更だけcommit、同ブランチへ通常push、`gh`が利用可能ならmain向けPRを作成してよい。PRにcheckpointからの差分が入ることを明記する。PRはCI待ち/CI失敗ならdraftのまま。merge/tagは禁止。force-push禁止。許可対象外のファイルはstageしない。

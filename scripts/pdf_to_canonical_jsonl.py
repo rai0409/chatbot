@@ -162,7 +162,31 @@ def _tesseract_lang(lang: str) -> Optional[str]:
 
 
 def _ocr_page_result(page, dpi: int, lang: str):
-    return _dx().ocr_image(_render(page, dpi), tesseract_lang=_tesseract_lang(lang))
+    image = _render(page, dpi)
+    result = _dx().ocr_image(image, tesseract_lang=_tesseract_lang(lang))
+    try:
+        result.image_size = tuple(image.size)  # pixels of the rendered page: the unit of the line boxes
+    except Exception:  # noqa: BLE001 - a result type that cannot take the attribute just has no size
+        pass
+    return result
+
+
+def _capture_lines(result, page_num: int, dpi: int) -> Optional[Dict[str, Any]]:
+    """The per-line OCR output of a page (text, confidence, box) for the extraction store, or None without lines."""
+    lines = list(getattr(result, "lines", None) or [])
+    if not lines:
+        return None
+    size = tuple(getattr(result, "image_size", None) or ())
+    return {
+        "page": page_num, "dpi": dpi, "engine": str(getattr(result, "engine", "") or ""),
+        "width_px": size[0] if len(size) == 2 else None, "height_px": size[1] if len(size) == 2 else None,
+        "confidence": getattr(result, "confidence", None),
+        "lines": [
+            {"text": str(getattr(line, "text", "") or ""), "confidence": getattr(line, "confidence", None),
+             "bbox": [float(v) for v in line.bbox] if getattr(line, "bbox", None) else None}
+            for line in lines
+        ],
+    }
 
 
 def _ocr_page(page, dpi: int, lang: str) -> str:
@@ -317,6 +341,7 @@ def _extract_pages(
         "pages_image_ocr": [],
         "pages_low_ocr_confidence": [],
         "pages_vertical": [],
+        "_ocr_pages": {},
         "ocr_confidence": {},
         "pdf_engine": "pdfplumber+pypdfium2",
         "table_backend": None,
@@ -377,6 +402,9 @@ def _extract_pages(
                     confidence = result.confidence
                     method = "ocr_fallback"
                     report["pages_ocr"] += 1
+                    captured = _capture_lines(result, page_num, dpi)
+                    if captured:
+                        report["_ocr_pages"][page_num] = captured
                 elif needs_ocr:
                     # Previously these pages were kept or dropped silently; they
                     # are now listed so scanned pages are visible in the report.
@@ -445,6 +473,14 @@ def convert_pdf_to_rows(
     checksum = _file_sha256(path)
     pages, report = _extract_pages(path, ocr=ocr, ocr_lang=ocr_lang, min_text_chars=min_text_chars, dpi=dpi)
     tables_found = report.pop("_tables", []) or []
+    report["ocr_pages"] = report.pop("_ocr_pages", {}) or {}  # saved by the adapter (rag_core/extraction_store.py)
+    from rag_core import extraction_review
+
+    pages, correction_stats = extraction_review.apply_corrections(
+        pages, tenant, doc_id, normalize=lambda text: _normalize_text(text, ocr=True)
+    )
+    if correction_stats["applied"] or correction_stats["unmatched"]:
+        report["corrections"] = correction_stats
 
     if preprocess and pages:
         page_rows = [

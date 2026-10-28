@@ -74,13 +74,8 @@ jobs:
       - name: Production settings guard smoke
         run: python -m pytest -q tests/test_stage6_operations.py
 
-      - name: Retrieval regression gate
-        run: |
-          if [ -f eval/baselines/retrieval_gate_baseline.json ]; then
-            python scripts/eval_regression_gate.py --margin 0.02
-          else
-            echo "no baseline yet: run python scripts/eval_regression_gate.py --update-baseline and commit it"
-          fi
+      - name: Synthetic v2 retrieval regression gate
+        run: python scripts/eval_regression_gate.py --margin 0.02
 
       - name: Stage 8 tests
         run: python -m pytest -q tests/test_stage8_additions.py

@@ -127,9 +127,13 @@ class _FakeCollection:
         out = [i for i, (_d, m) in self.rows.items() if all(m.get(k) == v for k, v in wanted.items())]
         return {"ids": out}
 
-    def delete(self, ids):
+    def delete(self, ids, where=None):
+        clauses = (where or {}).get("$and", [])
+        wanted = {k: v for c in clauses for k, v in c.items()}
         for i in ids:
-            self.rows.pop(i, None)
+            row = self.rows.get(i)
+            if row is not None and all(row[1].get(k) == v for k, v in wanted.items()):
+                self.rows.pop(i)
 
 
 @pytest.fixture

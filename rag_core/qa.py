@@ -11,11 +11,13 @@ from rag_core import embedding_provider, ja_terms, query_preprocess
 from rag_core.cross_encoder_reranker import rerank as cross_encoder_rerank
 from rag_core.ja_text import normalize_for_index, normalize_japanese_text
 from rag_core.keyword_scorer import apply_keyword_boost, classify_query_type, score_keyword_match
+from rag_core import answer_rewrite, grounding, interpretation, llm, multi_query, query_route, search_mode
+from rag_core.profile_engine import apply_profile_boost
 from rag_core.profile_loader import load_rag_profile
 from rag_core.profile_validation import validate_answer_with_profile
 from rag_core.question_types import detect_question_type
 from rag_core.reranker import rerank_chunks
-from rag_core.retrieval import QueryEmbeddingBatch, RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, hybrid_retrieve, keyword_index_path_for_collection, normalize_tenant_id, vector_retrieve
+from rag_core.retrieval import QueryEmbeddingBatch, RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, fusion_scale, hybrid_retrieve, keyword_index_path_for_collection, normalize_tenant_id, vector_retrieve
 from rag_core.utils import ensure_openai_client
 from rag_grounded import Chunk, build_citation_payloads, build_evidence_blocks, build_messages, drop_empty_shortage_lines, extractive_fallback, merge_by_page, rewrite_query, strip_reference_block, strip_source_tags, to_footnotes, validate_output
 from schemas import AnswerResult, CitationOut, RetrievedChunkOut
@@ -532,7 +534,9 @@ def _guard_fallback_raw(guard_reason: str) -> str:
     return f"- 関連情報が見つかりませんでした。{message}\n不明: 根拠不足"
 
 
-def _finalize_generated_answer(raw: str, q: str, grounded: Sequence[Chunk], intent: str) -> Tuple[str, bool]:
+def _finalize_generated_answer(
+    raw: str, q: str, grounded: Sequence[Chunk], intent: str, *, tenant_id: str = "default", client=None
+) -> Tuple[str, bool]:
     raw = strip_reference_block(raw)
     used_fallback = False
     if not validate_output(raw, grounded, intent, config.PREFER_SORT_TERMS_CHANGE + config.PREFER_SORT_TERMS_RESET):
@@ -541,6 +545,17 @@ def _finalize_generated_answer(raw: str, q: str, grounded: Sequence[Chunk], inte
         if not raw.strip():
             # No evidence sentence shares a term with the question.
             return _guard_fallback_raw("insufficient_evidence"), True
+    if not used_fallback and getattr(config, "GROUNDING_VERIFY_ENABLED", False):
+        # Step 4-3: every sentence must be supported by the evidence it cites. Unsupported ones are dropped; an
+        # answer with nothing left becomes the extractive one.
+        checked = grounding.verify_answer(raw, grounded, tenant_id=tenant_id, client=client)
+        if checked.kept == 0:
+            raw = extractive_fallback(q, grounded)
+            used_fallback = True
+            if not raw.strip():
+                return _guard_fallback_raw("insufficient_evidence"), True
+        else:
+            raw = checked.raw
     # "不足: なし" is an internal marker; it is neither shown nor cited.
     return drop_empty_shortage_lines(raw), used_fallback
 
@@ -807,6 +822,32 @@ def _build_extractive_answer_result(
     )
 
 
+def _apply_answer_rewrite(
+    question: str, state: "_RetrievalTraceState", result: AnswerResult, trace: Dict[str, object], *,
+    tenant_id: str, client=None,
+) -> AnswerResult:
+    """Step 4-2: put the quoted sentences of an extractive answer in natural wording, when the policy allows it."""
+    if not llm.check("rewrite", tenant_id).allowed:
+        return result
+    raw = _extractive_answer_raw(question, state.selected_context)
+    outcome = answer_rewrite.rewrite_answer(
+        raw, question, tenant_id=tenant_id, client=client if hasattr(client, "chat") else None
+    )
+    trace["answer_rewrite"] = outcome.summary()
+    if outcome.rewritten == 0:
+        return result
+    return _build_answer_result(
+        outcome.raw,
+        state.selected_context,
+        intent=state.intent,
+        guard_reason=None,
+        used_fallback=False,
+        retrieved=state.retrieved,
+        rewritten_query=state.rewritten_query,
+        augmented_query=state.augmented_query,
+    )
+
+
 def _llm_unavailable_result(question: str, state: "_RetrievalTraceState", retrieved: Sequence[RetrievedChunk]) -> AnswerResult:
     # Same evidence test as the extractive mode: quote evidence only when it
     # answers the question, otherwise a no-answer without citations.
@@ -958,6 +999,7 @@ def _apply_profile_validation(
 
     question_type = detect_question_type(question, profile)
     trace["rag_profile_id"] = profile_id
+    trace["rag_profile_version"] = str(profile.get("profile_version") or "") if isinstance(profile, dict) else ""
     trace["question_type"] = question_type
 
     if warnings:
@@ -1055,6 +1097,7 @@ def _retrieve_and_rerank(
     tenant_id: str = "default",
     collection_name: Optional[str] = None,
     stats: Optional[Dict[str, object]] = None,
+    rag_profile_id: Optional[str] = None,
 ) -> Tuple[List[RetrievedChunk], List[RetrievedChunk], List[RetrievedChunk]]:
     # A staging collection with its own keyword corpus (stage 3) gets the same
     # hybrid retrieval as the served collection; without one it stays vector
@@ -1087,7 +1130,18 @@ def _retrieve_and_rerank(
             create_collection_if_missing=False,
         )
 
-    retrieve = _vector if staging_mode else _hybrid
+    base_retrieve = _vector if staging_mode else _hybrid
+    # Step 3-3: lane weights by query type (QUERY_ROUTING_ENABLED, default off); not for a vector-only staging pass.
+    route = None if staging_mode else query_route.route_for(query_type)
+    if route is not None and stats is not None:
+        stats["route"] = {"name": route["name"], "scale": dict(route["scale"])}
+
+    def retrieve(query: str, embedding=None) -> List[RetrievedChunk]:
+        if route is None:
+            return base_retrieve(query, embedding)
+        with fusion_scale(route["scale"]):
+            return base_retrieve(query, embedding)
+
     if augmented_query == question:
         # Identical queries would produce identical passes; retrieve once.
         base = retrieve(question)
@@ -1105,7 +1159,24 @@ def _retrieve_and_rerank(
                 stats["skipped_augmented_pass"] = True
         else:
             aug = retrieve(augmented_query, lambda: embedding_batch.get(augmented_query))
-    before_rerank = _unique_chunks(base + aug)
+    extra_lists: List[List[RetrievedChunk]] = []
+    if multi_query.enabled():
+        # Step 3-2: rule-based variants of the question, searched as well and fused by RRF.
+        variants = multi_query.build_variants(
+            question, profile_id=rag_profile_id, tenant_id=tenant_id, limit=multi_query.max_queries()
+        )[1:]
+        extra_lists = [retrieve(variant["query"]) for variant in variants]
+        if stats is not None:
+            stats["multi_query"] = {"variants": variants, "deep": search_mode.is_deep()}
+    if extra_lists:
+        before_rerank = multi_query.fuse_rrf(
+            [base] if aug is base else [base, aug],
+            extra_lists,
+            k=config.MULTI_QUERY_RRF_K,
+            variant_penalty=config.MULTI_QUERY_VARIANT_PENALTY,
+        )
+    else:
+        before_rerank = _unique_chunks(base + aug)
     if intent == "procedure":
         before_rerank = _unique_chunks(
             add_neighbor_chunks(
@@ -1123,6 +1194,20 @@ def _retrieve_and_rerank(
             query_type=query_type,
             max_boost=config.KEYWORD_BOOST_MAX_DELTA,
         )
+    if getattr(config, "PROFILE_BOOST_ENABLED", False):
+        # Step 2-2: the retrieval_boost_rules of the RAG profile (default off). A profile that did not load
+        # cleanly is skipped, as it is for answer validation.
+        profile = load_rag_profile(rag_profile_id or "default")
+        if isinstance(profile, dict) and not profile.get("warnings"):
+            child_ranked, boost_trace = apply_profile_boost(
+                child_ranked,
+                scoring_query,
+                detect_question_type(scoring_query, profile),
+                profile,
+                max_delta=config.PROFILE_BOOST_MAX_DELTA,
+            )
+            if stats is not None:
+                stats["profile_boost"] = boost_trace
     if config.CROSS_ENCODER_RERANK_ENABLED:
         # Optional semantic stage over the already tenant-filtered, heuristic-
         # ranked candidates; reorders the fused top-N before parent expansion.
@@ -1227,6 +1312,7 @@ def _build_retrieval_trace(
         tenant_id=normalize_tenant_id(tenant_id),
         collection_name=collection_name,
         stats=retrieval_stats,
+        rag_profile_id=rag_profile_id,
     )
     retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
 
@@ -1251,6 +1337,10 @@ def _build_retrieval_trace(
         trace["query_preprocess"] = preprocess_trace
     if retrieval_stats:
         trace["staged_retrieval"] = dict(retrieval_stats)
+    trace["interpretation"] = interpretation.build(
+        question=q, retrieval_query=retrieval_q, query_type=query_type, intent=intent, expansions=expansions,
+        stats=retrieval_stats,
+    )
     if collection_name:
         trace["query_collection"] = collection_name
         trace["query_collection_mode"] = "staging"
@@ -1406,7 +1496,7 @@ def _answer_query_impl(
 
     grounded = state.selected_context
 
-    if config.resolve_chat_generation_mode() == "extractive":
+    if llm.generation_mode(tenant_id) == "extractive":
         if _has_sufficient_extractive_evidence(q, grounded):
             result = _build_extractive_answer_result(
                 q,
@@ -1415,6 +1505,7 @@ def _answer_query_impl(
                 used_fallback=False,
                 retrieved=retrieved,
             )
+            result = _apply_answer_rewrite(q, state, result, trace, tenant_id=tenant_id, client=client)
             answer_mode = "grounded_extractive"
         else:
             result = _build_answer_result(
@@ -1489,7 +1580,8 @@ def _answer_query_impl(
     )
     trace["chat_generation_mode"] = "llm"
     raw, used_fallback = _finalize_generated_answer(
-        resp.choices[0].message.content or "", q, grounded, intent
+        resp.choices[0].message.content or "", q, grounded, intent,
+        tenant_id=tenant_id, client=client if hasattr(client, "chat") else None,
     )
     answer_chunks = grounded
     result = _build_answer_result(
@@ -1627,7 +1719,7 @@ def answer_query_stream(
 
     q = state.normalized_query
     grounded = state.selected_context
-    if config.resolve_chat_generation_mode() == "extractive":
+    if llm.generation_mode(tenant_id) == "extractive":
         if _has_sufficient_extractive_evidence(q, grounded):
             result = _build_extractive_answer_result(
                 q,
@@ -1636,6 +1728,7 @@ def answer_query_stream(
                 used_fallback=False,
                 retrieved=state.retrieved,
             )
+            result = _apply_answer_rewrite(q, state, result, trace, tenant_id=tenant_id, client=client)
             answer_mode = "grounded_extractive"
         else:
             result = _build_answer_result(
@@ -1712,7 +1805,10 @@ def answer_query_stream(
     )
     trace["chat_generation_mode"] = "llm"
 
-    raw, used_fallback = _finalize_generated_answer("".join(pieces), q, grounded, state.intent)
+    raw, used_fallback = _finalize_generated_answer(
+        "".join(pieces), q, grounded, state.intent,
+        tenant_id=tenant_id, client=client if hasattr(client, "chat") else None,
+    )
     result = _build_answer_result(
         raw,
         grounded,

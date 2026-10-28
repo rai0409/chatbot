@@ -171,6 +171,11 @@ def _production_collection_names() -> set:
         str(config.getenv_first("CHROMA_COLLECTION") or "").strip(),
         str(getattr(config, "VECTORSTORE_COLLECTION_NAME", "") or "").strip(),
     }
+    from rag_core import index_generation
+
+    pointed = index_generation.active_collection()
+    if pointed:
+        names.add(pointed)
     return {n for n in names if n}
 
 
@@ -420,6 +425,9 @@ def _ingest_chunks(chunks: List[Dict[str, Any]], collection: str) -> Dict[str, A
     result = ingest_canonical_rows(chunks, collection_name=collection, generation_id=generation)
     keyword = write_keyword_rows(keyword_index_path_for_collection(collection), chunks, generation_id=generation)
     result["keyword_index_rows"] = keyword["written"]
+    from rag_core import index_manifest
+
+    index_manifest.mark_stale(collection)
     return result
 
 

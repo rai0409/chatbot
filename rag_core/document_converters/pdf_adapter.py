@@ -67,6 +67,13 @@ def convert_pdf_with_report(
     for row in rows:
         row.setdefault("source_type", "pdf")
         row.setdefault("parser", "pdf_to_canonical_jsonl")
+    ocr_pages = report.pop("ocr_pages", None)
+    if ocr_pages:
+        from rag_core import extraction_store
+
+        extraction_store.save_from_report(
+            tenant_id or "default", source_doc or Path(path).name, Path(path), ocr_pages
+        )
     return rows, report
 
 

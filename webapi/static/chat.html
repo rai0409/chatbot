@@ -86,6 +86,7 @@
   .actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
   .actions button { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 3px 10px; cursor: pointer; font-size: 12px; color: var(--muted); }
   .actions button:hover { color: var(--fg); background: var(--panel-2); }
+  .interp { margin-top: 8px; font-size: 12px; color: var(--muted); }
   .actions button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
   .actions .label { font-size: 12px; color: var(--muted); margin-right: 2px; }
   .actions .done { font-size: 12px; color: var(--accent); }
@@ -321,6 +322,7 @@
       }).catch(function () {});
     });
     btn("再生成", "同じ質問をもう一度", function () { if (!busy) send(ctx.question); });
+    if (!ctx.deep) btn("もっと詳しく調べる", "言い換えも使って、より広く検索し直します", function () { if (!busy) send(ctx.question, { deep: true }); });
     var label = document.createElement("span"); label.className = "label"; label.textContent = "この回答は"; bar.appendChild(label);
     var done = function (ok, msg) {
       bar.querySelectorAll("button.fb").forEach(function (b) { b.disabled = true; });
@@ -490,6 +492,11 @@
     var txt = data ? (data.answer_with_footnotes || data.answer_text || "") : streamed;
     if (txt) a.innerHTML = renderAnswerHtml(txt, citeMap); else a.innerHTML = "";
     if (kind === "abstain") renderAbstain(card);
+    if (data && data.interpretation && data.interpretation.summary) {
+      var interp = document.createElement("div"); interp.className = "interp";
+      interp.textContent = data.interpretation.summary + (ctx.deep ? "（詳しく調べた結果）" : "");
+      card.appendChild(interp);
+    }
     turn._citations = citations; turn._tenant = ctx.tenantId; turn._collection = ctx.collection;
     renderCitations(citations, ctx.tenantId, ctx.collection);
     attachActions(turn, card, ctx);
@@ -499,6 +506,7 @@
   function streamChat(ctx, turn, card) {
     var body = { question: ctx.question, tenant_id: ctx.tenantId, trace_id: ctx.token, thread_id: threadId };
     if (ctx.collection) body.staging_collection = ctx.collection;
+    if (ctx.deep) body.deep = true;
     controller = window.AbortController ? new AbortController() : null;
     var a = card.querySelector(".a");
     return fetch("/chat/stream", {
@@ -561,10 +569,10 @@
     sendBtn.className = on ? "stop" : "";
     sendBtn.setAttribute("aria-label", on ? "回答の生成を停止" : "送信");
   }
-  function send(text) {
+  function send(text, opts) {
     var question = String(text || "").trim();
     if (!question || busy) return;
-    var ctx = { question: question, tenantId: tenant(), collection: stagingCollection(), token: uuid() };
+    var ctx = { question: question, tenantId: tenant(), collection: stagingCollection(), token: uuid(), deep: !!(opts && opts.deep) };
     var turn = addTurn(question);
     var card = addCard(turn, "pending");
     scrollDown();

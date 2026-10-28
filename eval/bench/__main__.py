@@ -7,6 +7,7 @@ pareto      configs not dominated on quality, p95 latency and memory
 calibrate   abstention thresholds and the rerank-skip margin threshold
 samplesize  questions needed for a target CI width or detectable difference
 tokens      token-length distribution of chunks for a model (max_seq_length)
+from-cases  evaluation set (dev/test split) from a labelled eval/cases/*_cases.jsonl file
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from eval.bench import jqara, report, runner, stats
+from eval.bench import jqara, report, runner, stats, synthetic
 from eval.bench.corpus import build_chunks
 from eval.bench.encoders import EmbeddingSpec, token_length_stats
 
@@ -36,6 +37,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for name in ("plan", "run"):
         p = sub.add_parser(name)
         p.add_argument("--config", type=Path, required=True)
+        if name == "run":
+            p.add_argument("--final-test", action="store_true", help="the one final run on the held-out split 'test'")
+            p.add_argument("--allow-test-reuse", action="store_true", help="record a deliberate second use of the test split")
     p = sub.add_parser("compare")
     p.add_argument("--run", type=Path, required=True)
     p.add_argument("--baseline", required=True)
@@ -74,6 +78,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--overlap", type=float, default=0.1)
     p.add_argument("--prefix", default="auto")
     p.add_argument("--max-seq-length", type=int, default=None)
+    p = sub.add_parser("from-cases", help="evaluation set (dev/test split) from a labelled case file")
+    p.add_argument("--cases", type=Path, required=True)
+    p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--test-share", type=float, default=0.2)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--match-mode", choices=["auto", "chunk", "doc"], default="auto")
     p = sub.add_parser("jqara-validate", help="validate the candidate-limited JQaRA Parquet contract")
     p.add_argument("--config", type=Path, default=None, help="JSON experiment config (also validates its non-model settings)")
     p.add_argument("--input", type=Path, default=None)
@@ -126,7 +136,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "plan":
         _emit(runner.plan(json.loads(args.config.read_text(encoding="utf-8"))), None)
     elif args.command == "run":
-        run_dir = runner.run(json.loads(args.config.read_text(encoding="utf-8")))
+        cfg = json.loads(args.config.read_text(encoding="utf-8"))
+        if args.final_test:
+            cfg["final_test"] = True
+        if args.allow_test_reuse:
+            cfg["allow_test_reuse"] = True
+        run_dir = runner.run(cfg)
         _emit({"run_dir": str(run_dir)}, None)
     elif args.command == "compare":
         candidates = [c for c in args.candidates.split(",") if c] or None
@@ -156,6 +171,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         chunks = build_chunks(spec, args.chunks, args.documents)
         emb = EmbeddingSpec(model=args.model, prefix=args.prefix, max_seq_length=args.max_seq_length)
         _emit(token_length_stats(emb, [c.text for c in chunks]), None)
+    elif args.command == "from-cases":
+        rows, summary = synthetic.build_eval_set(
+            synthetic.read_cases(args.cases), test_share=args.test_share, seed=args.seed, match_mode=args.match_mode
+        )
+        synthetic.write_eval_set(args.out, rows)
+        _emit(summary, None)
     elif args.command == "jqara-validate":
         cfg = json.loads(args.config.read_text(encoding="utf-8")) if args.config else {}
         if args.input is not None:

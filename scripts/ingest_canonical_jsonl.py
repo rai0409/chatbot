@@ -142,9 +142,31 @@ def _delete_stale_document_rows(collection, doc_keys: Dict[Tuple[str, str], Set[
         res = collection.get(where=where, include=[])
         stale = [i for i in (res.get("ids") or []) if i not in new_ids]
         for ids_chunk in _chunked(stale, 1000):
-            collection.delete(ids=ids_chunk)
+            collection.delete(ids=ids_chunk, where=where)
             deleted += len(ids_chunk)
     return deleted
+
+
+def _assert_no_cross_tenant_id_collision(collection, ids, metas) -> None:
+    """Refuse a batch whose ids already belong to another tenant (ids are collection-wide)."""
+    getter = getattr(collection, "get", None)
+    if not ids or getter is None:
+        return
+    existing = getter(ids=list(ids), include=["metadatas"])
+    found = dict(zip(existing.get("ids") or [], existing.get("metadatas") or []))
+    clashes = []
+    for chunk_id, meta in zip(ids, metas):
+        old = found.get(chunk_id)
+        if old is None:
+            continue
+        old_tenant = str((old or {}).get("tenant_id") or "").strip() or "default"
+        new_tenant = str((meta or {}).get("tenant_id") or "").strip() or "default"
+        if old_tenant != new_tenant:
+            clashes.append(chunk_id)
+    if clashes:
+        raise ValueError(
+            f"{len(clashes)} chunk id(s) already belong to another tenant (e.g. {clashes[:5]}); refusing to overwrite"
+        )
 
 
 def ingest_canonical_rows(
@@ -182,21 +204,27 @@ def ingest_canonical_rows(
     if reset:
         collection = _reset_collection(collection)
     fingerprint = store.stamp_collection_fingerprint(collection)
+    store.stamp_collection_profile(collection)
 
     batch_ids: List[str] = []
     batch_texts: List[str] = []
     batch_embed_texts: List[str] = []
     batch_metas: List[Dict[str, Any]] = []
     ingested = 0
+    dim_checked = False
     skipped = 0
     parents_not_embedded = 0
     doc_ids: Dict[Tuple[str, str], Set[str]] = {}
 
     def flush_batch() -> None:
-        nonlocal ingested
+        nonlocal ingested, dim_checked
         if not batch_ids:
             return
+        _assert_no_cross_tenant_id_collision(collection, batch_ids, batch_metas)
         embeddings = embedder.embed_documents(batch_embed_texts, client=client)
+        if not dim_checked:
+            store.check_and_stamp_embedding_dim(collection, len(embeddings[0]))
+            dim_checked = True
         if hasattr(collection, "upsert"):
             collection.upsert(
                 ids=batch_ids,

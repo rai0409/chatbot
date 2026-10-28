@@ -2,13 +2,15 @@ from __future__ import annotations
 import csv,json,shutil
 from pathlib import Path
 import pytest
-from scripts.import_approved_qa_review_csv import import_review_csv,COLUMNS,SOURCE,PACKET_MANIFEST
+from scripts.import_approved_qa_review_csv import import_review_csv,COLUMNS,SOURCE
+from scripts.build_approved_qa_review_packet import build_review_packet, CSV_PATH
 ROOT=Path(__file__).resolve().parents[1]
 FIXTURES=ROOT / "tests/fixtures/approved_qa_review"
 def setup(tmp):
- for p in (SOURCE,PACKET_MANIFEST):
-  d=tmp/p;d.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(FIXTURES/("040219e-biscfaq.jsonl" if p==SOURCE else "review_manifest.json"),d)
- src=FIXTURES/'review.csv'; out=tmp/'review.csv';shutil.copy2(src,out);return out
+ source=tmp/SOURCE;source.parent.mkdir(parents=True,exist_ok=True)
+ shutil.copy2(FIXTURES/'040219e-biscfaq.jsonl',source)
+ build_review_packet(root=tmp)
+ out=tmp/'review.csv';shutil.copy2(tmp/CSV_PATH,out);return out
 def read(p):
  with p.open(encoding='utf-8-sig',newline='') as f:return list(csv.DictReader(f))
 def write(p,rows):

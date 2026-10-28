@@ -93,7 +93,7 @@ def decide(candidate_id: str, status: str, *, decided_by: Optional[str] = None) 
 
 
 def apply_to_profile(profile_id: str) -> Dict[str, Any]:
-    from rag_core.profile_loader import PROFILE_ROOT, is_valid_rag_profile_id, reload_rag_profile_cache
+    from rag_core.profile_loader import PROFILE_ROOT, is_valid_rag_profile_id, pin_state, reload_rag_profile_cache
     from scripts.apply_synonym_candidates import merge_synonyms
 
     if not is_valid_rag_profile_id(profile_id):
@@ -109,6 +109,7 @@ def apply_to_profile(profile_id: str) -> Dict[str, Any]:
     reload_rag_profile_cache()
     return {
         "profile_id": profile_id,
+        "pinned_version": pin_state(profile_id) or None,
         "approved_rows": len(approved),
         "entries_before": len(existing.get("synonyms") or []),
         "entries_after": len(merged["synonyms"]),

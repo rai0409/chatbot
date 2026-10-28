@@ -43,6 +43,13 @@ def load_jsonl(path: Path) -> list[dict]:
     ]
 
 
+def _pair_chunk_id(row: dict) -> str:
+    # Same id form as scripts/approved_qa_to_canonical_jsonl.py: non-default tenants are prefixed.
+    tenant = str(row.get("tenant_id") or "").strip() or "default"
+    prefix = "" if tenant == "default" else f"{tenant}:"
+    return f"{prefix}approved_qa_pair:{row.get('qa_id')}"
+
+
 def canonical_to_item(row: dict) -> dict:
     q = row.get("question_text") or row.get("question") or ""
     a = row.get("answer_text") or row.get("approved_answer") or row.get("answer") or ""
@@ -54,7 +61,7 @@ def canonical_to_item(row: dict) -> dict:
         except Exception:
             source_pages = []
     return {
-        "id": row.get("id") or f"approved_qa_pair:{row.get('qa_id')}",
+        "id": row.get("id") or _pair_chunk_id(row),
         "text": row.get("text") or f"Q: {q}\nA: {a}",
         "metadata": {
             **{k: v for k, v in row.items() if k not in {"text"}},

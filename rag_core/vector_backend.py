@@ -135,6 +135,48 @@ def point_id(chunk_id: str) -> str:
     return str(uuid.uuid5(_ID_NAMESPACE, str(chunk_id)))
 
 
+def _scope_filter(ids, where):
+    """One filter for ids AND where, so an id of another tenant never matches."""
+    from qdrant_client import models
+
+    must = []
+    if ids is not None:
+        must.append(models.HasIdCondition(has_id=[point_id(i) for i in ids]))
+    extra = translate_where(where)
+    if extra is not None:
+        must.append(extra)
+    return models.Filter(must=must) if must else None
+
+
+def _validate_upsert_inputs(ids, documents, embeddings, metadatas) -> None:
+    """Reject a malformed batch before anything is written (collection creation included)."""
+    import math
+
+    count = len(ids)
+    if not (len(documents) == len(embeddings) == len(metadatas) == count):
+        raise ValueError(
+            f"upsert length mismatch: ids={count} documents={len(documents)} "
+            f"embeddings={len(embeddings)} metadatas={len(metadatas)}"
+        )
+    seen = set()
+    for chunk_id in ids:
+        key = str(chunk_id)
+        if not key.strip():
+            raise ValueError("upsert id must be a non-empty string")
+        if key in seen:
+            raise ValueError(f"duplicate id in one upsert batch: {key}")
+        seen.add(key)
+    dim = len(embeddings[0])
+    if dim < 1:
+        raise ValueError("embedding must not be empty")
+    for vector in embeddings:
+        if len(vector) != dim:
+            raise ValueError(f"embedding dimension mismatch in one upsert batch: {dim} vs {len(vector)}")
+        for value in vector:
+            if not math.isfinite(float(value)):
+                raise ValueError("embedding contains a non-finite value")
+
+
 # --- where translation -----------------------------------------------------------------
 
 
@@ -315,6 +357,7 @@ class QdrantCollection:
 
         if not ids:
             return
+        _validate_upsert_inputs(ids, documents, embeddings, metadatas)
         self._ensure(len(embeddings[0]))
         points = [
             models.PointStruct(
@@ -333,19 +376,53 @@ class QdrantCollection:
     def delete(self, ids: Optional[Sequence[str]] = None, where: Optional[Dict[str, Any]] = None) -> None:
         from qdrant_client import models
 
+        # An empty id list deletes nothing; ids and where are applied together.
+        if ids is not None and len(ids) == 0:
+            return
+        if ids is None and not where:
+            return
         if not self.exists():
             return
-        if ids:
+        if ids is None:
+            parts = [None]
+        else:
             batch = max(1, _env_int("QDRANT_UPSERT_BATCH", 256))
-            point_ids = [point_id(i) for i in ids]
-            for start in range(0, len(point_ids), batch):
-                selector = models.PointIdsList(points=point_ids[start:start + batch])
-                with_retry(self._client.delete, self.name, points_selector=selector, wait=True)
+            id_list = list(ids)
+            parts = [id_list[start:start + batch] for start in range(0, len(id_list), batch)]
+        for part in parts:
+            selector = models.FilterSelector(filter=_scope_filter(part, where))
+            with_retry(self._client.delete, self.name, points_selector=selector, wait=True)
+
+    def update(
+        self,
+        ids: Sequence[str],
+        metadatas: Optional[Sequence[Dict[str, Any]]] = None,
+        documents=None,
+        embeddings=None,
+    ) -> None:
+        """Merge metadata into existing points; text and vector stay as they are."""
+        if documents is not None or embeddings is not None:
+            raise NotImplementedError("QdrantCollection.update only changes metadata")
+        if not ids or metadatas is None:
             return
-        if not where:
+        if len(metadatas) != len(ids):
+            raise ValueError(f"update length mismatch: ids={len(ids)} metadatas={len(metadatas)}")
+        if not self.exists():
             return
-        selector = models.FilterSelector(filter=translate_where(where))
-        with_retry(self._client.delete, self.name, points_selector=selector, wait=True)
+        pids = [point_id(i) for i in ids]
+        batch = max(1, _env_int("QDRANT_UPSERT_BATCH", 256))
+        found = set()
+        for start in range(0, len(pids), batch):
+            records = with_retry(
+                self._client.retrieve, self.name, ids=pids[start:start + batch], with_payload=False, with_vectors=False
+            )
+            found.update(str(record.id) for record in records)
+        for pid, meta in zip(pids, metadatas):
+            if pid not in found:
+                continue
+            payload = {k: v for k, v in dict(meta or {}).items() if k not in (_ID_KEY, _DOC_KEY)}
+            if payload:
+                with_retry(self._client.set_payload, self.name, payload=payload, points=[pid], wait=True)
 
     # reads -----------------------------------------------------------------------------------
     @staticmethod
@@ -406,36 +483,48 @@ class QdrantCollection:
             out["distances"].append(dists)
         return out
 
-    def get(self, ids: Optional[Sequence[str]] = None, where=None, include=None, limit: Optional[int] = None, **_ignored) -> Dict[str, Any]:
+    def get(self, ids: Optional[Sequence[str]] = None, where=None, include=None, limit: Optional[int] = None, offset: Optional[int] = None, **_ignored) -> Dict[str, Any]:
         out: Dict[str, List[Any]] = {"ids": [], "documents": [], "metadatas": []}
         # include=["embeddings"] returns vectors too (evaluation and migration
         # read the embedding size this way).
         with_vectors = bool(include and "embeddings" in include)
         if with_vectors:
             out["embeddings"] = []
+        if ids is not None and len(ids) == 0:
+            return out
         if not self.exists():
             return out
-        page = min(256, int(limit)) if limit else 256
-        if ids:
-            records = with_retry(
-                self._client.retrieve, self.name, ids=[point_id(i) for i in ids], with_payload=True, with_vectors=with_vectors
+        skip = max(0, int(offset or 0))
+        want = int(limit) if limit else None
+        if ids is not None and not where:
+            records = list(
+                with_retry(
+                    self._client.retrieve, self.name, ids=[point_id(i) for i in ids], with_payload=True, with_vectors=with_vectors
+                )
             )
         else:
-            records, offset = [], None
+            # ids and where in one filter: an id of another tenant is never returned.
+            scope = _scope_filter(ids, where)
+            need = None if want is None else skip + want
+            page = 256 if need is None else max(1, min(256, need))
+            records, cursor = [], None
             while True:
-                batch, offset = with_retry(
+                batch, cursor = with_retry(
                     self._client.scroll,
                     self.name,
-                    scroll_filter=translate_where(where),
+                    scroll_filter=scope,
                     limit=page,
-                    offset=offset,
+                    offset=cursor,
                     with_payload=True,
                     with_vectors=with_vectors,
                 )
                 records.extend(batch)
-                if offset is None or (limit is not None and len(records) >= limit):
+                if cursor is None or (need is not None and len(records) >= need):
                     break
-        for record in records[: limit or None]:
+        records = records[skip:]
+        if want is not None:
+            records = records[:want]
+        for record in records:
             chunk_id, document, meta = self._split(record.payload)
             out["ids"].append(chunk_id)
             out["documents"].append(document)

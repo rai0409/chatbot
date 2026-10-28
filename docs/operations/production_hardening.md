@@ -13,6 +13,8 @@ to start with `APP_ENV=production` while any required setting is missing
 | `API_AUTH_TENANT_MAP` | key → tenants; without it a key reaches only the `default` tenant |
 | `ADMIN_AUTH_ENABLED=true`, `ADMIN_AUTH_TOKEN` | 32+ random characters |
 | `SEARCH_DEBUG_ENABLED=false` | the debug route exposes retrieval internals |
+| `TENANT_FILTER_STRICT=true` | the default tenant is filtered too; run `scripts/backfill_tenant_id.py --apply` on every existing collection first (rows without `tenant_id` are invisible otherwise) |
+| `EMBED_FINGERPRINT_STRICT=true` | a collection without a complete embedding stamp (provider, model, prefix scheme, normalization, distance, dimension) is refused instead of only logged; collections written by this code base's ingest are stamped completely |
 | `ALLOWED_HOSTS` | host names served (Host header check) |
 | `METRICS_TOKEN` | 32+ characters; scrape with `Authorization: Bearer <token>` |
 | `OIDC_SESSION_SECRET` | 32+ bytes when OIDC is enabled |

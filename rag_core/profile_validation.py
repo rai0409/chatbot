@@ -35,6 +35,8 @@ def _base_result(question_type: str) -> dict[str, Any]:
 
 
 def _rule_applies(question: str, question_type: str, rule: dict[str, Any]) -> bool:
+    if rule.get("enabled") is False:
+        return False
     if rule.get("applies_to_question_type") != question_type:
         return False
     question_terms = _as_list(rule.get("when_question_contains_any"))
