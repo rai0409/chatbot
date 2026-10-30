@@ -1,0 +1,12 @@
+{"case_id":"synthetic_format_01","category":"synthetic multiformat","gold_chunk_ids":["synthetic_format_chunk_01"],"gold_doc_ids":["fictional_format_1.pdf"],"query":"架空の形式別資料1について"}
+{"case_id":"synthetic_format_02","category":"synthetic multiformat","gold_chunk_ids":["synthetic_format_chunk_02"],"gold_doc_ids":["fictional_format_2.pdf"],"query":"架空の形式別資料2について"}
+{"case_id":"synthetic_format_03","category":"synthetic multiformat","gold_chunk_ids":["synthetic_format_chunk_03"],"gold_doc_ids":["fictional_format_3.pdf"],"query":"架空の形式別資料3について"}
+{"case_id":"synthetic_format_04","category":"synthetic multiformat","gold_chunk_ids":["synthetic_format_chunk_04"],"gold_doc_ids":["fictional_format_4.pdf"],"query":"架空の形式別資料4について"}
+{"case_id":"synthetic_format_05","category":"synthetic multiformat","gold_chunk_ids":["synthetic_format_chunk_05"],"gold_doc_ids":["fictional_format_5.pdf"],"query":"架空の形式別資料5について"}
+{"case_id":"synthetic_format_06","category":"synthetic multiformat","gold_chunk_ids":["synthetic_format_chunk_06"],"gold_doc_ids":["fictional_format_6.pdf"],"query":"架空の形式別資料6について"}
+{"case_id":"synthetic_format_07","category":"synthetic multiformat","gold_chunk_ids":["synthetic_format_chunk_07"],"gold_doc_ids":["fictional_format_7.pdf"],"query":"架空の形式別資料7について"}
+{"case_id":"synthetic_format_08","category":"synthetic multiformat","gold_chunk_ids":["synthetic_format_chunk_08"],"gold_doc_ids":["fictional_format_8.pdf"],"query":"架空の形式別資料8について"}
+{"case_id":"synthetic_format_09","category":"synthetic multiformat","gold_chunk_ids":["synthetic_format_chunk_09"],"gold_doc_ids":["fictional_format_9.pdf"],"query":"架空の形式別資料9について"}
+{"case_id":"synthetic_format_10","category":"synthetic multiformat","gold_chunk_ids":["synthetic_format_chunk_10"],"gold_doc_ids":["fictional_format_10.pdf"],"query":"架空の形式別資料10について"}
+{"case_id":"synthetic_format_abstain_11","category":"abstain","expected_abstain":true,"query":"存在しない架空の資料11について"}
+{"case_id":"synthetic_format_abstain_12","category":"abstain","expected_abstain":true,"query":"存在しない架空の資料12について"}

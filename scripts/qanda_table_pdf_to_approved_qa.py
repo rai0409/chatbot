@@ -10,6 +10,7 @@ if str(_ROOT) not in sys.path:
 # --- end bootstrap ---
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import re
@@ -18,16 +19,23 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from rag_core.approved_qa import validate_approved_qa_records
 from rag_core.question_normalization import normalize_question_for_exact_match
 
 
-TITLE = "観光デジタルアンケート分析業務 質問に対する回答"
-DEFAULT_CHUNK_ID_PREFIX = "tourism_q"
+# Document title and id prefix are per document (pass --title and
+# --chunk-id-prefix); nothing project-specific is hard-coded.
+DEFAULT_TITLE = ""
+DEFAULT_CHUNK_ID_PREFIX = "qanda_q"
 ALLOWED_STATUSES = {"draft", "approved", "rejected"}
-JP_CHAR_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff々〆〤]")
+# This converter only produces drafts: approval is a separate human review
+# step (scripts/approved_qa_review.py), never a side effect of extraction.
+GENERATION_STATUSES = {"draft"}
+JP_CHAR_RE = re.compile(r"[぀-ヿ㐀-鿿々〆〤]")
+_HEADER_WORDS = {"No", "NO", "№", "質問項目", "質問内容", "回答"}
+_LINE_MERGE_TOLERANCE = 1.5
 
 
 @dataclass(frozen=True)
@@ -64,7 +72,7 @@ def _compact(value: Any) -> str:
 def cleanup_text(text: str) -> str:
     """Normalize PDF-extracted table cell text without semantic rewriting."""
     text = unicodedata.normalize("NFKC", text or "")
-    text = text.replace("\u3000", " ")
+    text = text.replace("　", " ")
     text = re.sub(r"[\r\n\t]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(rf"(?<={JP_CHAR_RE.pattern})\s+(?={JP_CHAR_RE.pattern})", "", text)
@@ -109,14 +117,147 @@ def _row_bounds(number_words: Sequence[Word], *, header_bottom_y: float, page_bo
 
 
 def _header_bottom_y(words: Sequence[Word]) -> float:
-    header_words = [
-        word
-        for word in words
-        if cleanup_text(word.text) in {"No", "NO", "№", "質問項目", "質問内容", "回答"}
-    ]
+    header_words = [word for word in words if cleanup_text(word.text) in _HEADER_WORDS]
     if header_words:
         return max(word.y1 for word in header_words) + 3
     return 70.0
+
+
+def _merge_line_positions(ys: Iterable[float]) -> List[float]:
+    merged: List[float] = []
+    for y in sorted(ys):
+        if merged and abs(y - merged[-1]) <= _LINE_MERGE_TOLERANCE:
+            continue
+        merged.append(y)
+    return merged
+
+
+def _cells(words: Sequence[Word], *, item_x: float, question_x: float, answer_x: float) -> Dict[str, str]:
+    return {
+        "item": _line_text([w for w in words if item_x <= w.x0 < question_x]),
+        "question": _line_text([w for w in words if question_x <= w.x0 < answer_x]),
+        "answer": _line_text([w for w in words if w.x0 >= answer_x]),
+    }
+
+
+def _join_cell(first: str, second: str) -> str:
+    return cleanup_text(" ".join(part for part in (first, second) if part))
+
+
+def words_to_rows_detailed(
+    words: Sequence[Word],
+    *,
+    item_x: float = 70.0,
+    question_x: float = 155.0,
+    answer_x: float = 470.0,
+    page_bottom_y: float = 595.0,
+    hlines: Optional[Dict[int, Sequence[float]]] = None,
+) -> Dict[str, Any]:
+    """Group words into numbered rows, page by page.
+
+    With ruling lines (hlines: page -> y positions of horizontal lines) a row
+    is the band between two lines, so a vertically centred number cell or a
+    multi-line answer no longer bleeds into the neighbouring row. Without
+    lines the historical midpoint rule is used.
+
+    Returns rows (including incomplete ones, flagged by empty cells),
+    `leading` text found above the first numbered row of each page (the
+    continuation of the previous page's last row) and `dropped` diagnostics.
+    """
+    by_page: Dict[int, List[Word]] = {}
+    for word in words:
+        if cleanup_text(word.text):
+            by_page.setdefault(word.page, []).append(word)
+
+    rows: List[QARow] = []
+    leading: Dict[int, Dict[str, str]] = {}
+    dropped: List[Dict[str, Any]] = []
+    for page, page_words in sorted(by_page.items()):
+        header_bottom = _header_bottom_y(page_words)
+        has_header = any(cleanup_text(w.text) in _HEADER_WORDS for w in page_words)
+        number_words = [word for word in page_words if _is_row_number_word(word, item_x=item_x)]
+        # Lines above the header row are page decoration; a continuation page
+        # without a header row keeps every line (its first band continues the
+        # previous page's last row).
+        min_line_y = header_bottom - 4 if has_header else 0.0
+        page_lines = _merge_line_positions(
+            y for y in (hlines or {}).get(page, []) if min_line_y <= y <= page_bottom_y
+        )
+        bands: List[tuple[Optional[Word], float, float]] = []
+        if len(page_lines) >= 2:
+            for top, bottom in zip(page_lines, page_lines[1:]):
+                inside = [w for w in number_words if top <= w.cy < bottom]
+                bands.append((min(inside, key=lambda w: w.cy) if inside else None, top, bottom))
+        else:
+            bands = [(n, t, b) for n, t, b in _row_bounds(number_words, header_bottom_y=header_bottom, page_bottom_y=page_bottom_y)]
+
+        seen_number = False
+        for number_word, top, bottom in bands:
+            band_words = [
+                w for w in page_words
+                if top <= w.cy < bottom and w is not number_word and cleanup_text(w.text) not in _HEADER_WORDS
+            ]
+            cells = _cells(band_words, item_x=item_x, question_x=question_x, answer_x=answer_x)
+            if number_word is None:
+                if not any(cells.values()):
+                    continue
+                if not seen_number:
+                    leading[page] = cells
+                elif rows and rows[-1].page == page:
+                    last = rows[-1]
+                    rows[-1] = dataclasses.replace(
+                        last,
+                        question_item=_join_cell(last.question_item, cells["item"]),
+                        question=_join_cell(last.question, cells["question"]),
+                        answer=_join_cell(last.answer, cells["answer"]),
+                    )
+                continue
+            seen_number = True
+            try:
+                question_no = int(cleanup_text(number_word.text))
+            except ValueError:
+                dropped.append({"page": page, "reason": "invalid_row_number"})
+                continue
+            rows.append(
+                QARow(
+                    page=page,
+                    question_no=question_no,
+                    question_item=cells["item"],
+                    question=cells["question"],
+                    answer=cells["answer"],
+                )
+            )
+    return {"rows": rows, "leading": leading, "dropped": dropped}
+
+
+def merge_page_continuations(rows: Sequence[QARow], leading: Dict[int, Dict[str, str]]) -> List[QARow]:
+    """Append text found at the top of a page to the last row of the previous page."""
+    merged: List[QARow] = []
+    for row in rows:
+        if merged and row.page != merged[-1].page:
+            cont = leading.get(row.page)
+            if cont:
+                last = merged[-1]
+                merged[-1] = dataclasses.replace(
+                    last,
+                    question_item=_join_cell(last.question_item, cont["item"]),
+                    question=_join_cell(last.question, cont["question"]),
+                    answer=_join_cell(last.answer, cont["answer"]),
+                )
+                leading = {k: v for k, v in leading.items() if k != row.page}
+        merged.append(row)
+    if merged:
+        # A continuation page that has no numbered row of its own.
+        for page in sorted(p for p in leading if p > merged[-1].page):
+            cont = leading[page]
+            last = merged[-1]
+            merged[-1] = dataclasses.replace(
+                last,
+                question_item=_join_cell(last.question_item, cont["item"]),
+                question=_join_cell(last.question, cont["question"]),
+                answer=_join_cell(last.answer, cont["answer"]),
+            )
+    return merged
 
 
 def words_to_rows(
@@ -126,47 +267,18 @@ def words_to_rows(
     question_x: float = 155.0,
     answer_x: float = 470.0,
     page_bottom_y: float = 595.0,
+    hlines: Optional[Dict[int, Sequence[float]]] = None,
 ) -> List[QARow]:
-    by_page: dict[int, List[Word]] = {}
-    for word in words:
-        if cleanup_text(word.text):
-            by_page.setdefault(word.page, []).append(word)
-
-    rows: List[QARow] = []
-    for page, page_words in sorted(by_page.items()):
-        header_bottom = _header_bottom_y(page_words)
-        number_words = [word for word in page_words if _is_row_number_word(word, item_x=item_x)]
-        for number_word, top, bottom in _row_bounds(
-            number_words,
-            header_bottom_y=header_bottom,
-            page_bottom_y=page_bottom_y,
-        ):
-            row_words = [
-                word
-                for word in page_words
-                if top <= word.cy < bottom and cleanup_text(word.text) != cleanup_text(number_word.text)
-            ]
-            item_words = [word for word in row_words if item_x <= word.x0 < question_x]
-            question_words = [word for word in row_words if question_x <= word.x0 < answer_x]
-            answer_words = [word for word in row_words if word.x0 >= answer_x]
-            try:
-                question_no = int(cleanup_text(number_word.text))
-            except Exception:
-                continue
-            question_item = _line_text(item_words)
-            question = _line_text(question_words)
-            answer = _line_text(answer_words)
-            if question and answer:
-                rows.append(
-                    QARow(
-                        page=page,
-                        question_no=question_no,
-                        question_item=question_item,
-                        question=question,
-                        answer=answer,
-                    )
-                )
-    return rows
+    detailed = words_to_rows_detailed(
+        words,
+        item_x=item_x,
+        question_x=question_x,
+        answer_x=answer_x,
+        page_bottom_y=page_bottom_y,
+        hlines=hlines,
+    )
+    rows = merge_page_continuations(detailed["rows"], detailed["leading"])
+    return [row for row in rows if row.question and row.answer]
 
 
 def _stable_qa_id(
@@ -190,7 +302,7 @@ def row_to_record(
     doc_version: str,
     status: str = "draft",
     created_at: str | None = None,
-    title: str = TITLE,
+    title: str = DEFAULT_TITLE,
     chunk_id_prefix: str = DEFAULT_CHUNK_ID_PREFIX,
 ) -> dict:
     if status not in ALLOWED_STATUSES:
@@ -213,7 +325,7 @@ def row_to_record(
                 "source_doc": source_doc,
                 "source_pages": [row.page],
                 "chunk_id": f"{chunk_id_prefix}{row.question_no:03d}",
-                "title": title,
+                "title": title or source_doc,
             }
         ],
         "tags": ["qanda_table", "candidate"],
@@ -289,25 +401,48 @@ def format_debug_words(words: Sequence[Word], *, limit: int = 80) -> str:
     return "\n".join(lines)
 
 
-def extract_pdf_words(pdf_path: str | Path, *, debug_page: int | None = None) -> tuple[List[Word], int, dict[int, float]]:
+def _page_hlines(page) -> List[float]:
+    # Horizontal ruling lines: line segments with (almost) equal y, and the
+    # top/bottom edges of thin rectangles that PDFs often use as borders
+    # (docextract.pdf, pdfplumber).
     try:
-        import fitz  # type: ignore
-    except Exception as exc:
-        raise RuntimeError("PyMuPDF is required. Install requirements-pdf.txt.") from exc
+        return page.horizontal_rules()
+    except Exception:
+        return []
 
+
+def extract_pdf_words(pdf_path: str | Path, *, debug_page: int | None = None) -> tuple[List[Word], int, dict[int, float]]:
+    words, page_count, page_bottoms, _hlines = extract_pdf_layout(pdf_path, debug_page=debug_page)
+    return words, page_count, page_bottoms
+
+
+def extract_pdf_layout(
+    pdf_path: str | Path, *, debug_page: int | None = None
+) -> tuple[List[Word], int, dict[int, float], dict[int, List[float]]]:
+    # pdfplumber + pypdfium2 through libs/docextract (PyMuPDF, AGPL-3.0, is
+    # no longer used). Coordinates are points from the top-left, as before.
+    from rag_core import extraction
+
+    dx = extraction.load()
     words: List[Word] = []
     page_bottoms: dict[int, float] = {}
-    with fitz.open(pdf_path) as doc:
-        page_count = len(doc)
-        for page_idx, page in enumerate(doc):
-            page_num = page_idx + 1
-            page_bottoms[page_num] = float(page.rect.y1)
-            if debug_page is not None and page_num != debug_page:
-                continue
-            for raw in page.get_text("words"):
-                x0, y0, x1, y1, text, *_ = raw
-                words.append(Word(float(x0), float(y0), float(x1), float(y1), str(text), page_num))
-    return words, page_count, page_bottoms
+    hlines: dict[int, List[float]] = {}
+    try:
+        with dx.open_pdf(pdf_path) as doc:
+            page_count = len(doc)
+            for page in doc.pages:
+                page_num = page.number
+                page_bottoms[page_num] = page.height
+                if debug_page is not None and page_num != debug_page:
+                    page.close()
+                    continue
+                hlines[page_num] = _page_hlines(page)
+                for x0, y0, x1, y1, text in page.words():
+                    words.append(Word(x0, y0, x1, y1, text, page_num))
+                page.close()
+    except dx.PdfUnavailable as exc:
+        raise RuntimeError(str(exc)) from exc
+    return words, page_count, page_bottoms, hlines
 
 
 def convert_pdf(
@@ -321,14 +456,17 @@ def convert_pdf(
     item_x: float = 70.0,
     question_x: float = 155.0,
     answer_x: float = 470.0,
-    title: str = TITLE,
+    title: str = DEFAULT_TITLE,
     chunk_id_prefix: str = DEFAULT_CHUNK_ID_PREFIX,
+    use_ruling_lines: bool = True,
     debug_words: bool = False,
     debug_page: int | None = None,
 ) -> dict:
-    if status not in ALLOWED_STATUSES:
-        raise ValueError(f"invalid status: {status}")
-    words, page_count, page_bottoms = extract_pdf_words(pdf_path, debug_page=debug_page if debug_words else None)
+    if status not in GENERATION_STATUSES:
+        raise ValueError(f"this converter only writes drafts (got status={status}); approve via review")
+    words, page_count, page_bottoms, hlines = extract_pdf_layout(
+        pdf_path, debug_page=debug_page if debug_words else None
+    )
     if debug_words:
         print(format_debug_words(words))
         if debug_page is not None:
@@ -342,17 +480,35 @@ def convert_pdf(
             }
 
     all_rows: List[QARow] = []
+    leading: Dict[int, Dict[str, str]] = {}
+    dropped: List[Dict[str, Any]] = []
     for page in sorted({word.page for word in words}):
         page_words = [word for word in words if word.page == page]
-        all_rows.extend(
-            words_to_rows(
-                page_words,
-                item_x=item_x,
-                question_x=question_x,
-                answer_x=answer_x,
-                page_bottom_y=page_bottoms.get(page, 595.0),
-            )
+        detailed = words_to_rows_detailed(
+            page_words,
+            item_x=item_x,
+            question_x=question_x,
+            answer_x=answer_x,
+            page_bottom_y=page_bottoms.get(page, 595.0),
+            hlines=hlines if use_ruling_lines else None,
         )
+        all_rows.extend(detailed["rows"])
+        leading.update(detailed["leading"])
+        dropped.extend(detailed["dropped"])
+
+    merged = merge_page_continuations(all_rows, leading)
+    complete: List[QARow] = []
+    for row in merged:
+        if row.question and row.answer:
+            complete.append(row)
+        else:
+            dropped.append(
+                {
+                    "page": row.page,
+                    "question_no": row.question_no,
+                    "reason": "missing_answer" if row.question else "missing_question",
+                }
+            )
 
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     raw_records = [
@@ -366,7 +522,7 @@ def convert_pdf(
             title=title,
             chunk_id_prefix=chunk_id_prefix,
         )
-        for row in all_rows
+        for row in complete
     ]
     records, duplicate_count = dedupe_records(raw_records)
     errors = validate_records(records)
@@ -375,12 +531,17 @@ def convert_pdf(
     write_jsonl(output_path, records)
 
     status_counts = Counter(record.get("status") for record in records)
+    drop_reasons = Counter(item["reason"] for item in dropped)
     summary = {
         "pages": page_count,
-        "raw_rows": len(all_rows),
+        "raw_rows": len(merged),
         "written": len(records),
-        "skipped": len(all_rows) - len(records),
+        "skipped": len(merged) - len(records),
         "duplicate_count": duplicate_count,
+        "dropped_rows": len(dropped),
+        "dropped_by_reason": dict(sorted(drop_reasons.items())),
+        "dropped_detail": dropped[:50],
+        "pages_with_ruling_lines": sum(1 for ys in hlines.values() if len(ys) >= 2) if use_ruling_lines else 0,
         "status_counts": dict(status_counts),
         "output_path": str(output_path),
     }
@@ -390,28 +551,32 @@ def convert_pdf(
         f"raw_rows={summary['raw_rows']} "
         f"written={summary['written']} "
         f"skipped={summary['skipped']} "
+        f"dropped_rows={summary['dropped_rows']} "
         f"duplicate_count={summary['duplicate_count']} "
         f"status_counts={summary['status_counts']} "
         f"output_path={summary['output_path']}"
     )
+    if summary["dropped_rows"]:
+        print(f"WARN: dropped rows by reason: {summary['dropped_by_reason']}")
     if summary["written"] < 5:
         print("WARN: extracted Q&A row count is unexpectedly low; tune --item-x/--question-x/--answer-x if needed.")
     return summary
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Convert Japanese Q&A table PDFs to approved-QA JSONL.")
+    parser = argparse.ArgumentParser(description="Convert Japanese Q&A table PDFs to draft approved-QA JSONL.")
     parser.add_argument("--pdf", required=True, dest="pdf_path")
     parser.add_argument("--out", required=True, dest="output_path")
     parser.add_argument("--source-doc", required=True)
     parser.add_argument("--tenant-id", default="default")
     parser.add_argument("--doc-version", default="v1")
-    parser.add_argument("--status", default="draft", choices=["draft", "approved", "rejected"])
-    parser.add_argument("--title", default=TITLE)
+    parser.add_argument("--status", default="draft", choices=sorted(GENERATION_STATUSES))
+    parser.add_argument("--title", default=DEFAULT_TITLE, help="document title shown in citations")
     parser.add_argument("--chunk-id-prefix", default=DEFAULT_CHUNK_ID_PREFIX)
     parser.add_argument("--item-x", type=float, default=70.0)
     parser.add_argument("--question-x", type=float, default=155.0)
     parser.add_argument("--answer-x", type=float, default=470.0)
+    parser.add_argument("--no-ruling-lines", action="store_true", help="ignore table borders; use the midpoint rule")
     parser.add_argument("--debug-words", action="store_true")
     parser.add_argument("--debug-page", type=int)
     args = parser.parse_args()
@@ -428,10 +593,11 @@ def main() -> int:
             question_x=args.question_x,
             answer_x=args.answer_x,
             title=args.title,
+            use_ruling_lines=not args.no_ruling_lines,
             debug_words=args.debug_words,
             debug_page=args.debug_page,
         )
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     return 0

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import ipaddress
 import json
 import math
 import os
@@ -72,13 +71,13 @@ def _number(value: Any, label: str) -> float:
 
 def validate_contract(contract: dict[str, Any]) -> None:
     _exact_keys(contract, {"schema_version", "profile", "inputs", "embedding", "observed_quality", "release_invariants", "promotion"}, "contract")
-    if contract["schema_version"] != "real_vector_quality_baseline_contract.v1":
+    if contract["schema_version"] not in ("real_vector_quality_baseline_contract.v1", "real_vector_quality_baseline_contract.v2"):
         raise ContractError("unsupported contract schema")
     p = _exact_keys(contract["profile"], {"name", "purpose", "real_vector", "real_generation", "ordinary_ci_required", "release_gate_required"}, "profile")
-    if (p["name"], p["real_vector"], p["real_generation"], p["ordinary_ci_required"], p["release_gate_required"]) != ("retrieval_real_vector_quality", True, False, False, True):
+    if (p["name"], p["real_vector"], p["real_generation"], p["ordinary_ci_required"], p["release_gate_required"]) != (("retrieval_real_vector_quality_v2" if contract["schema_version"].endswith(".v2") else "retrieval_real_vector_quality"), True, False, False, True):
         raise ContractError("invalid profile")
     i = _exact_keys(contract["inputs"], {"cases_path", "cases_sha256", "chunks_path", "chunks_sha256", "modes", "top_k", "eval_k", "tenant_id", "expected_case_count", "expected_mode_count", "expected_row_count"}, "inputs")
-    expected_inputs = {"cases_path": "eval/cases/retrieval_cases.jsonl", "chunks_path": "eval/cases/smoke_chunks.jsonl", "modes": MODES, "top_k": 20, "eval_k": 5, "tenant_id": "default", "expected_case_count": 25, "expected_mode_count": 4, "expected_row_count": 100}
+    expected_inputs = {"cases_path": ("eval/cases/retrieval_v2_cases.jsonl" if contract["schema_version"].endswith(".v2") else "eval/cases/retrieval_cases.jsonl"), "chunks_path": ("eval/cases/smoke_v2_chunks.jsonl" if contract["schema_version"].endswith(".v2") else "eval/cases/smoke_chunks.jsonl"), "modes": MODES, "top_k": 20, "eval_k": 5, "tenant_id": "default", "expected_case_count": 25, "expected_mode_count": 4, "expected_row_count": 100}
     for key, expected in expected_inputs.items():
         if i.get(key) != expected or (key.startswith("expected_") or key in {"top_k", "eval_k"}) and isinstance(i.get(key), bool):
             raise ContractError(f"invalid input: {key}")

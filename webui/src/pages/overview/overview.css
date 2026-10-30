@@ -1,0 +1,20 @@
+.ov-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 14px; align-items: start; }
+.ov-grid .panel h2 { font-size: 15px; margin: 0 0 8px; }
+.ov-scroll { overflow-x: auto; }
+.ov-status { display: inline-block; border-radius: 999px; padding: 1px 10px; font-size: 12px; font-weight: 600; border: 1px solid currentColor; }
+.ov-status.OK { color: #11733b; }
+.ov-status.WARN { color: #8a5a00; }
+.ov-status.CRITICAL { color: #a12a2a; }
+@media (prefers-color-scheme: dark) {
+  .ov-status.OK { color: #6fd49b; }
+  .ov-status.WARN { color: #f3cf7a; }
+  .ov-status.CRITICAL { color: #ff9b9b; }
+}
+.ov-bar { display: block; height: 8px; min-width: 40px; border-radius: 4px; background: currentColor; opacity: 0.65; }
+.ov-bartrack { width: 45%; }
+.ov-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin: 8px 0; }
+.ov-actions label { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.ov-pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; margin: 0; max-height: 320px; overflow: auto; }
+.ov-dl dt { font-weight: 600; margin-top: 8px; }
+.ov-dl dd { margin: 0; }
+.ov-confirm { margin-top: 8px; }

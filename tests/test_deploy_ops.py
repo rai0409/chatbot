@@ -106,6 +106,33 @@ def test_backup_restore_round_trip_with_hash_verification(tmp_path):
     assert (target / "runs" / "audit" / "chat_events.jsonl").exists()
 
 
+def test_the_state_the_console_keeps_is_backed_up_and_restored(tmp_path):
+    src = _make_source(tmp_path)
+    kept = {
+        "runs/settings/runtime_settings.json": '{"rev": 3}',
+        "runs/records/records-2026-10-29.jsonl": '{"id":"rec-1"}\n',
+        "runs/records/reviews.jsonl": '{"record_id":"rec-1","verdict":"correct"}\n',
+        "runs/records/.salt": "salt-not-a-secret",
+        "runs/usage/llm_usage-2026-10-29.jsonl": '{"event":"call"}\n',
+        "runs/tenant_eval/proposals/p1.json": "{}",
+        "data/golden_qa/tenant_a.jsonl": '{"case_id":"q1"}\n',
+        "data/profile_versions/demo/pointer.json": "{}",
+        "data/contracts/tenant_a/c1.json": "{}",
+        "data/sources/s1.json": "{}",
+    }
+    for relative, text in kept.items():
+        path = src / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    out = tmp_path / "backups"
+    assert _run(["bash", "scripts/backup.sh", "--source-dir", str(src), "--output-dir", str(out)]).returncode == 0
+    target = tmp_path / "restored"
+    restore = _run(["bash", "scripts/restore.sh", str(next(out.glob("chatbot_backup_*.tar.gz"))), "--target", str(target)])
+    assert restore.returncode == 0, restore.stderr
+    for relative, text in kept.items():
+        assert (target / relative).read_text(encoding="utf-8") == text, relative
+
+
 def test_restore_fails_on_corrupted_archive_content(tmp_path):
     src = _make_source(tmp_path)
     out = tmp_path / "backups"

@@ -9,6 +9,7 @@ import config
 from rag_core import audit_log
 from rag_core.approved_qa import ApprovedAnswer, ApprovedCitation
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 REQUIRED_ENVELOPE_KEYS = {
@@ -29,11 +30,11 @@ REQUIRED_ENVELOPE_KEYS = {
 
 @pytest.fixture(autouse=True)
 def _disable_product_preview_audit_write(monkeypatch):
-    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", lambda event: True)
+    monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", lambda event: True)
 
 
 def _disable_exact(monkeypatch):
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *args, **kwargs: None)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *args, **kwargs: None)
 
 
 def _fake_decision(candidates):
@@ -49,7 +50,7 @@ def _fake_decision(candidates):
 
 def test_product_preview_response_includes_envelope_keys_and_feedback_token(monkeypatch):
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "decide_approved_similar_candidate", _fake_decision)
     monkeypatch.setattr(
         main.approved_similar,
@@ -77,7 +78,7 @@ def test_product_preview_response_includes_envelope_keys_and_feedback_token(monk
 
 def test_product_preview_accepts_message_when_query_missing(monkeypatch):
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "decide_approved_similar_candidate", _fake_decision)
     monkeypatch.setattr(
         main.approved_similar,
@@ -102,7 +103,7 @@ def test_product_preview_missing_query_and_message_returns_400():
 
 def test_product_preview_similar_candidates_do_not_populate_final_answer_text(monkeypatch):
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "decide_approved_similar_candidate", _fake_decision)
     monkeypatch.setattr(
         main.approved_similar,
@@ -128,7 +129,7 @@ def test_product_preview_similar_candidates_do_not_populate_final_answer_text(mo
 def test_product_preview_candidates_are_bounded_by_top_k(monkeypatch):
     captured = {}
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "decide_approved_similar_candidate", _fake_decision)
 
     def _fake_search(query, **kwargs):
@@ -151,7 +152,7 @@ def test_product_preview_candidates_are_bounded_by_top_k(monkeypatch):
 
 def test_product_preview_no_candidate_path_returns_no_answer(monkeypatch):
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "search_approved_similar_candidates", lambda *args, **kwargs: [])
 
     response = main.chat_product_preview(main.ProductPreviewChatRequest(query="見つからない質問"))
@@ -175,7 +176,7 @@ def test_product_preview_exact_match_returns_exact_answer(monkeypatch):
         tenant_id="default",
         language="ja",
     )
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *args, **kwargs: approved)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *args, **kwargs: approved)
 
     response = main.chat_product_preview(
         main.ProductPreviewChatRequest(query="完全一致質問")
@@ -194,8 +195,8 @@ def test_product_preview_exact_match_returns_exact_answer(monkeypatch):
 def test_product_preview_appends_bounded_jsonl_audit_event(monkeypatch, tmp_path):
     _disable_exact(monkeypatch)
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", audit_log.append_product_preview_chat_audit_event)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", audit_log.append_product_preview_chat_audit_event)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "decide_approved_similar_candidate", _fake_decision)
     monkeypatch.setattr(
         main.approved_similar,
@@ -246,8 +247,8 @@ def test_product_preview_appends_bounded_jsonl_audit_event(monkeypatch, tmp_path
 def test_product_preview_audit_bounds_user_query(monkeypatch, tmp_path):
     _disable_exact(monkeypatch)
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", audit_log.append_product_preview_chat_audit_event)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", audit_log.append_product_preview_chat_audit_event)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "search_approved_similar_candidates", lambda *args, **kwargs: [])
     query = "長い質問" * 200
 
@@ -261,8 +262,8 @@ def test_product_preview_audit_bounds_user_query(monkeypatch, tmp_path):
 def test_product_preview_no_candidate_fallback_writes_audit_event(monkeypatch, tmp_path):
     _disable_exact(monkeypatch)
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", audit_log.append_product_preview_chat_audit_event)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", audit_log.append_product_preview_chat_audit_event)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "search_approved_similar_candidates", lambda *args, **kwargs: [])
 
     response = main.chat_product_preview(main.ProductPreviewChatRequest(query="候補なし"))
@@ -276,8 +277,8 @@ def test_product_preview_no_candidate_fallback_writes_audit_event(monkeypatch, t
 
 def test_product_preview_audit_write_failure_does_not_fail_endpoint(monkeypatch):
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", lambda event: False)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", lambda event: False)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "search_approved_similar_candidates", lambda *args, **kwargs: [])
 
     response = main.chat_product_preview(main.ProductPreviewChatRequest(query="監査失敗"))

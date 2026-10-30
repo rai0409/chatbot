@@ -7,7 +7,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Sequence
+from typing import Any, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -30,6 +30,7 @@ KEY_FILES = {
     "rate_limit": ROOT / "webapi" / "rate_limit.py",
     "security_operations_doc": ROOT / "docs" / "security_operations.md",
     "webapi_main": ROOT / "webapi" / "main.py",
+    "webapi_chat": ROOT / "webapi" / "routers" / "chat.py",
     "smoke_script": ROOT / "scripts" / "product_readiness_smoke.sh",
     "checklist": ROOT / "docs" / "production_readiness_checklist.md",
     "product_profile_helper": ROOT / "rag_core" / "product_profile.py",
@@ -352,7 +353,8 @@ def _admin_auth_summary(root: Path, paths: dict[str, Path]) -> dict[str, Any]:
 
 
 def _security_operations_summary(paths: dict[str, Path]) -> dict[str, Any]:
-    main_text = _read_text(paths["webapi_main"])
+    # The chat routes moved from main.py to webapi/routers/chat.py (S7): read both.
+    main_text = _read_text(paths["webapi_main"]) + _read_text(paths.get("webapi_chat", Path()))
     api_auth_text = _read_text(paths["api_auth"])
     rate_limit_text = _read_text(paths["rate_limit"])
     # Protected POST endpoints share one dependency that enforces API auth and
@@ -450,7 +452,7 @@ def _safety_checks(
     citation_metadata: dict[str, Any],
     rerank_promotion: dict[str, Any],
 ) -> dict[str, bool]:
-    main_text = _read_text(paths["webapi_main"])
+    main_text = _read_text(paths["webapi_main"]) + _read_text(paths.get("webapi_chat", Path()))
     product_contract_text = _read_text(paths["product_contract"])
     production_safe = product_profiles.get("production_safe") if isinstance(product_profiles.get("production_safe"), dict) else {}
     all_profile_summaries = [

@@ -310,16 +310,15 @@ def test_pptx_slides_and_tables(tmp_path):
 
 
 def test_pdf_adapter_wraps_existing_converter(tmp_path):
-    fitz = pytest.importorskip("fitz")
+    pytest.importorskip("pdfplumber")
+    from rag_core import extraction
+
+    extraction.load()
+    from docextract.testing import simple_pdf
+
     src = tmp_path / "sample.pdf"
-    doc = fitz.open()
-    page = doc.new_page()
-    page.insert_text(
-        (72, 72),
-        "Operations manual. Backup verification runs every morning at 06:00 JST.",
-    )
-    doc.save(str(src))
-    doc.close()
+    text = "Operations manual. Backup verification runs every morning at 06:00 JST."
+    src.write_bytes(simple_pdf([{"texts": [(72, 72, 11, text)]}]))
 
     chunks = convert_file_to_canonical_chunks(src, tenant_id="tenant_p")
 

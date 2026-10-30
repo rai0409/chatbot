@@ -83,7 +83,9 @@ def main() -> int:
     exact_probe = []
     for row in fixed_cases[: args.limit]:
         question = row.get("question") or ""
-        hits = lookup_approved_qa_exact(question, limit=3)
+        hits = lookup_approved_qa_exact(
+            question, tenant_id="default", limit=3, index_path=EXACT_INDEX, allow_near_match=True
+        )
         exact_probe.append(
             {
                 "case_id": row.get("case_id", ""),

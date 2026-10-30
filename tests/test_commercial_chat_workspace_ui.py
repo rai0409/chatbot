@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import config
 from rag_core import answer_cache
 from webapi import main, metrics_registry
+from webapi.routers import chat as chat_router
 
 
 def _setup(monkeypatch, tmp_path, *, auth=False):
@@ -28,9 +29,9 @@ def _setup(monkeypatch, tmp_path, *, auth=False):
         stream.calls.append((a, k))
         return iter(())
 
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
-    monkeypatch.setattr(main, "answer_query_stream", fake_stream)
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *a, **k: None)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "answer_query_stream", fake_stream)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: None)
     return stream
 
 

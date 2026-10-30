@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -89,9 +90,22 @@ class _StubChatResponse:
 
 
 class _StubChatCompletions:
+    # Deterministic stand-in for the LLM: quotes the first sentence of the
+    # first three evidence blocks, so the answer passes the grounding check (every bullet
+    # must share a term with the evidence it cites, stage 5).
     def create(self, model: str, messages: Sequence[Dict[str, str]], temperature: float = 0, **kwargs):
-        del model, messages, temperature, kwargs
-        return _StubChatResponse("- 根拠に基づく回答です [S1]\n不足: なし [S1]")
+        del model, temperature, kwargs
+        # Evidence is in the user message, one "[S1] ..." line per source (the
+        # system rules also mention [S1] and <根拠>).
+        prompt = next((str(m.get("content") or "") for m in reversed(list(messages)) if m.get("role") == "user"), "")
+        found = re.findall(r"^\[S(\d+)\]\s*([^\n]+)", prompt, flags=re.M)[:3]
+        if not found:
+            return _StubChatResponse("不足: 回答に必要な記載がありません")
+        bullets = []
+        for number, text in found:
+            sentence = re.split(r"(?<=。)", text.strip())[0][:120].strip()
+            bullets.append(f"- {sentence} [S{number}]")
+        return _StubChatResponse("\n".join(bullets))
 
 
 class _StubChat:
@@ -418,6 +432,8 @@ def _retrieval_mode_runtime(mode: str):
         rrf_k: Optional[int] = None,
         query_embedding=None,
         tenant_id: str = "default",
+        collection_name: Optional[str] = None,
+        create_collection_if_missing: bool = True,
     ):
         return retrieval.hybrid_retrieve(
             question,
@@ -430,6 +446,8 @@ def _retrieval_mode_runtime(mode: str):
             rrf_k=rrf_k,
             query_embedding=query_embedding,
             tenant_id=tenant_id,
+            collection_name=collection_name,
+            create_collection_if_missing=create_collection_if_missing,
         )
 
     def _bm25_only_bridge(
@@ -443,14 +461,17 @@ def _retrieval_mode_runtime(mode: str):
         rrf_k: Optional[int] = None,
         query_embedding=None,
         tenant_id: str = "default",
+        collection_name: Optional[str] = None,
+        create_collection_if_missing: bool = True,
     ):
-        del client, vector_top_k, rrf_k, query_embedding
+        del client, vector_top_k, rrf_k, query_embedding, create_collection_if_missing
         return retrieval.keyword_retrieve(
             question,
             top_k=bm25_top_k or top_k,
             allowed_types=allowed_types,
             allowed_qualities=allowed_qualities,
             tenant_id=tenant_id,
+            collection_name=collection_name,
         )
 
     def _dense_only_bridge(
@@ -464,6 +485,8 @@ def _retrieval_mode_runtime(mode: str):
         rrf_k: Optional[int] = None,
         query_embedding=None,
         tenant_id: str = "default",
+        collection_name: Optional[str] = None,
+        create_collection_if_missing: bool = True,
     ):
         del bm25_top_k, rrf_k
         return retrieval.vector_retrieve(
@@ -474,6 +497,8 @@ def _retrieval_mode_runtime(mode: str):
             allowed_qualities=allowed_qualities,
             query_embedding=query_embedding,
             tenant_id=tenant_id,
+            collection_name=collection_name,
+            create_collection_if_missing=create_collection_if_missing,
         )
 
     def _identity_rerank(
@@ -617,9 +642,10 @@ def evaluate_expectations(
     return checks
 
 
-def _overall_pass(checks: Dict[str, Dict[str, Any]]) -> bool:
+def _overall_pass(checks: Dict[str, Dict[str, Any]]) -> Optional[bool]:
+    # A case without expectations is unevaluated (None), never a pass.
     if not checks:
-        return True
+        return None
     return all(bool(v.get("pass")) for v in checks.values())
 
 
@@ -677,6 +703,23 @@ def _rerank_gain(before_rank: Optional[int], after_rank: Optional[int]) -> Optio
     return before_rank - after_rank
 
 
+def _dropped_by_rerank(before_rank: Optional[int], after_rank: Optional[int]) -> bool:
+    # Gold was retrieved before rerank but is gone afterwards. rerank_gain is
+    # None in that case, so this flag keeps the regression visible.
+    return before_rank is not None and after_rank is None
+
+
+def _not_evaluated(*, real_vector: bool, real_generation: bool) -> List[str]:
+    # Components replaced by stubs. Metrics from such a run must not be used
+    # as accuracy claims for those components (use eval/bench instead).
+    items: List[str] = []
+    if not real_vector:
+        items.extend(["dense_retrieval", "hybrid_fusion"])
+    if not real_generation:
+        items.append("answer_generation")
+    return items
+
+
 def _trace_chunk_list(trace: Dict[str, Any], key: str) -> Optional[Sequence[RetrievedChunk]]:
     raw = trace.get(key)
     if isinstance(raw, (list, tuple)):
@@ -712,15 +755,17 @@ def _best_rank_from_ids(ranked_ids: Sequence[str], gold_ids: Sequence[str]) -> O
     return None
 
 
-def _hit_at_k(best_rank: Optional[int], k: int) -> Optional[bool]:
+def _hit_at_k(best_rank: Optional[int], k: int, *, has_gold: bool = False) -> Optional[bool]:
+    # None only when the case has no gold labels; a labeled miss is False.
     if best_rank is None:
-        return None
+        return False if has_gold else None
     return best_rank <= k
 
 
-def _mrr_at_k(best_rank: Optional[int], k: int) -> Optional[float]:
+def _mrr_at_k(best_rank: Optional[int], k: int, *, has_gold: bool = False) -> Optional[float]:
+    # A labeled miss counts as 0.0 (excluding misses inflated mean MRR).
     if best_rank is None:
-        return None
+        return 0.0 if has_gold else None
     if best_rank > k:
         return 0.0
     return 1.0 / float(best_rank)
@@ -871,6 +916,12 @@ def run_eval(
                 selected_context_preview=trace.get("selected_context_preview", []),
             )
             case_pass = _overall_pass(checks)
+            if case.gold_chunk_ids:
+                dropped = _dropped_by_rerank(gold_chunk_best_rank_before, gold_chunk_best_rank_after)
+            elif case.gold_doc_ids:
+                dropped = _dropped_by_rerank(gold_doc_best_rank_before, gold_doc_best_rank_after)
+            else:
+                dropped = False
             before_top_id = before[0].get("chunk_id") if before else None
             after_top_id = after[0].get("chunk_id") if after else None
             rerank_top_changed: Optional[bool] = None
@@ -910,6 +961,7 @@ def run_eval(
                 "abstain_check_pass": abstain_check_pass,
                 "rerank_top_changed": rerank_top_changed,
                 "rerank_gain": rerank_gain,
+                "gold_dropped_by_rerank": dropped,
                 "before_rerank_ids": _compact_ids(before_raw),
                 "after_rerank_ids": _compact_ids(after_raw),
             }
@@ -924,8 +976,9 @@ def run_eval(
                     f"answer={record['final_answer_summary']}"
                 )
 
-    passed = sum(1 for r in results if r["overall_pass"])
-    failed = len(results) - passed
+    passed = sum(1 for r in results if r["overall_pass"] is True)
+    failed = sum(1 for r in results if r["overall_pass"] is False)
+    unevaluated = len(results) - passed - failed
     summary = {
         "schema_version": SCHEMA_VERSION,
         "runner_version": RUNNER_VERSION,
@@ -933,6 +986,9 @@ def run_eval(
         "total_cases": len(results),
         "passed_cases": passed,
         "failed_cases": failed,
+        "unevaluated_cases": unevaluated,
+        "gold_dropped_by_rerank": sum(1 for r in results if r.get("gold_dropped_by_rerank")),
+        "not_evaluated": _not_evaluated(real_vector=real_vector, real_generation=real_generation),
         "gold_chunk_cases": sum(1 for r in results if r.get("gold_chunk_ids")),
         "gold_chunk_hits": sum(1 for r in results if r.get("gold_chunk_hit") is True),
         "gold_doc_cases": sum(1 for r in results if r.get("gold_doc_ids")),
@@ -952,7 +1008,7 @@ def run_eval(
 
     if not quiet:
         print(
-            f"\nSummary: passed={passed}/{len(results)} failed={failed} "
+            f"\nSummary: passed={passed}/{len(results)} failed={failed} unevaluated={unevaluated} "
             f"output={output_path}"
         )
     return payload
@@ -1020,16 +1076,6 @@ def run_retrieval_aware_eval(
                     after_chunk_ids = _compact_ids(after_raw)
                     before_chunk_ids_full = [_chunk_id(ch) for ch in (before_raw or [])]
                     after_chunk_ids_full = [_chunk_id(ch) for ch in (after_raw or [])]
-                    before_doc_ids = (
-                        [_source_doc(ch) for ch in before_raw[:_COMPACT_ID_LIMIT]]
-                        if before_raw is not None
-                        else None
-                    )
-                    after_doc_ids = (
-                        [_source_doc(ch) for ch in after_raw[:_COMPACT_ID_LIMIT]]
-                        if after_raw is not None
-                        else None
-                    )
                     before_doc_ids_full = [_source_doc(ch) for ch in (before_raw or [])]
                     after_doc_ids_full = [_source_doc(ch) for ch in (after_raw or [])]
 
@@ -1060,6 +1106,9 @@ def run_retrieval_aware_eval(
                     if before_top is not None and after_top is not None:
                         rerank_top_changed = bool(before_top != after_top)
 
+                    # Gold ids of a case that must be abstained on are not
+                    # retrieval targets: such rows are not scored as misses.
+                    labeled = expected_abstain is not True
                     row = {
                         "case_id": case.case_id,
                         "question": case.query,
@@ -1067,10 +1116,10 @@ def run_retrieval_aware_eval(
                         "query_type": case.query_type,
                         "gold_doc_ids": list(case.gold_doc_ids),
                         "gold_chunk_ids": list(case.gold_chunk_ids),
-                        "gold_doc_hit": _hit_at_k(gold_doc_best_rank_after, eval_k),
-                        "gold_chunk_hit": _hit_at_k(gold_chunk_best_rank_after, eval_k),
-                        "gold_doc_hit_at_k": _hit_at_k(gold_doc_best_rank_after, eval_k),
-                        "gold_chunk_hit_at_k": _hit_at_k(gold_chunk_best_rank_after, eval_k),
+                        "gold_doc_hit": _hit_at_k(gold_doc_best_rank_after, eval_k, has_gold=labeled and bool(case.gold_doc_ids)),
+                        "gold_chunk_hit": _hit_at_k(gold_chunk_best_rank_after, eval_k, has_gold=labeled and bool(case.gold_chunk_ids)),
+                        "gold_doc_hit_at_k": _hit_at_k(gold_doc_best_rank_after, eval_k, has_gold=labeled and bool(case.gold_doc_ids)),
+                        "gold_chunk_hit_at_k": _hit_at_k(gold_chunk_best_rank_after, eval_k, has_gold=labeled and bool(case.gold_chunk_ids)),
                         "best_rank_before_rerank": best_before,
                         "best_rank_after_rerank": best_after,
                         "gold_doc_best_rank_before": gold_doc_best_rank_before,
@@ -1078,6 +1127,7 @@ def run_retrieval_aware_eval(
                         "gold_chunk_best_rank_before": gold_chunk_best_rank_before,
                         "gold_chunk_best_rank_after": gold_chunk_best_rank_after,
                         "rerank_gain": _rerank_gain(best_before, best_after),
+                        "gold_dropped_by_rerank": _dropped_by_rerank(best_before, best_after),
                         "rerank_top_changed": rerank_top_changed,
                         "before_rerank_ids": before_chunk_ids,
                         "after_rerank_ids": after_chunk_ids,
@@ -1085,8 +1135,8 @@ def run_retrieval_aware_eval(
                         "used_fallback": bool(answer.used_fallback),
                         "expected_abstain": expected_abstain,
                         "abstain_correct": abstain_correct,
-                        "mrr_at_k": _mrr_at_k(best_after, eval_k),
-                        "ndcg_at_k": _ndcg_at_k(ranked_for_metric, gold_for_metric, eval_k),
+                        "mrr_at_k": _mrr_at_k(best_after, eval_k, has_gold=labeled and bool(gold_for_metric)),
+                        "ndcg_at_k": _ndcg_at_k(ranked_for_metric, gold_for_metric, eval_k) if labeled and gold_for_metric else None,
                         "eval_k": eval_k,
                     }
                     rows.append(row)
@@ -1117,6 +1167,7 @@ def run_retrieval_aware_eval(
             "metric_skipped_query_count": len(mode_rows) - len(metric_rows),
             "mean_mrr_at_k": (sum(mrr_vals) / len(mrr_vals)) if mrr_vals else None,
             "mean_ndcg_at_k": (sum(ndcg_vals) / len(ndcg_vals)) if ndcg_vals else None,
+            "gold_dropped_by_rerank": sum(1 for r in mode_rows if r.get("gold_dropped_by_rerank")),
         }
 
     summary = {
@@ -1127,6 +1178,7 @@ def run_retrieval_aware_eval(
         "modes": mode_list,
         "total_rows": len(rows),
         "by_mode": summary_by_mode,
+        "not_evaluated": _not_evaluated(real_vector=real_vector, real_generation=real_generation),
     }
     if eval_collection_metadata:
         summary["evaluation_collection"] = eval_collection_metadata

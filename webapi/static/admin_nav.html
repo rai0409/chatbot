@@ -1,0 +1,66 @@
+<!-- Shared admin header (stage 10). main.py inserts this file where an admin
+     page has the marker comment "admin-nav". Session-cookie auth: state-changing
+     requests carry the CSRF token from the admin_csrf cookie, and an expired
+     session returns to /admin/login. -->
+<style>
+  .kd-admin-nav { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 8px 16px; background: #0f1f1c; color: #e5eeeb;
+                  font: 14px/1.4 system-ui, "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif; position: sticky; top: 0; z-index: 30; }
+  .kd-admin-nav .kd-brand { font-weight: 700; margin-right: 12px; }
+  .kd-admin-nav a { color: #cfe0db; text-decoration: none; padding: 6px 10px; border-radius: 8px; }
+  .kd-admin-nav a:hover, .kd-admin-nav a[aria-current="page"] { background: rgba(255,255,255,.1); color: #fff; }
+  .kd-admin-nav .kd-spacer { flex: 1; }
+  .kd-admin-nav button { font: inherit; font-size: 13px; color: #e5eeeb; background: transparent; border: 1px solid rgba(255,255,255,.25);
+                         border-radius: 8px; padding: 4px 10px; cursor: pointer; }
+  .kd-toast { position: fixed; right: 16px; bottom: 16px; background: #1f2933; color: #fff; padding: 10px 14px; border-radius: 10px;
+              font: 13px system-ui, sans-serif; box-shadow: 0 4px 12px rgba(0,0,0,.25); z-index: 40; }
+</style>
+<nav class="kd-admin-nav" aria-label="管理メニュー">
+  <span class="kd-brand">管理コンソール</span>
+  <a href="/admin">ダッシュボード</a>
+  <a href="/admin/ingestion">文書取込</a>
+  <a href="/admin/sources">文書ソース</a>
+  <a href="/admin/extraction">抽出レビュー</a>
+  <a href="/admin/contracts">契約管理</a>
+  <a href="/admin/review">レビュー</a>
+  <a href="/admin/synonyms">シノニム</a>
+  <a href="/console/">新コンソール</a>
+  <a href="/chat-ui">チャットへ</a>
+  <span class="kd-spacer"></span>
+  <button type="button" id="kdLogout">ログアウト</button>
+</nav>
+<script>
+(function () {
+  Array.prototype.forEach.call(document.querySelectorAll(".kd-admin-nav a"), function (a) {
+    if (a.getAttribute("href") === location.pathname.replace(/\/$/, "") || (a.getAttribute("href") === "/admin" && location.pathname === "/admin/")) {
+      a.setAttribute("aria-current", "page");
+    }
+  });
+  window.adminCsrf = function () {
+    var m = document.cookie.match(/(?:^|;\s*)admin_csrf=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : "";
+  };
+  window.adminToast = function (text) {
+    var t = document.createElement("div"); t.className = "kd-toast"; t.setAttribute("role", "status"); t.textContent = text;
+    document.body.appendChild(t); setTimeout(function () { t.remove(); }, 3500);
+  };
+  // fetch for admin pages: adds the CSRF header to state-changing requests and
+  // sends the browser back to the login page when the session has expired.
+  window.adminFetch = function (url, options) {
+    options = options || {};
+    var h = {};
+    var src = options.headers || {};
+    Object.keys(src).forEach(function (k) { h[k] = src[k]; });
+    var method = String(options.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD") h["X-CSRF-Token"] = window.adminCsrf();
+    options.headers = h;
+    options.credentials = "same-origin";
+    return fetch(url, options).then(function (r) {
+      if (r.status === 401) location.href = "/admin/login?next=" + encodeURIComponent(location.pathname);
+      return r;
+    });
+  };
+  document.getElementById("kdLogout").addEventListener("click", function () {
+    window.adminFetch("/admin/logout", { method: "POST" }).finally(function () { location.href = "/admin/login"; });
+  });
+})();
+</script>

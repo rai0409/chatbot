@@ -25,7 +25,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import config  # noqa: E402
-from rag_core import embedding_provider, ja_text, reranker, retrieval, store  # noqa: E402
+from rag_core import embedding_provider, ja_text, ja_tokenizer, reranker, retrieval, store  # noqa: E402
 from rag_core.question_normalization import normalize_question_for_exact_match  # noqa: E402
 from scripts import (  # noqa: E402
     validate_embedding_asset_contract,
@@ -187,6 +187,31 @@ def _source_hash(callables: Sequence[Any]) -> str:
 
 
 def tokenizer_version() -> str:
+    # The heuristic digest is unchanged from earlier baselines so existing
+    # reports stay comparable; the Sudachi path hashes its own sources plus
+    # every setting that changes the produced tokens.
+    if ja_tokenizer.active_tokenizer_name() == "sudachi":
+        digest = _source_hash(
+            [
+                retrieval._document_tokens,
+                retrieval._query_tokens,
+                ja_tokenizer.sudachi_tokens,
+                ja_tokenizer.morpheme_tokens,
+                ja_tokenizer.code_tokens,
+                ja_tokenizer.bigram_tokens,
+                ja_text.normalize_for_index,
+            ]
+        )
+        settings = deterministic_hash(
+            {
+                "tokenizer_version": ja_tokenizer.TOKENIZER_VERSION,
+                "normalization_version": ja_text.NORMALIZATION_VERSION,
+                "sudachi_dict": config.SUDACHI_DICT,
+                "sudachi_split_mode": config.SUDACHI_SPLIT_MODE,
+                "ngram_enabled": config.KEYWORD_NGRAM_ENABLED,
+            }
+        )
+        return f"sudachi-ja-tokenizer:{digest}:{settings[:12]}"
     digest = _source_hash(
         [retrieval._heuristic_tokenize, retrieval._normalize, ja_text.normalize_japanese_text, ja_text.extract_salient_terms_ja]
     )
@@ -196,9 +221,16 @@ def tokenizer_version() -> str:
 def reranker_fingerprint() -> str:
     payload = {
         "heuristic_source_hash": _source_hash([reranker.rerank_chunks]),
-        "hybrid_adjustment_source_hash": _source_hash(
-            [retrieval._hybrid_bucket_rank_adjustment, retrieval._apply_page_sensitive_adjustments]
+        "hybrid_fusion_source_hash": _source_hash(
+            [retrieval._fusion_settings, retrieval._dbsf_normalize, retrieval._fuse_hybrid_buckets]
         ),
+        "hybrid_fusion_settings": {
+            "method": config.HYBRID_FUSION,
+            "rrf_k": config.HYBRID_RRF_K,
+            "dense_weight": config.HYBRID_DENSE_WEIGHT,
+            "keyword_weight": config.HYBRID_KEYWORD_WEIGHT,
+            "exact_weight": config.HYBRID_EXACT_WEIGHT,
+        },
         "heuristic_settings": {
             "boost_faq_short_lookup": config.RERANK_BOOST_FAQ_SHORT_LOOKUP,
             "boost_procedure_doc_type": config.RERANK_BOOST_PROCEDURE_DOC_TYPE,
@@ -213,6 +245,7 @@ def reranker_fingerprint() -> str:
             "enabled": config.CROSS_ENCODER_RERANK_ENABLED,
             "model": config.CROSS_ENCODER_MODEL if config.CROSS_ENCODER_RERANK_ENABLED else None,
             "candidate_count": config.CROSS_ENCODER_TOP_N if config.CROSS_ENCODER_RERANK_ENABLED else 0,
+            "max_length": config.CROSS_ENCODER_MAX_LENGTH if config.CROSS_ENCODER_RERANK_ENABLED else 0,
         },
     }
     return deterministic_hash(payload)
@@ -290,8 +323,8 @@ def verify_baseline_runtime() -> dict[str, Any]:
         raise RuntimeError("baseline runtime asset identity mismatch")
 
     expected_versions = {
-        "sentence-transformers": "5.2.2",
-        "torch": "2.10.0+cpu",
+        "sentence-transformers": "5.7.0",
+        "torch": "2.14.1+cpu",
     }
     actual_versions = {
         name: importlib.metadata.version(name)
@@ -303,7 +336,7 @@ def verify_baseline_runtime() -> dict[str, Any]:
         import torch
     except Exception as exc:
         raise RuntimeError("baseline runtime torch validation failed") from exc
-    if torch.__version__ != "2.10.0+cpu" or torch.version.cuda is not None or torch.cuda.is_available():
+    if torch.__version__ != "2.14.1+cpu" or torch.version.cuda is not None or torch.cuda.is_available():
         raise RuntimeError("baseline runtime is not CPU-only")
     return {
         "provider": provider.name,

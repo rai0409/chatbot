@@ -1,0 +1,9 @@
+# Japanese morphological tokenizer for the keyword (BM25) index.
+# Optional: KEYWORD_TOKENIZER=auto falls back to the heuristic tokenizer when
+# these are absent. SudachiPy >= 0.6 is the binding for sudachi.rs (Rust).
+# The SudachiDict Python packages fetch the dictionary at install time; for
+# offline/on-prem delivery bundle it, and review the license of its
+# UniDic/NEologd-derived parts before redistribution.
+# Pin exact versions in constraints/ after verification.
+sudachipy>=0.6,<0.7
+sudachidict_core

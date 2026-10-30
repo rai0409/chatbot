@@ -3,17 +3,19 @@ from __future__ import annotations
 import json
 import re
 import string
-import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Set
 
 import config
+from rag_core.ja_text import normalize_for_index
 
 
 DEFAULT_SYNONYM_CONFIG = Path(config.BASE_DIR) / "configs" / "japanese_business_synonyms.json"
 _MAX_TERMS = 20
 _PUNCT_TABLE = str.maketrans({ch: " " for ch in string.punctuation})
-_EXTRA_PUNCT_RE = re.compile(r"[、。・「」『』【】（）［］｛｝〈〉《》〔〕！？…￥〜〜ー—–－※★☆◎○●◇◆■□▲△▼▽|｜]+")
+# The long vowel mark "ー" is part of words (サーバー, データ) and is not
+# punctuation; it used to be replaced with a space here.
+_EXTRA_PUNCT_RE = re.compile(r"[、。・「」『』【】（）［］｛｝〈〉《》〔〕！？…￥〜〜—–－※★☆◎○●◇◆■□▲△▼▽|｜]+")
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9._/-]*|[ぁ-んァ-ヴー一-龥々〆〤]{2,}")
 
 
@@ -32,11 +34,10 @@ def _bounded_unique(values: Sequence[Any], limit: int = _MAX_TERMS) -> List[str]
 
 
 def normalize_japanese_text(text: str) -> str:
-    normalized = unicodedata.normalize("NFKC", text or "")
-    normalized = normalized.replace("\u3000", " ")
-    normalized = normalized.lower()
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    return normalized
+    # NFKC, full-width space and dash/quote folding live in ja_text so the
+    # keyword index and this module cannot drift apart; this module keeps its
+    # historical lower-cased contract.
+    return normalize_for_index(text)
 
 
 def normalize_for_match(text: str) -> str:

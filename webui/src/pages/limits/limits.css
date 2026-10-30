@@ -1,0 +1,17 @@
+.lm-scroll { overflow-x: auto; }
+.lm-meter { width: 100%; min-width: 80px; height: 10px; }
+.lm-use { display: flex; flex-direction: column; gap: 4px; min-width: 150px; }
+.lm-use small { color: var(--muted); }
+.lm-state { font-weight: 600; }
+.lm-state.reached { color: var(--err); }
+.lm-state.near { color: var(--warn); }
+.lm-form { display: grid; gap: 10px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.lm-form label, .lm-field { display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.lm-form h2 { margin: 0; font-size: 16px; }
+.lm-form input, .lm-form select, .lm-form textarea, .lm-inline input, .lm-inline select, .lm-inline textarea { font: inherit; max-width: 100%; }
+.lm-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.lm-inline { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 10px; align-items: start; }
+.lm-inline .lm-wide { grid-column: 1 / -1; }
+.lm-inline label { display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.lm-tags { display: flex; flex-wrap: wrap; gap: 6px; padding: 0; margin: 4px 0; list-style: none; }
+.lm-fp { font-family: ui-monospace, monospace; word-break: break-all; }

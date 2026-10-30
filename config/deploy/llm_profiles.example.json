@@ -1,0 +1,44 @@
+{
+  "_note": "Model profiles of one deployment (rag_core/llm_profiles.py). Copy to a file outside the repository, edit it, and point LLM_PROFILES_FILE at it. A key is never written here: api_key_env names the environment variable that holds it. Model names below are placeholders to be chosen by the evaluation (docs/operations/llm_model_selection.md).",
+  "profiles": {
+    "local": {
+      "base_url": "http://localhost:11434/v1",
+      "model": "<local model name served by the local server>",
+      "timeout_seconds": 30,
+      "max_tokens": 1024,
+      "cost": {"input_per_million": 0, "output_per_million": 0}
+    },
+    "cloud_low_cost": {
+      "base_url": "https://llm.example.co.jp/v1",
+      "api_key_env": "CLOUD_LLM_API_KEY",
+      "model": "<low-cost model name of the provider>",
+      "timeout_seconds": 20,
+      "max_tokens": 1024,
+      "batch": false,
+      "cost": {"input_per_million": 0.0, "output_per_million": 0.0}
+    },
+    "claude_low_cost": {
+      "provider": "anthropic",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "timeout_seconds": 20,
+      "max_tokens": 1024,
+      "cost": {"input_per_million": 0.10, "output_per_million": 0.50}
+    }
+  },
+  "routes": {
+    "generate": ["local", "cloud_low_cost"],
+    "rewrite": ["local"],
+    "verify": ["local"],
+    "judge": ["cloud_low_cost"]
+  },
+  "tenants": {
+    "tenant_a": {"generate": ["cloud_low_cost"]}
+  },
+  "tiers": {
+    "standard": {"generate": ["local"]},
+    "premium": {"generate": ["cloud_low_cost", "local"]},
+    "claude": {"generate": ["claude_low_cost", "local"]}
+  }
+}

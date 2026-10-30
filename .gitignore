@@ -29,6 +29,10 @@ output_ops.zip
 chroma/
 chroma_db/
 data/chroma/
+data/profile_versions/
+data/sources/
+data/extraction/
+data/contracts/
 
 # Generated artifacts / evaluations
 artifacts/
@@ -55,6 +59,12 @@ venv/
 # Backups
 *.bak
 *.bak_*
+
+# Work files of the Claude Code phase prompts (docs/claude_phases)
+.phase_work/
+
+# Files moved aside for manual deletion; never committed
+即削除/
 
 # Generated BM25 keyword index
 index/chunks.canonical.bytype.dedup.jsonl

@@ -2,25 +2,67 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
-from pathlib import Path
 
 import pytest
 
 from scripts.apply_approved_qa_reviews import DECISIONS_PATH, LEGACY_PATH, MANIFEST_PATH, TOURISM_PATH, apply_reviews
 
-ROOT = Path(__file__).resolve().parents[1]
-FIXTURES = ROOT / "tests/fixtures/approved_qa_review"
+# Deterministic, invented records. No production PDF/JSONL content is copied.
+# Files are written only into pytest's temporary directory.
+def _synthetic_jsonl(rows):
+    return b"".join(
+        (json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        for row in rows
+    )
+
+
+def _synthetic_record(qa_id, status, question):
+    return {
+        "qa_id": qa_id,
+        "question": question,
+        "answer": "合成テスト専用の回答です。",
+        "source_document": "synthetic_source.txt",
+        "source_pages": [1],
+        "source_record_fingerprint": hashlib.sha256(("synthetic:" + qa_id).encode()).hexdigest(),
+        "status": status,
+        "approval_review_required": status != "approved",
+        "approval_provenance": "synthetic_test",
+        "tenant_id": "synthetic_tenant",
+    }
 
 
 def _root(tmp_path):
-    for path in (LEGACY_PATH, TOURISM_PATH, MANIFEST_PATH):
-        target = tmp_path / path
+    legacy = [
+        _synthetic_record("synthetic-legacy-001", "legacy_unreviewed", "合成ルールAの申請先はどこですか"),
+        _synthetic_record("synthetic-legacy-002", "legacy_unreviewed", "合成ルールBの期限はいつですか"),
+    ]
+    tourism = [
+        _synthetic_record("synthetic-approved-001", "approved", "合成イベントCの概要は何ですか"),
+    ]
+    legacy_bytes = _synthetic_jsonl(legacy)
+    tourism_bytes = _synthetic_jsonl(tourism)
+    manifest = {
+        "schema_version": "synthetic_review_test.v1",
+        "sources": [
+            {"output_path": LEGACY_PATH, "source_jsonl_sha256": hashlib.sha256(legacy_bytes).hexdigest()},
+            {"output_path": TOURISM_PATH, "source_jsonl_sha256": hashlib.sha256(tourism_bytes).hexdigest()},
+        ],
+        "total_record_count": 3,
+        "fully_governed_approved_count": 1,
+        "rejected_count": 0,
+        "review_required_count": 2,
+        "review_decisions": {"decision_count": 0},
+    }
+    contents = {
+        LEGACY_PATH: legacy_bytes,
+        TOURISM_PATH: tourism_bytes,
+        MANIFEST_PATH: (json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"),
+        DECISIONS_PATH: b"",
+    }
+    for relative, payload in contents.items():
+        target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(FIXTURES / ("040219e-biscfaq.jsonl" if path == LEGACY_PATH else "manifest.json" if path == MANIFEST_PATH else "58887_95105_misc.jsonl"), target)
-    decision = tmp_path / DECISIONS_PATH
-    decision.parent.mkdir(parents=True, exist_ok=True)
-    decision.write_bytes(b"")
+        target.write_bytes(payload)
     return tmp_path
 
 
@@ -34,11 +76,11 @@ def _decision(root, **changes):
 
 def test_empty_decisions_and_check_do_not_modify_outputs(tmp_path):
     root = _root(tmp_path); before = [(root / p).read_bytes() for p in (LEGACY_PATH, MANIFEST_PATH, TOURISM_PATH)]
-    assert apply_reviews(root=root) == {"total_record_count":118,"fully_governed_approved_count":22,"rejected_count":0,"review_required_count":96,"decision_count":0}
+    assert apply_reviews(root=root) == {"total_record_count":3,"fully_governed_approved_count":1,"rejected_count":0,"review_required_count":2,"decision_count":0}
     assert before == [(root / p).read_bytes() for p in (LEGACY_PATH, MANIFEST_PATH, TOURISM_PATH)]
 
 
-@pytest.mark.parametrize(("decision", "approved", "rejected", "review"), [("approved",23,0,95),("rejected",22,1,95)])
+@pytest.mark.parametrize(("decision", "approved", "rejected", "review"), [("approved",2,0,1),("rejected",1,1,1)])
 def test_single_decisions_apply(tmp_path, decision, approved, rejected, review):
     root=_root(tmp_path); _decision(root, decision=decision); tourism=(root/TOURISM_PATH).read_bytes()
     result=apply_reviews(root=root, apply=True)

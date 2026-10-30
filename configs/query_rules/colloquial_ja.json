@@ -1,0 +1,13 @@
+{
+  "version": "colloquial-ja-v1",
+  "description": "Query cleanup rules applied after index normalization (lower case, NFKC). Patterns are Python regular expressions applied in order, repeated up to 3 times. Verb endings such as できますか are kept (removing ますか would leave a verb stem). Tenants may add rules in configs/query_rules/tenants/<tenant_id>.json with the same keys.",
+  "strip_prefix": [
+    "^(?:あの|あのー|えっと|えーと|ええと|ちょっと|すみません|すいません|すみませんが|質問です|質問なんですが)[、,。\\s]*"
+  ],
+  "strip_suffix": [
+    "[、,\\s]*(?:について|に関して)?(?:を|が)?(?:教えて(?:ください|下さい|ほしい(?:です)?|欲しい(?:です)?|くれる?|もらえますか|いただけますか)?|知りたい(?:です)?|わかりますか|分かりますか)[?？。!！\\s]*$",
+    "(?:なんですけど|なんだけど|なんですが|んですけど|んだけど|ですけど|けど)[、,。?？!！\\s]*$",
+    "(?:んだっけ|んですかね|んですか|んでしょうか|のですか|のでしょうか|でしょうか|ですかね|ですか|のかな|かなあ|かな|ですっけ|だっけ|っけ)[?？。!！\\s]*$",
+    "[?？。!！]+$"
+  ]
+}

@@ -491,12 +491,13 @@ def test_search_candidates_calculates_margin_and_filters_qa_pairs(monkeypatch):
 
 def test_search_debug_exposes_candidates_without_chat_routing(monkeypatch):
     from webapi import main
+    from webapi.routers import chat as chat_router
 
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda query: None)
-    monkeypatch.setattr(main, "append_audit_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda query, **kwargs: None)
+    monkeypatch.setattr(chat_router, "append_audit_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        main,
+        chat_router,
         "debug_retrieve_with_trace",
         lambda *args, **kwargs: {
             "request_id": "trace-1",
@@ -511,7 +512,7 @@ def test_search_debug_exposes_candidates_without_chat_routing(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        main,
+        chat_router,
         "search_approved_similar_candidates",
         lambda *args, **kwargs: [
             {

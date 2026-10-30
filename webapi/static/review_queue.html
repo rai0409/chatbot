@@ -221,6 +221,7 @@
   </style>
 </head>
 <body>
+<!--admin-nav-->
   <main>
     <header>
       <h1>Review Queue</h1>
@@ -427,7 +428,7 @@
       status.textContent = "Saving...";
       status.className = "action-status";
       try {
-        const response = await fetch("/admin/review/action", {
+        const response = await (window.adminFetch || fetch)("/admin/review/action", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify(body),

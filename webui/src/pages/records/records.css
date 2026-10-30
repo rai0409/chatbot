@@ -1,0 +1,14 @@
+.rec-split { display: grid; grid-template-columns: 1fr; gap: 16px; }
+@media (min-width: 1000px) { .rec-split.open { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); } }
+.rec-table td.q { max-width: 28ch; overflow-wrap: anywhere; }
+.rec-pager { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.rec-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 4px 0 12px; }
+.rec-detail fieldset, .rec-form fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; }
+.rec-form label.block { display: flex; flex-direction: column; margin: 8px 0; }
+.rec-form label.inline { display: inline-flex; gap: 6px; align-items: center; margin-right: 12px; }
+.rec-levels { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.rec-levels .panel { margin: 0; }
+.rec-levels .panel.off-limit { opacity: .7; }
+.rec-result dt { color: var(--muted); font-size: 13px; }
+.rec-result dd { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
+.rec-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); }

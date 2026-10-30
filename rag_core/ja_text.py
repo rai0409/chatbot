@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from typing import List
 
+
+# Bump whenever normalize_for_index changes: the keyword index and the query
+# side must normalize identically, so a bump requires a keyword index rebuild.
+NORMALIZATION_VERSION = "ja-norm-v1"
 
 _PUNCT_TRANSLATION = str.maketrans(
     {
@@ -27,10 +32,38 @@ _PUNCT_TRANSLATION = str.maketrans(
 
 def normalize_japanese_text(text: str) -> str:
     out = unicodedata.normalize("NFKC", text or "")
-    out = out.replace("\u3000", " ")
+    out = out.replace("　", " ")
     out = out.translate(_PUNCT_TRANSLATION)
     out = re.sub(r"\s+", " ", out).strip()
     return out
+
+
+def normalization_profile() -> str:
+    # NORMALIZATION_PROFILE=legacy (default) keeps ja-norm-v1. "index" uses the
+    # P1-B text_normalize index profile (dash/wave unification, katakana
+    # hyphen -> long vowel, thousands separators, kanji numerals). Switching
+    # requires a keyword index rebuild and a re-ingest; measure it on the
+    # bench before enabling.
+    value = str(os.getenv("NORMALIZATION_PROFILE", "legacy")).strip().lower()
+    return value if value in {"legacy", "index"} else "legacy"
+
+
+def active_normalization_version() -> str:
+    if normalization_profile() == "index":
+        from rag_core.text_normalize import PROFILE_VERSION
+
+        return f"{NORMALIZATION_VERSION}+{PROFILE_VERSION}:index"
+    return NORMALIZATION_VERSION
+
+
+def normalize_for_index(text: str) -> str:
+    """Case-folded normalization shared by the keyword index, lexical queries
+    and approved-QA candidate matching (one function for all of them)."""
+    if normalization_profile() == "index":
+        from rag_core.text_normalize import normalize
+
+        return re.sub(r"\s+", " ", str(normalize(text or "", "index"))).strip()
+    return normalize_japanese_text(text).lower()
 
 
 def _mask_spans(text: str, spans: List[tuple[int, int]]) -> str:

@@ -94,21 +94,24 @@ If no approved exact match exists, the chatbot uses the normal grounded RAG path
 
 ---
 
-## Current verified production milestone
+## Accuracy figures (retracted)
 
-The current approved-QA flow has been verified on `58887_95105_misc.pdf`, a Japanese table-style Q&A PDF for:
+Earlier versions of this README reported `22/22, pass_rate=1.0`, `118/118` exact
+QA and `hybrid_hit@5=1.0`. These figures are **retracted** and must not be used in
+sales or evaluation material:
 
-> 観光デジタルアンケート分析業務 質問に対する回答
+- the exact-QA cases asked the stored questions verbatim (and the exact index was
+  built from the evaluation cases themselves), so they only show string lookup;
+- the previous runner dropped misses from mean MRR and counted cases without
+  expectations as passes;
+- the "normal retrieval" gate ran with the vector search stubbed to empty and a
+  fixed generated answer.
 
-Verified result:
-
-- table-style PDF Q&A extraction: **22 draft Q&A records**
-- draft validation: **0 errors**
-- approved-QA runner: **22/22, pass_rate=1.0**
-- `/chat` with production path `data/approved_qa/default.jsonl`: **22/22 exact same-question approved_answer match**
-- vector ingest of canonical PDF chunks: **104 records ingested, skipped=0**
-
-This confirms that same-question approved answers can be served deterministically through the API.
+What the old runs do show: a same-question approved answer can be returned
+deterministically through the API. Retrieval and answer accuracy will be reported
+from the evaluation bench (`python -m eval.bench`, see `eval/bench/dataset.py`
+for the case format) with a held-out test split, per-slice
+Recall@10 / nDCG@10 / MRR@10, confidence intervals and p95 latency.
 
 ---
 
@@ -368,11 +371,13 @@ In this mode, `/chat` still returns approved exact matches deterministically, ot
 bash scripts/run_free_extractive_chat_mode_check.sh
 ```
 
-Expected gates:
+Smoke gates (regression checks only, not accuracy figures; see "Accuracy
+figures (retracted)" above):
 
-- exact QA: `118/118`
-- unknown abstention: `32/32`
-- normal retrieval: `hybrid_hit@5=1.0`
+- exact QA: all stored questions return their approved answer
+- unknown abstention: all labeled unknown questions abstain
+- normal retrieval: runs with the vector search stubbed, so it checks the
+  keyword path only; dense and hybrid accuracy are not evaluated here
 
 The candidate collection `chatbot_chunks_v1_aligned_candidate` has been evaluated for this mode. Promotion is not automatic; use `artifacts/free_extractive_chat_mode/promotion_gate.md` for the gate and `artifacts/free_extractive_chat_mode/controlled_production_switch_plan.md` for the config-only switch plan.
 
@@ -566,9 +571,9 @@ use the dedicated table converter instead of relying on generic FAQ chunking:
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/qanda_table_pdf_to_approved_qa.py \
-  --pdf pdfs/58887_95105_misc.pdf \
-  --out /tmp/tourism_qa_candidates.draft.jsonl \
-  --source-doc 58887_95105_misc.pdf \
+  --pdf pdfs/sample_qa_table.pdf \
+  --out /tmp/sample_qa_candidates.draft.jsonl \
+  --source-doc sample_qa_table.pdf \
   --tenant-id default \
   --doc-version v1 \
   --status draft
@@ -578,14 +583,14 @@ Validate the draft output:
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/approved_qa_review.py validate \
-  --in /tmp/tourism_qa_candidates.draft.jsonl
+  --in /tmp/sample_qa_candidates.draft.jsonl
 ```
 
 List draft records:
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/approved_qa_review.py list \
-  --in /tmp/tourism_qa_candidates.draft.jsonl \
+  --in /tmp/sample_qa_candidates.draft.jsonl \
   --status draft \
   --limit 50
 ```

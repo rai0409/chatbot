@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -258,7 +258,7 @@ def extract_from_sequential_faq(text: str) -> List[Dict]:
     topic_buffer: List[str] = []
 
     def flush():
-        nonlocal current_q, current_a, topic_buffer
+        nonlocal current_q, current_a
         if current_q and current_a:
             rows.append({
                 "source_topic": norm(" ".join(topic_buffer[-3:])),

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 import config
 from rag_core import qa
 from rag_core.retrieval import RetrievedChunk
 from rag_grounded import Chunk
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 def _retrieved(text="適格請求書制度の概要説明", **meta):
@@ -124,14 +124,14 @@ def test_approved_exact_match_bypasses_guard(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "_approved_qa_index", None)
-    monkeypatch.setattr(main, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
 
     def forbidden(*args, **kwargs):
         raise AssertionError("RAG pipeline (and guard) must not run for approved exact match")
 
-    monkeypatch.setattr(main, "answer_query_with_trace", forbidden)
-    monkeypatch.setattr(main, "ensure_openai_client", forbidden)
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", forbidden)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", forbidden)
 
     payload = main.chat(main.ChatRequest(question="営業時間を教えてください"))
 

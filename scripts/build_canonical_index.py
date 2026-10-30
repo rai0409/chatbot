@@ -9,8 +9,9 @@ if str(_ROOT) not in sys.path:
 
 import argparse
 import json
+import os
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional, Set
 
 from tools.dedup_chunks_by_id import _better
 
@@ -40,17 +41,40 @@ def collect_input_paths(index_dir: Path, output_path: Path) -> List[Path]:
     return paths
 
 
-def build_canonical_index(input_paths: List[Path], output_path: Path) -> Dict[str, int]:
+def inactive_sources_from_manifest(manifest_path: Path) -> Set[str]:
+    """File names of deprecated/archived sources in a knowledge manifest."""
+    from rag_core.knowledge_manifest import load_manifest
+
+    manifest = load_manifest(manifest_path)
+    names: Set[str] = set()
+    for record in manifest.get("records") or manifest.get("sources") or []:
+        if str(record.get("status") or "active") in {"deprecated", "archived"}:
+            source_path = str(record.get("source_path") or "").strip()
+            if source_path:
+                names.add(Path(source_path).name)
+    return names
+
+
+def build_canonical_index(
+    input_paths: List[Path],
+    output_path: Path,
+    *,
+    inactive_sources: Optional[Set[str]] = None,
+) -> Dict[str, int]:
     dedup: Dict[str, dict] = {}
     read = 0
     skipped_no_id = 0
     duplicates = 0
+    excluded = 0
     for path in input_paths:
         for obj in _iter_records(path):
             read += 1
             chunk_id = str(obj.get("id") or "").strip()
             if not chunk_id:
                 skipped_no_id += 1
+                continue
+            if inactive_sources and str(obj.get("source_doc") or "") in inactive_sources:
+                excluded += 1
                 continue
             previous = dedup.get(chunk_id)
             if previous is None:
@@ -59,17 +83,24 @@ def build_canonical_index(input_paths: List[Path], output_path: Path) -> Dict[st
                 duplicates += 1
                 dedup[chunk_id] = _better(previous, obj)
 
+    # Write to a temporary file and rename: the keyword index reloads on
+    # mtime and must never read a half-written corpus.
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
+    tmp_path = output_path.with_name(f".{output_path.name}.tmp-{os.getpid()}")
+    with tmp_path.open("w", encoding="utf-8") as f:
         for chunk_id in sorted(dedup.keys()):
             f.write(json.dumps(dedup[chunk_id], ensure_ascii=False) + "\n")
-    return {
+    os.replace(tmp_path, output_path)
+    stats = {
         "input_files": len(input_paths),
         "records_read": read,
         "skipped_no_id": skipped_no_id,
         "duplicates_merged": duplicates,
         "records_written": len(dedup),
     }
+    if inactive_sources is not None:
+        stats["excluded_inactive_sources"] = excluded
+    return stats
 
 
 def main() -> int:
@@ -78,6 +109,11 @@ def main() -> int:
     )
     parser.add_argument("--index-dir", default=str(_ROOT / "index"))
     parser.add_argument("--out", default=None)
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        help="knowledge manifest; rows of deprecated/archived sources are left out",
+    )
     args = parser.parse_args()
 
     index_dir = Path(args.index_dir)
@@ -90,7 +126,8 @@ def main() -> int:
         print(f"error: no input jsonl files in {index_dir}", file=sys.stderr)
         return 1
 
-    stats = build_canonical_index(input_paths, output_path)
+    inactive = inactive_sources_from_manifest(Path(args.manifest)) if args.manifest else None
+    stats = build_canonical_index(input_paths, output_path, inactive_sources=inactive)
     print(json.dumps({"output": str(output_path), **stats}, ensure_ascii=False))
     return 0
 

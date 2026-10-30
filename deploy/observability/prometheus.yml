@@ -21,5 +21,9 @@ scrape_configs:
       - targets: ["127.0.0.1:8000"]
         labels:
           service: kuraden
-    # /metrics is unauthenticated by design and carries no secrets; restrict
-    # network access to the scraper at the proxy/firewall layer.
+    # APP_ENV=production (stage 6) requires METRICS_TOKEN on /metrics. Put the
+    # token in a file readable only by Prometheus and enable:
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /etc/prometheus/kuraden_metrics_token
+    # Also restrict network access to the scraper at the proxy/firewall layer.

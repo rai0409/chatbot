@@ -5,10 +5,11 @@ from pathlib import Path
 
 from rag_core import feedback_rerank_profile
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 def _disable_exact(monkeypatch):
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *args, **kwargs: None)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *args, **kwargs: None)
 
 
 def _fake_decision(candidates):
@@ -24,7 +25,7 @@ def _fake_decision(candidates):
 
 def _patch_product_preview(monkeypatch, candidates, *, audit_capture: dict | None = None):
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "decide_approved_similar_candidate", _fake_decision)
     monkeypatch.setattr(
         main.approved_similar,
@@ -32,10 +33,10 @@ def _patch_product_preview(monkeypatch, candidates, *, audit_capture: dict | Non
         lambda *args, **kwargs: [dict(candidate) for candidate in candidates],
     )
     if audit_capture is None:
-        monkeypatch.setattr(main, "append_product_preview_chat_audit_event", lambda event: True)
+        monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", lambda event: True)
     else:
         monkeypatch.setattr(
-            main,
+            chat_router,
             "append_product_preview_chat_audit_event",
             lambda event: audit_capture.update(event) or True,
         )
@@ -65,7 +66,7 @@ def _feedback_profile(path: Path, adjustments: dict) -> Path:
 
 def _set_feedback_profile(monkeypatch, path: Path):
     monkeypatch.setattr(feedback_rerank_profile, "PROFILE_PATH", path)
-    monkeypatch.setattr(main, "PROFILE_PATH", path)
+    monkeypatch.setattr(chat_router, "PROFILE_PATH", path)
 
 
 def test_no_product_profile_preserves_existing_default_behavior(monkeypatch):
@@ -146,7 +147,7 @@ def test_production_low_cost_blocks_feedback_and_caps_display_candidates(monkeyp
         _feedback_profile(tmp_path / "feedback.json", {"qa-3": {"score_adjustment": 1.0}}),
     )
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "decide_approved_similar_candidate", _fake_decision)
 
     def _search(query, **kwargs):
@@ -158,7 +159,7 @@ def test_production_low_cost_blocks_feedback_and_caps_display_candidates(monkeyp
         ]
 
     monkeypatch.setattr(main.approved_similar, "search_approved_similar_candidates", _search)
-    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", lambda event: True)
+    monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", lambda event: True)
 
     response = main.chat_product_preview(
         main.ProductPreviewChatRequest(

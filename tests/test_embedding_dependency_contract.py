@@ -49,7 +49,7 @@ def test_embedding_requirement_is_single_exact_pin() -> None:
         for line in REQUIREMENTS.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
-    assert lines == ["sentence-transformers==5.2.2"]
+    assert lines == ["sentence-transformers==5.7.0"]
 
 
 def test_embedding_constraints_are_sorted_and_unique() -> None:
@@ -66,8 +66,8 @@ def test_embedding_constraints_exclude_bootstrap_packages() -> None:
 def test_required_embedding_packages_are_pinned() -> None:
     pins = _parse_pins(CONSTRAINTS)
 
-    assert pins["sentence-transformers"] == "5.2.2"
-    assert pins["torch"] == "2.10.0+cpu"
+    assert pins["sentence-transformers"] == "5.7.0"
+    assert pins["torch"] == "2.14.1+cpu"
 
     required = {
         "transformers",

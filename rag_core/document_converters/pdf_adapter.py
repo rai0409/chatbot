@@ -1,34 +1,80 @@
-"""Adapter around the existing PDF converter (scripts/pdf_to_canonical_jsonl).
+"""Adapter around the PDF converter (scripts/pdf_to_canonical_jsonl).
 
-The existing converter is the production-verified PDF path (Japanese
-doc-type-aware chunking, page metadata, parent/child roles). It only exposes
-an argparse main(), so this adapter invokes it in-process with a patched argv
-and a temporary output file, then annotates source_type/parser. It is NOT
-rewritten here.
+Calls convert_pdf_to_rows() directly (no patched argv, no temporary file),
+then annotates source_type/parser. The converter applies the same page-level
+preprocessing (header/footer removal) and quantity metadata as the CLI, so
+web and CLI ingestion produce identical rows.
 
-Known limitations surfaced as-is from the underlying converter:
-- image-only PDFs need --ocr (not enabled through this adapter)
-- PDF chunks keep their own chunk_role parent/child structure
+Stage 15: scanned (image-only) pages are OCRed here too. INGEST_PDF_OCR:
+  auto (default)  OCR pages without a text layer when an OCR engine
+                  (Tesseract with jpn, or PaddleOCR) is installed
+  on              always; fails when no OCR engine is installed
+  off             never (as before)
+A PDF that yields no text because it needs OCR and none ran fails with
+OcrRequired, so the ingestion job says why instead of "no chunks".
+PDF chunks keep their own chunk_role parent/child structure.
 """
 
 from __future__ import annotations
 
-import json
-import sys
-import tempfile
-from contextlib import contextmanager
+import os
 from pathlib import Path
 from typing import Dict, List
 
 
-@contextmanager
-def _patched_argv(argv: List[str]):
-    original = sys.argv
-    sys.argv = argv
+class OcrRequired(ValueError):
+    """The PDF has pages without a text layer and no OCR ran."""
+
+
+def ocr_mode() -> bool:
+    """Whether to OCR pages without text (INGEST_PDF_OCR)."""
+    mode = str(os.getenv("INGEST_PDF_OCR", "") or "auto").strip().lower()
+    if mode in {"0", "false", "no", "off"}:
+        return False
+    if mode in {"1", "true", "yes", "on"}:
+        return True
+    from rag_core import extraction
+
     try:
-        yield
-    finally:
-        sys.argv = original
+        return bool(extraction.load().ocr_available())
+    except Exception:  # noqa: BLE001 - docextract missing: no OCR
+        return False
+
+
+def convert_pdf_with_report(
+    path: str | Path,
+    *,
+    tenant_id: str = "default",
+    source_doc: str | None = None,
+    doc_type: str | None = None,
+) -> tuple[List[Dict], Dict]:
+    # Lazy import: pulls in config/chunking (and pdfplumber); must not run at
+    # package import time.
+    from scripts import pdf_to_canonical_jsonl
+
+    rows, report = pdf_to_canonical_jsonl.convert_pdf_to_rows(
+        Path(path),
+        doc_type=doc_type or "policy",
+        tenant_id=tenant_id or "default",
+        ocr=ocr_mode(),
+        source_doc=source_doc,
+    )
+    if not rows and report.get("pages_low_text_without_ocr"):
+        raise OcrRequired(
+            f"{len(report['pages_low_text_without_ocr'])} page(s) without a text layer and no OCR "
+            "(install Tesseract with jpn or PaddleOCR; INGEST_PDF_OCR)"
+        )
+    for row in rows:
+        row.setdefault("source_type", "pdf")
+        row.setdefault("parser", "pdf_to_canonical_jsonl")
+    ocr_pages = report.pop("ocr_pages", None)
+    if ocr_pages:
+        from rag_core import extraction_store
+
+        extraction_store.save_from_report(
+            tenant_id or "default", source_doc or Path(path).name, Path(path), ocr_pages
+        )
+    return rows, report
 
 
 def convert_pdf(
@@ -38,44 +84,5 @@ def convert_pdf(
     source_doc: str | None = None,
     doc_type: str | None = None,
 ) -> List[Dict]:
-    # Lazy import: pulls in config/chunking (and fitz inside its main); must
-    # not run at package import time.
-    from scripts import pdf_to_canonical_jsonl
-
-    path = Path(path)
-    with tempfile.NamedTemporaryFile(
-        mode="r", suffix=".jsonl", encoding="utf-8", delete=False
-    ) as tmp:
-        tmp_path = Path(tmp.name)
-    try:
-        argv = [
-            "pdf_to_canonical_jsonl.py",
-            "--pdf",
-            str(path),
-            "--out",
-            str(tmp_path),
-            "--tenant-id",
-            tenant_id or "default",
-        ]
-        if doc_type:
-            argv += ["--doc-type", doc_type]
-        with _patched_argv(argv):
-            exit_code = pdf_to_canonical_jsonl.main()
-        if exit_code not in (0, None):
-            raise RuntimeError(f"pdf_to_canonical_jsonl failed with exit code {exit_code}")
-        rows: List[Dict] = []
-        with tmp_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                raw = line.strip()
-                if raw:
-                    rows.append(json.loads(raw))
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-    for row in rows:
-        row.setdefault("source_type", "pdf")
-        row.setdefault("parser", "pdf_to_canonical_jsonl")
-        if source_doc:
-            row["source_doc"] = source_doc
-            row["doc_id"] = source_doc
+    rows, _report = convert_pdf_with_report(path, tenant_id=tenant_id, source_doc=source_doc, doc_type=doc_type)
     return rows
