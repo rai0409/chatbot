@@ -5,6 +5,8 @@ from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
 from webapi import main
+from webapi.routers import chat as chat_router
+from webapi.routers import infra as infra_router
 from webapi.api_auth import (
     api_auth_enabled,
     require_api_auth,
@@ -140,7 +142,7 @@ def test_search_debug_fails_closed_when_admin_token_missing(monkeypatch):
 
 
 def _route(path: str, method: str) -> APIRoute:
-    for route in main.app.routes:
+    for route in [*main.app.routes, *infra_router.router.routes, *chat_router.router.routes]:
         if isinstance(route, APIRoute) and route.path == path and method in route.methods:
             return route
     raise AssertionError(f"route not found: {method} {path}")

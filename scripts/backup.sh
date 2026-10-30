@@ -10,6 +10,14 @@
 #   runs/ingestion_registry.sqlite3  staging collections and their owner tenants, jobs
 #   runs/state/  runs/conversations/ session revocations, conversation history (local backends)
 #   configs/                         product and RAG profiles
+#   runs/settings/                   the console's runtime switches, limits and model assignments (rag_core/runtime_settings.py)
+#   runs/records/                    records of questions and answers, the judgements, the pseudonym salt (rag_core/records.py):
+#                                    they hold what people asked, so protect the archive like the data itself
+#   runs/usage/  runs/llm_batch/     LLM usage files, batch jobs
+#   runs/tenant_eval/                proposals and the evaluation ledger
+#   data/golden_qa/                  the golden questions kept in the console
+#   data/profile_versions/           stored versions of the RAG profiles and which one is active
+#   data/sources/  data/contracts/  data/extraction/   registered sources, the contract ledger, OCR lines and their corrections
 #   --extra PATH (repeatable)        e.g. the APPROVED_QA_PATH file or the upload directory
 #
 # SQLite files are copied with SQLite's online backup (a consistent snapshot
@@ -40,7 +48,9 @@ MANIFEST_NAME="backup_manifest.sha256"
 
 TARGETS=()
 for candidate in vectorstore index data/approved_qa runs/audit runs/ingestion_registry.sqlite3 runs/state \
-                 runs/conversations configs "${EXTRA[@]}"; do
+                 runs/conversations configs \
+                 runs/settings runs/records runs/usage runs/llm_batch runs/tenant_eval \
+                 data/golden_qa data/profile_versions data/sources data/contracts data/extraction "${EXTRA[@]}"; do
   if [[ -e "$SOURCE_DIR/$candidate" ]]; then
     TARGETS+=("$candidate")
   elif [[ " ${EXTRA[*]} " == *" $candidate "* ]]; then

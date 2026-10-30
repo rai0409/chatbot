@@ -9,6 +9,7 @@ service, one switch per store so they can move one at a time:
   RATE_LIMIT_BACKEND=redis          rate-limit windows        REDIS_URL
   ANSWER_CACHE_BACKEND=redis        answer cache              REDIS_URL
   SESSION_REVOCATION_BACKEND=redis  revoked OIDC/admin sessions REDIS_URL
+  BREAKER_BACKEND=redis             circuit breakers of the LLM endpoints (webapi/breaker_store.py) REDIS_URL
   CONVERSATION_STORE_BACKEND=postgres  conversation history   POSTGRES_URL
   INGESTION_REGISTRY_BACKEND=postgres  jobs + collection owners POSTGRES_URL
 
@@ -48,7 +49,7 @@ logger = logging.getLogger(__name__)
 _LOCK = Lock()
 _REDIS: Dict[str, Any] = {}
 _PG_POOLS: Dict[str, Any] = {}
-_REDIS_USERS = ("RATE_LIMIT_BACKEND", "ANSWER_CACHE_BACKEND", "SESSION_REVOCATION_BACKEND")
+_REDIS_USERS = ("RATE_LIMIT_BACKEND", "ANSWER_CACHE_BACKEND", "SESSION_REVOCATION_BACKEND", "BREAKER_BACKEND")
 _PG_USERS = ("CONVERSATION_STORE_BACKEND", "INGESTION_REGISTRY_BACKEND")
 _LAST_WARNING: Dict[str, float] = {}
 

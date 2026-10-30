@@ -5,7 +5,7 @@ import os
 from datetime import date, datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from rag_core import contracts
+from rag_core import contracts, integrations
 
 DEFAULT_DAYS = (90, 60, 30, 14, 7, 1, 0)
 OVERDUE = -1
@@ -97,6 +97,8 @@ def default_send(subject: str, body: str) -> Dict[str, Any]:
             return {"ok": False, "reason": "email_not_configured"}
         notifications._default_email_send(subject, body)
         return {"ok": True}
+    except integrations.IntegrationDisabled as exc:
+        return {"ok": False, "reason": f"integration_off:{exc.status.reason}"}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "reason": type(exc).__name__}
 

@@ -153,18 +153,19 @@ def test_pr2_and_pr20_remain_distinguishable(tmp_path):
 
 def test_approved_chat_lookup_does_not_call_llm(monkeypatch, tmp_path):
     from webapi import main
+    from webapi.routers import chat as chat_router
 
     path = tmp_path / "approved.jsonl"
     _write_jsonl(path, [_record()])
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
-    monkeypatch.setattr(main, "_approved_qa_index", None)
-    monkeypatch.setattr(main, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
 
     def _fail_client(*args, **kwargs):
         raise AssertionError("LLM client must not be created for approved exact match")
 
-    monkeypatch.setattr(main, "ensure_openai_client", _fail_client)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", _fail_client)
     response = main.chat(main.ChatRequest(question="パスワード再設定の方法は？"))
 
     assert response["answer_mode"] == "approved_exact_match"

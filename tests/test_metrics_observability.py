@@ -8,6 +8,7 @@ from rag_core import answer_cache, qa
 from rag_core.retrieval import RetrievedChunk
 from schemas import AnswerResult
 from webapi import main, metrics_registry
+from webapi.routers import chat as chat_router
 
 
 def _mk_chunk(label: str, text: str) -> RetrievedChunk:
@@ -114,8 +115,8 @@ def _setup_chat(monkeypatch, tmp_path, **pipeline_kwargs):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", False)
     monkeypatch.setattr(config, "ANSWER_CACHE_ENABLED", False)
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
-    monkeypatch.setattr(main, "answer_query_with_trace", _fake_pipeline(**pipeline_kwargs))
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", _fake_pipeline(**pipeline_kwargs))
     answer_cache.clear()
     metrics_registry.reset()
 
@@ -162,8 +163,8 @@ def test_approved_chat_increments_approved_mode(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "_approved_qa_index", None)
-    monkeypatch.setattr(main, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
     metrics_registry.reset()
 
     main.chat(main.ChatRequest(question="営業時間を教えてください"))
@@ -190,7 +191,7 @@ def test_provider_error_increments_error_counter(monkeypatch, tmp_path):
     def failing(*args, **kwargs):
         raise _FakeStatusError(429, "rate limit")
 
-    monkeypatch.setattr(main, "answer_query_with_trace", failing)
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", failing)
 
     main.chat(main.ChatRequest(question="質問です"))
 

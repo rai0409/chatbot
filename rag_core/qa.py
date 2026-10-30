@@ -11,7 +11,7 @@ from rag_core import embedding_provider, ja_terms, query_preprocess
 from rag_core.cross_encoder_reranker import rerank as cross_encoder_rerank
 from rag_core.ja_text import normalize_for_index, normalize_japanese_text
 from rag_core.keyword_scorer import apply_keyword_boost, classify_query_type, score_keyword_match
-from rag_core import answer_rewrite, grounding, interpretation, llm, multi_query, query_route, search_mode
+from rag_core import answer_rewrite, grounding, interpretation, llm, llm_gateway, llm_profiles, multi_query, query_route, search_mode
 from rag_core.profile_engine import apply_profile_boost
 from rag_core.profile_loader import load_rag_profile
 from rag_core.profile_validation import validate_answer_with_profile
@@ -460,17 +460,29 @@ def _is_retryable_generation_error(exc: Exception) -> bool:
     return "timeout" in name or "connection" in name
 
 
-def _create_chat_completion(client, messages):
+def _generation_limits(profile):
+    # Model, timeout and output length of one request: the profile's own values (rag_core/llm_profiles.py) where it sets
+    # them, else the settings that always applied.
+    model = (profile.model if profile is not None and profile.model else config.CHAT_MODEL)
+    timeout = (profile.timeout_seconds if profile is not None and profile.timeout_seconds else None) \
+        or getattr(config, "CHAT_COMPLETION_TIMEOUT_SECONDS", 30.0)
+    max_tokens = (profile.max_tokens if profile is not None and profile.max_tokens else None) \
+        or getattr(config, "CHAT_COMPLETION_MAX_TOKENS", 1024)
+    return model, float(timeout), int(max_tokens)
+
+
+def _create_chat_completion(client, messages, profile=None):
     attempts = 1 + max(0, int(getattr(config, "CHAT_COMPLETION_MAX_RETRIES", 1)))
     backoff = float(getattr(config, "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", 1.0))
+    model, timeout, max_tokens = _generation_limits(profile)
     for attempt in range(attempts):
         try:
             return client.chat.completions.create(
-                model=config.CHAT_MODEL,
+                model=model,
                 messages=messages,
                 temperature=0,
-                timeout=float(getattr(config, "CHAT_COMPLETION_TIMEOUT_SECONDS", 30.0)),
-                max_tokens=int(getattr(config, "CHAT_COMPLETION_MAX_TOKENS", 1024)),
+                timeout=timeout,
+                max_tokens=max_tokens,
             )
         except Exception as exc:
             if attempt >= attempts - 1 or not _is_retryable_generation_error(exc):
@@ -479,20 +491,21 @@ def _create_chat_completion(client, messages):
     raise RuntimeError("unreachable: chat completion retry loop exhausted")
 
 
-def _stream_chat_completion(client, messages):
+def _stream_chat_completion(client, messages, profile=None):
     # Same timeout/max_tokens/retry policy as _create_chat_completion, but
     # retries happen only before the first content token; never mid-stream.
     attempts = 1 + max(0, int(getattr(config, "CHAT_COMPLETION_MAX_RETRIES", 1)))
     backoff = float(getattr(config, "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", 1.0))
+    model, timeout, max_tokens = _generation_limits(profile)
     for attempt in range(attempts):
         emitted = False
         try:
             stream = client.chat.completions.create(
-                model=config.CHAT_MODEL,
+                model=model,
                 messages=messages,
                 temperature=0,
-                timeout=float(getattr(config, "CHAT_COMPLETION_TIMEOUT_SECONDS", 30.0)),
-                max_tokens=int(getattr(config, "CHAT_COMPLETION_MAX_TOKENS", 1024)),
+                timeout=timeout,
+                max_tokens=max_tokens,
                 stream=True,
             )
             for chunk in stream:
@@ -1543,11 +1556,13 @@ def _answer_query_impl(
     messages = build_messages(q, build_evidence_blocks(grounded))
     generation_started = time.perf_counter()
     try:
-        if client is None:
+        if client is None and not llm_profiles.configured():
             client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
-        resp = _create_chat_completion(
-            client,
-            messages,
+        # Through the gateway: the route's profiles in order, a breaker per profile, the usage line.
+        resp = llm_gateway.invoke(
+            "generate", tenant_id, lambda chat_client, profile: _create_chat_completion(chat_client, messages, profile),
+            client=client, estimate_input="".join(str(m.get("content") or "") for m in messages),
+            user_visible_text=lambda r: r.choices[0].message.content or "",
         )
     except Exception as exc:
         trace.setdefault("stage_latency_ms", {})["generation_ms"] = int(
@@ -1763,11 +1778,11 @@ def answer_query_stream(
     pieces: List[str] = []
     generation_started = time.perf_counter()
     try:
-        if client is None:
+        if client is None and not llm_profiles.configured():
             client = ensure_openai_client(base_url=config.OPENAI_BASE_URL)
-        for delta_text in _stream_chat_completion(
-            client,
-            messages,
+        for delta_text in llm_gateway.invoke_stream(
+            "generate", tenant_id, lambda chat_client, profile: _stream_chat_completion(chat_client, messages, profile),
+            client=client, estimate_input="".join(str(m.get("content") or "") for m in messages),
         ):
             pieces.append(delta_text)
             yield "delta", {"text": delta_text}

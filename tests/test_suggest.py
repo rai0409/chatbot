@@ -7,6 +7,7 @@ import config
 from rag_core import suggest
 from rag_core.approved_qa import load_approved_qa
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 def _record(qa_id, question, tenant="default", aliases=None):
@@ -96,10 +97,10 @@ def api(monkeypatch, path, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "_approved_qa_index", None)
-    monkeypatch.setattr(main, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
     audit = []
-    monkeypatch.setattr(main, "append_audit_event", lambda kind, event: audit.append((kind, event)))
+    monkeypatch.setattr(chat_router, "append_audit_event", lambda kind, event: audit.append((kind, event)))
     return TestClient(main.app), audit
 
 

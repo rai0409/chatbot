@@ -6,6 +6,7 @@ from pathlib import Path
 from rag_core import feedback_rerank_profile
 from rag_core.approved_qa import ApprovedAnswer, ApprovedCitation
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 def _resolution(
@@ -35,7 +36,7 @@ def _resolution(
 
 
 def _disable_exact(monkeypatch):
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *args, **kwargs: None)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *args, **kwargs: None)
 
 
 def _fake_decision(candidates):
@@ -51,7 +52,7 @@ def _fake_decision(candidates):
 
 def _patch_preview(monkeypatch, candidates, *, audit_capture: dict | None = None):
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "decide_approved_similar_candidate", _fake_decision)
     monkeypatch.setattr(
         main.approved_similar,
@@ -59,10 +60,10 @@ def _patch_preview(monkeypatch, candidates, *, audit_capture: dict | None = None
         lambda *args, **kwargs: [dict(candidate) for candidate in candidates],
     )
     if audit_capture is None:
-        monkeypatch.setattr(main, "append_product_preview_chat_audit_event", lambda event: True)
+        monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", lambda event: True)
     else:
         monkeypatch.setattr(
-            main,
+            chat_router,
             "append_product_preview_chat_audit_event",
             lambda event: audit_capture.update(event) or True,
         )
@@ -92,12 +93,12 @@ def _feedback_profile(path: Path, adjustments: dict) -> Path:
 
 def _set_feedback_profile(monkeypatch, path: Path):
     monkeypatch.setattr(feedback_rerank_profile, "PROFILE_PATH", path)
-    monkeypatch.setattr(main, "PROFILE_PATH", path)
+    monkeypatch.setattr(chat_router, "PROFILE_PATH", path)
 
 
 def test_use_tenant_profile_omitted_preserves_product_profile_behavior(monkeypatch):
     _patch_preview(monkeypatch, [{"qa_id": "qa-a", "question_text": "A", "score": 0.9}])
-    monkeypatch.setattr(main, "resolve_tenant_product_profile", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("tenant mapping should not load")))
+    monkeypatch.setattr(chat_router, "resolve_tenant_product_profile", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("tenant mapping should not load")))
 
     response = main.chat_product_preview(
         main.ProductPreviewChatRequest(query="候補", product_profile="dev_debug")
@@ -109,7 +110,7 @@ def test_use_tenant_profile_omitted_preserves_product_profile_behavior(monkeypat
 
 def test_use_tenant_profile_false_preserves_product_profile_behavior(monkeypatch):
     _patch_preview(monkeypatch, [{"qa_id": "qa-a", "question_text": "A", "score": 0.9}])
-    monkeypatch.setattr(main, "resolve_tenant_product_profile", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("tenant mapping should not load")))
+    monkeypatch.setattr(chat_router, "resolve_tenant_product_profile", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("tenant mapping should not load")))
 
     response = main.chat_product_preview(
         main.ProductPreviewChatRequest(query="候補", product_profile="evaluation", use_tenant_profile=False)
@@ -141,7 +142,7 @@ def test_tenant_profile_gates_feedback_and_feature_rerank(monkeypatch, tmp_path)
             {"qa_id": "qa-b", "question_text": "健康保険被保険者証の再発行", "score": 0.1},
         ],
     )
-    monkeypatch.setattr(main, "resolve_tenant_product_profile", lambda *args, **kwargs: _resolution(resolved_profile="production_safe"))
+    monkeypatch.setattr(chat_router, "resolve_tenant_product_profile", lambda *args, **kwargs: _resolution(resolved_profile="production_safe"))
 
     response = main.chat_product_preview(
         main.ProductPreviewChatRequest(
@@ -164,7 +165,7 @@ def test_tenant_profile_gates_feedback_and_feature_rerank(monkeypatch, tmp_path)
 def test_requested_product_profile_inside_allowed_profiles_is_accepted(monkeypatch):
     _patch_preview(monkeypatch, [{"qa_id": "qa-a", "question_text": "A", "score": 0.9}])
     monkeypatch.setattr(
-        main,
+        chat_router,
         "resolve_tenant_product_profile",
         lambda *args, **kwargs: _resolution(resolved_profile="production_low_cost", requested_profile="production_low_cost", reasons=["requested_profile_allowed"]),
     )
@@ -186,7 +187,7 @@ def test_requested_product_profile_inside_allowed_profiles_is_accepted(monkeypat
 def test_requested_product_profile_outside_allowed_profiles_is_safely_ignored(monkeypatch):
     _patch_preview(monkeypatch, [{"qa_id": "qa-a", "question_text": "A", "score": 0.9}])
     monkeypatch.setattr(
-        main,
+        chat_router,
         "resolve_tenant_product_profile",
         lambda *args, **kwargs: _resolution(
             resolved_profile="production_safe",
@@ -216,7 +217,7 @@ def test_requested_product_profile_outside_allowed_profiles_is_safely_ignored(mo
 def test_unknown_tenant_falls_back_safely_and_never_uses_dev_or_evaluation(monkeypatch):
     _patch_preview(monkeypatch, [{"qa_id": "qa-a", "question_text": "A", "score": 0.9}])
     monkeypatch.setattr(
-        main,
+        chat_router,
         "resolve_tenant_product_profile",
         lambda *args, **kwargs: _resolution(
             tenant_id="missing",
@@ -241,10 +242,10 @@ def test_unknown_tenant_falls_back_safely_and_never_uses_dev_or_evaluation(monke
 
 def test_disabled_tenant_returns_safe_response_without_rerank_or_500(monkeypatch):
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "_embedding_client", lambda: (_ for _ in ()).throw(AssertionError("search should not run")))
-    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", lambda event: True)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: (_ for _ in ()).throw(AssertionError("search should not run")))
+    monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", lambda event: True)
     monkeypatch.setattr(
-        main,
+        chat_router,
         "resolve_tenant_product_profile",
         lambda *args, **kwargs: _resolution(
             resolved_profile=None,
@@ -306,8 +307,8 @@ def test_exact_approved_answer_remains_exact_under_tenant_profile(monkeypatch):
         tenant_id="default",
         language="ja",
     )
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *args, **kwargs: approved)
-    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", lambda event: True)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *args, **kwargs: approved)
+    monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", lambda event: True)
 
     response = main.chat_product_preview(
         main.ProductPreviewChatRequest(query="完全一致質問", use_tenant_profile=True)
@@ -322,10 +323,10 @@ def test_exact_approved_answer_remains_exact_under_tenant_profile(monkeypatch):
 def test_production_low_cost_tenant_display_limit_is_applied(monkeypatch):
     captured = {}
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "decide_approved_similar_candidate", _fake_decision)
-    monkeypatch.setattr(main, "append_product_preview_chat_audit_event", lambda event: True)
-    monkeypatch.setattr(main, "resolve_tenant_product_profile", lambda *args, **kwargs: _resolution(resolved_profile="production_low_cost"))
+    monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", lambda event: True)
+    monkeypatch.setattr(chat_router, "resolve_tenant_product_profile", lambda *args, **kwargs: _resolution(resolved_profile="production_low_cost"))
 
     def _search(query, **kwargs):
         captured["top_k"] = kwargs.get("top_k")
@@ -370,7 +371,7 @@ def test_audit_metadata_includes_safe_tenant_resolution_fields(monkeypatch):
     captured = {}
     _patch_preview(monkeypatch, [{"qa_id": "qa-a", "question_text": "A", "score": 0.9}], audit_capture=captured)
     monkeypatch.setattr(
-        main,
+        chat_router,
         "resolve_tenant_product_profile",
         lambda *args, **kwargs: _resolution(resolved_profile="production_low_cost", requested_profile="production_low_cost"),
     )

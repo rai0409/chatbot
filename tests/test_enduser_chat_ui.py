@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import config
 from rag_core import answer_cache
 from webapi import main, metrics_registry
+from webapi.routers import chat as chat_router
 
 
 class _Recorder:
@@ -58,10 +59,10 @@ def _setup(monkeypatch, tmp_path, *, auth=False):
     metrics_registry.reset()
     pipeline = _Recorder(result=_fake_answer())
     stream_pipeline = _Recorder(result=iter(()))
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
-    monkeypatch.setattr(main, "answer_query_with_trace", pipeline)
-    monkeypatch.setattr(main, "answer_query_stream", stream_pipeline)
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *a, **k: None)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", pipeline)
+    monkeypatch.setattr(chat_router, "answer_query_stream", stream_pipeline)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: None)
     return SimpleNamespace(pipeline=pipeline, stream_pipeline=stream_pipeline)
 
 
@@ -156,7 +157,7 @@ def test_feedback_endpoint_still_protected_with_auth(monkeypatch, tmp_path):
 
 def test_feedback_contract_accepts_ui_token_shape(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)  # auth disabled
-    monkeypatch.setattr(main, "append_feedback_audit_event", lambda event: True)
+    monkeypatch.setattr(chat_router, "append_feedback_audit_event", lambda event: True)
     client = TestClient(main.app)
 
     for ftype in ("good", "bad", "human_review_requested"):

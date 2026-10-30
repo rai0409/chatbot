@@ -9,6 +9,7 @@ import pytest
 from rag_core import embedding_provider, store
 from scripts import ingest_canonical_jsonl
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 class FakeCollection:
@@ -156,6 +157,6 @@ def test_embedding_client_uses_unified_default(monkeypatch):
 def test_embedding_client_non_local_uses_openai_client(monkeypatch):
     monkeypatch.setenv("EMBED_PROVIDER", "openai")
     sentinel = object()
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: sentinel)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: sentinel)
 
     assert main._embedding_client() is sentinel

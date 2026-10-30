@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from rag_core import contracts
-from rag_core.connectors.sharepoint import GRAPH, GraphClient, token_provider
+from rag_core.connectors.sharepoint import GraphClient, graph_base, token_provider, transport_for
 
 _MAILBOX_RE = re.compile(r"^([^@\s]{1,64}@[^@\s]{1,255}\.[^@\s]{2,}|[0-9a-fA-F-]{36})$")
 MAX_RECIPIENTS = 10
@@ -19,7 +19,8 @@ def default_client() -> GraphClient:
 
     mapped = {"SHAREPOINT_" + name: os.environ.get("OUTLOOK_" + name, "")
               for name in ("ACCESS_TOKEN", "TENANT_ID", "CLIENT_ID", "CLIENT_SECRET")}
-    return GraphClient(token_provider(mapped))
+    transport = transport_for("outlook_draft")  # the egress check of this integration, not SharePoint's
+    return GraphClient(token_provider(mapped, transport=transport), transport=transport)
 
 
 def create_draft(client: GraphClient, mailbox: str, *, to: Sequence[str], subject: str, body: str) -> Dict[str, str]:
@@ -33,7 +34,7 @@ def create_draft(client: GraphClient, mailbox: str, *, to: Sequence[str], subjec
         raise contracts.ContractError("the subject (1-200) or the body (at most 20000 characters) is not valid")
     payload = {"subject": subject, "body": {"contentType": "Text", "content": body},
                "toRecipients": [{"emailAddress": {"address": a}} for a in recipients]}
-    answer = client.post_json(f"{GRAPH}/users/{urllib.parse.quote(mailbox)}/messages", payload)
+    answer = client.post_json(f"{graph_base()}/users/{urllib.parse.quote(mailbox)}/messages", payload)
     return {"draft_id": str(answer.get("id") or ""), "web_link": str(answer.get("webLink") or "")}
 
 

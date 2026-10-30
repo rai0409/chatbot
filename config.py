@@ -317,3 +317,103 @@ TENANT_FILTER_STRICT = _get_bool("TENANT_FILTER_STRICT", default=False)
 LOG_WHERE = _get_bool("LOG_WHERE", default=False)
 AUDIT_CHAT_ENABLED = _get_bool("AUDIT_CHAT_ENABLED", default=True)
 AUDIT_SEARCH_DEBUG_ENABLED = _get_bool("AUDIT_SEARCH_DEBUG_ENABLED", default=True)
+
+# --- Deployment-specific endpoints and timeouts (S1) --------------------------------------------------------------------
+# These were fixed in the code. They are settings of one deployment (a sovereign cloud, a proxy, a slow link), so they
+# live here and in the environment; every default equals the former fixed value. Secrets stay in the environment only.
+# Microsoft Graph (rag_core/connectors): API base, token endpoint ({tenant} is filled in), scope, HTTP timeout, longest wait.
+GRAPH_BASE_URL = getenv_first("GRAPH_BASE_URL", default="https://graph.microsoft.com/v1.0")
+GRAPH_TOKEN_URL = getenv_first("GRAPH_TOKEN_URL", default="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token")
+GRAPH_SCOPE = getenv_first("GRAPH_SCOPE", default="https://graph.microsoft.com/.default")
+GRAPH_HTTP_TIMEOUT_SECONDS = _get_float("GRAPH_HTTP_TIMEOUT_SECONDS", default=60.0)
+GRAPH_MAX_WAIT_SECONDS = _get_float("GRAPH_MAX_WAIT_SECONDS", default=60.0)
+# Alert notifications (webapi/notifications.py).
+NOTIFY_SLACK_TIMEOUT_SECONDS = _get_float("NOTIFY_SLACK_TIMEOUT_SECONDS", default=10.0)
+NOTIFY_SMTP_TIMEOUT_SECONDS = _get_float("NOTIFY_SMTP_TIMEOUT_SECONDS", default=15.0)
+# OIDC (webapi/oidc_auth.py): HTTP timeout of the token and JWKS calls, and the wait before the one JWKS retry.
+OIDC_HTTP_TIMEOUT_SECONDS = _get_float("OIDC_HTTP_TIMEOUT_SECONDS", default=15.0)
+OIDC_RETRY_WAIT_SECONDS = _get_float("OIDC_RETRY_WAIT_SECONDS", default=0.5)
+# Remote embeddings may use their own endpoint (for example a local server) while the LLM uses another. Empty: the
+# embedding client keeps using OPENAI_BASE_URL, as before.
+EMBEDDING_BASE_URL = getenv_first("EMBEDDING_BASE_URL", default="")
+
+# --- External integrations and runtime settings (S1, rag_core/integrations.py, rag_core/runtime_settings.py) ------------
+# The environment layer of the integration switches: only the names listed here may use the network at all
+# (sharepoint, outlook_draft, smtp, slack). Empty = none. A console switch and a tenant switch can only narrow it.
+EXTERNAL_INTEGRATIONS = [name.lower() for name in _get_list("EXTERNAL_INTEGRATIONS", [])]
+# Where the console's runtime switches are kept (a small JSON file). Empty: <RUNS_DIR>/settings.
+RUNTIME_SETTINGS_DIR = getenv_first("RUNTIME_SETTINGS_DIR", default="")
+
+# --- LLM gateway (S2, rag_core/llm_gateway.py) ---------------------------------------------------------------------------
+# Model profiles: a JSON file of the deployment (config/deploy/llm_profiles.example.json is the model). Empty: one implicit
+# profile made of OPENAI_BASE_URL / CHAT_MODEL, as before.
+LLM_PROFILES_FILE = getenv_first("LLM_PROFILES_FILE", default="")
+# Circuit breaker per profile: open after this many failures in a row, stay open this long, then let this many trial
+# calls through.
+LLM_BREAKER_ENABLED = _get_bool("LLM_BREAKER_ENABLED", default=True)
+LLM_BREAKER_FAILURE_THRESHOLD = int(getenv_first("LLM_BREAKER_FAILURE_THRESHOLD", default="3"))
+LLM_BREAKER_OPEN_SECONDS = _get_float("LLM_BREAKER_OPEN_SECONDS", default=60.0)
+LLM_BREAKER_PROBES = int(getenv_first("LLM_BREAKER_PROBES", default="1"))
+# Usage log: one line per call (no question, no answer), a file per day. Empty directory: <RUNS_DIR>/usage.
+LLM_USAGE_ENABLED = _get_bool("LLM_USAGE_ENABLED", default=True)
+LLM_USAGE_DIR = getenv_first("LLM_USAGE_DIR", default="")
+
+# --- Records of questions and answers for evaluation (S3, rag_core/records.py) ----------------------------------------------
+# The record level: off | anonymous | standard | detailed. DEFAULT is what applies until the console sets one (per tenant
+# or for all); MAX is the highest level the console may set (the environment decides, not the console). Off by default:
+# recording what people ask needs a notice to them and a decision on who may read it (docs/operations/records.md).
+RECORD_LEVEL_DEFAULT = (getenv_first("RECORD_LEVEL_DEFAULT", default="off") or "off").strip().lower()
+RECORD_LEVEL_MAX = (getenv_first("RECORD_LEVEL_MAX", default="standard") or "standard").strip().lower()
+RECORDS_DIR = getenv_first("RECORDS_DIR", default="")
+# Retention in days (a record older than this is anonymized or deleted by the purge); the detailed level keeps the
+# device information (address, browser) for the shorter period only.
+RECORDS_RETENTION_DAYS = int(getenv_first("RECORDS_RETENTION_DAYS", default="365"))
+RECORDS_DETAILED_RETENTION_DAYS = int(getenv_first("RECORDS_DETAILED_RETENTION_DAYS", default="30"))
+# What the purge does with an expired record: anonymize (keeps counts, drops text and identity) | delete.
+RECORDS_EXPIRY_ACTION = (getenv_first("RECORDS_EXPIRY_ACTION", default="anonymize") or "anonymize").strip().lower()
+# Secret salt of the pseudonyms of the anonymous level. Empty: a salt is made once and kept beside the runtime settings.
+RECORDS_HASH_SALT = getenv_first("RECORDS_HASH_SALT", default="")
+# Retention of the LLM usage files, in days (13 months).
+LLM_USAGE_RETENTION_DAYS = int(getenv_first("LLM_USAGE_RETENTION_DAYS", default="400"))
+
+# --- Golden questions, business hours (S4) ------------------------------------------------------------------------------------
+# Where the golden questions kept in the console live: one JSON-lines file per tenant. Empty: <BASE_DIR>/data/golden_qa.
+GOLDEN_QA_DIR = getenv_first("GOLDEN_QA_DIR", default="")
+# Business hours for the availability figures (weekdays only; holidays are not known): the offset from UTC of the local
+# time, and the first and last hour (08:00 to 21:00 by default).
+BUSINESS_HOURS_UTC_OFFSET = _get_float("BUSINESS_HOURS_UTC_OFFSET", default=9.0)
+BUSINESS_HOURS_START = int(getenv_first("BUSINESS_HOURS_START", default="8"))
+BUSINESS_HOURS_END = int(getenv_first("BUSINESS_HOURS_END", default="21"))
+
+# --- LLM limits, assignments and batches (S6, rag_core/llm_quota.py, llm_assignments.py, llm_batch.py) ----------------------------
+# Daily limits (0 = no limit). The console can set them for all or for one tenant (runtime settings, with a reason); these are
+# what applies until it does. The day is the local day of the business hours (BUSINESS_HOURS_UTC_OFFSET). User limits need an
+# identified caller: without one (API authentication off) only the tenant and global limits apply.
+LLM_QUOTA_USER_DAILY_CALLS = int(getenv_first("LLM_QUOTA_USER_DAILY_CALLS", default="0"))
+LLM_QUOTA_USER_DAILY_TOKENS = int(getenv_first("LLM_QUOTA_USER_DAILY_TOKENS", default="0"))
+LLM_QUOTA_TENANT_DAILY_TOKENS = int(getenv_first("LLM_QUOTA_TENANT_DAILY_TOKENS", default="0"))
+LLM_QUOTA_TENANT_DAILY_COST = _get_float("LLM_QUOTA_TENANT_DAILY_COST", default=0.0)
+LLM_QUOTA_GLOBAL_DAILY_COST = _get_float("LLM_QUOTA_GLOBAL_DAILY_COST", default=0.0)
+# From this share of a limit the screens and the alerts warn; features that no limit applies to (scoring runs of an evaluation).
+LLM_QUOTA_WARN_RATIO = _get_float("LLM_QUOTA_WARN_RATIO", default=0.8)
+LLM_QUOTA_EXEMPT_FEATURES = [name.lower() for name in _get_list("LLM_QUOTA_EXEMPT_FEATURES", ["judge"])]
+# How long the used amounts are kept before they are read again from the usage files (other workers write there too).
+LLM_QUOTA_CACHE_SECONDS = _get_float("LLM_QUOTA_CACHE_SECONDS", default=10.0)
+# A provider's batch API is cheaper; this factor is applied to the cost of a batched call (an assumption: check the provider's price).
+LLM_BATCH_COST_FACTOR = _get_float("LLM_BATCH_COST_FACTOR", default=0.5)
+
+# --- Two-person approval of turning an external integration on (S7, rag_core/approvals.py) ----------------------------------
+# How many people a change that widens what may leave the system needs: 1 = it takes effect at once (a reason and the audit log
+# remain); 2 = one person asks and a different person approves. Turning an integration OFF never waits for anyone.
+INTEGRATION_APPROVALS_REQUIRED = int(getenv_first("INTEGRATION_APPROVALS_REQUIRED", default="2"))
+# A request that nobody decided in this many hours expires.
+APPROVAL_EXPIRY_HOURS = _get_float("APPROVAL_EXPIRY_HOURS", default=72.0)
+# true: only people identified by single sign-on can approve (a name typed in the console is not enough to prove who someone is).
+APPROVAL_REQUIRE_SSO = _get_bool("APPROVAL_REQUIRE_SSO", default=False)
+
+# --- Availability measured by an external probe (S7, rag_core/availability.py, scripts/external_probe.py) -----------------------------
+# The probe runs on another host and keeps a log; the service reads it to show the availability in business hours. Empty: not shown.
+PROBE_LOG_FILE = getenv_first("PROBE_LOG_FILE", default="")
+AVAILABILITY_TARGET_PERCENT = _get_float("AVAILABILITY_TARGET_PERCENT", default=99.0)
+# A probe answer holds for at most this long; time beyond that is reported as unmonitored (the probe did not run).
+PROBE_MAX_GAP_SECONDS = _get_float("PROBE_MAX_GAP_SECONDS", default=300.0)

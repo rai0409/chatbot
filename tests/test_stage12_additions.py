@@ -41,9 +41,11 @@ def test_chat_source_reads_the_staging_collection(open_api, monkeypatch):
         return None
 
     monkeypatch.setattr(retrieval, "chunk_row", fake_row)
-    monkeypatch.setattr(open_api, "_resolve_staging_collection", lambda name, tenant_id: name or None)
+    from webapi.routers import chat_source as chat_source_router
+
+    monkeypatch.setattr(chat_source_router, "_resolve_staging_collection", lambda name, tenant_id: name or None)
     client = TestClient(open_api.app)
-    ok = client.get("/chat/source?chunk_id=c9&collection=pilot_staging_v1")
+    ok =client.get("/chat/source?chunk_id=c9&collection=pilot_staging_v1")
     assert ok.status_code == 200 and ok.json()["text"] == "ステージングの本文"
     assert calls[-1] == ("c9", "pilot_staging_v1")
     assert client.get("/chat/source?chunk_id=c9").status_code == 404

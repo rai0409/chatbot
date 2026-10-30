@@ -25,7 +25,7 @@ jobs:
             python -m pip install pytest -c constraints/linux-py312.txt
           else
             # Same set as the Docker image (Sudachi, Redis/Postgres, Qdrant), so their tests run too.
-            python -m pip install -r requirements.txt -r requirements-pdf.txt -r requirements-ja.txt -r requirements-state.txt -r requirements-qdrant.txt pytest -c constraints/linux-py312.txt
+            python -m pip install -r requirements.txt -r requirements-pdf.txt -r requirements-ja.txt -r requirements-state.txt -r requirements-qdrant.txt -r requirements-anthropic.txt pytest -c constraints/linux-py312.txt
           fi
 
       - name: Product readiness smoke
@@ -87,10 +87,19 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Screen script unit tests (node --test)
         run: node --test tests/js/*.test.js
+
+      - name: Console (webui) - install from the lock file, type check, tests, build, dependency audit
+        working-directory: webui
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+          npm audit --audit-level=high
 
       - name: Screen browser tests (Playwright, headless Chromium)
         run: |

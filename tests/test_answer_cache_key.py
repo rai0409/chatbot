@@ -7,6 +7,7 @@ import config
 from rag_core import answer_cache, index_generation, profile_loader, query_preprocess
 from schemas import AnswerResult
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 @pytest.fixture
@@ -145,8 +146,8 @@ def _fake_pipeline(calls):
 
 def test_a_changed_profile_or_setting_is_not_answered_from_the_cache(state, monkeypatch):
     calls = []
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
-    monkeypatch.setattr(main, "answer_query_with_trace", _fake_pipeline(calls))
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", _fake_pipeline(calls))
 
     main.chat(main.ChatRequest(question="質問です"))
     main.chat(main.ChatRequest(question="質問です"))

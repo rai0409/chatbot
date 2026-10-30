@@ -6,6 +6,7 @@ import config
 from rag_core import answer_cache, retrieval
 from rag_core.retrieval import RetrievedChunk
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 def _write_corpus(path, rows):
@@ -158,7 +159,7 @@ def test_chat_threads_tenant_to_pipeline_and_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", False)
     monkeypatch.setattr(config, "ANSWER_CACHE_ENABLED", True)
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
     answer_cache.clear()
 
     seen_tenants = []
@@ -189,7 +190,7 @@ def test_chat_threads_tenant_to_pipeline_and_cache(monkeypatch, tmp_path):
         }
         return ans, trace
 
-    monkeypatch.setattr(main, "answer_query_with_trace", fake)
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", fake)
 
     first_a = main.chat(main.ChatRequest(question="質問です", tenant_id="tenant_a"))
     first_b = main.chat(main.ChatRequest(question="質問です", tenant_id="tenant_b"))
@@ -228,8 +229,8 @@ def test_chat_approved_lookup_respects_tenant(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "_approved_qa_index", None)
-    monkeypatch.setattr(main, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
 
     payload_a = main.chat(main.ChatRequest(question="営業時間を教えてください", tenant_id="tenant_a"))
     payload_b = main.chat(main.ChatRequest(question="営業時間を教えてください", tenant_id="tenant_b"))

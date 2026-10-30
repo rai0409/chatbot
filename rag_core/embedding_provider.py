@@ -142,7 +142,11 @@ def _create_openai_client():
     api_key = config.getenv_first("OPENAI_API_KEY", default=getattr(config, "OPENAI_API_KEY", ""))
     if api_key is None or str(api_key).strip() == "":
         raise RuntimeError("OPENAI_API_KEY is missing for OpenAI embeddings")
-    base_url = config.getenv_first("OPENAI_BASE_URL", default=getattr(config, "OPENAI_BASE_URL", None))
+    # EMBEDDING_BASE_URL (config.py) lets the embeddings use another endpoint than the LLM; empty keeps OPENAI_BASE_URL.
+    base_url = (
+        str(getattr(config, "EMBEDDING_BASE_URL", "") or "").strip()
+        or config.getenv_first("OPENAI_BASE_URL", default=getattr(config, "OPENAI_BASE_URL", None))
+    )
     openai_class = _load_openai_class()
     if base_url:
         return openai_class(api_key=api_key, base_url=base_url)

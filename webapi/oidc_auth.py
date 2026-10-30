@@ -31,6 +31,7 @@ with _warnings.catch_warnings():
     from authlib.jose.errors import JoseError
 from fastapi import HTTPException
 
+import config as app_config  # this module has its own config() function
 from webapi import metrics_registry, oidc_hardening, state_backend
 from webapi.api_auth import (
     ApiAuthContext,
@@ -234,9 +235,14 @@ def _exchange_code(token_endpoint: str, *, code: str, redirect_uri: str, client_
     else:
         data["client_secret"] = client_secret
     # The code is single-use: no retry here.
-    resp = requests.post(token_endpoint, data=data, auth=auth, timeout=15, verify=http_verify())
+    resp = requests.post(token_endpoint, data=data, auth=auth, timeout=_http_timeout(), verify=http_verify())  # nosec B113 - the timeout is the OIDC_HTTP_TIMEOUT_SECONDS setting (at least 1 second)
     resp.raise_for_status()
     return resp.json()
+
+
+def _http_timeout() -> float:
+    # OIDC_HTTP_TIMEOUT_SECONDS (config.py); the former fixed value was 15 seconds.
+    return max(1.0, float(getattr(app_config, "OIDC_HTTP_TIMEOUT_SECONDS", 15.0)))
 
 
 # JWKS cache (TTL + refetch on unknown kid). The fetch goes through
@@ -249,13 +255,13 @@ def _fetch_jwks(jwks_uri: str) -> Dict[str, Any]:
 
     for attempt in range(2):
         try:
-            resp = requests.get(jwks_uri, timeout=15, verify=http_verify())
+            resp = requests.get(jwks_uri, timeout=_http_timeout(), verify=http_verify())  # nosec B113 - the timeout is the OIDC_HTTP_TIMEOUT_SECONDS setting (at least 1 second)
             resp.raise_for_status()
             return resp.json()
         except (requests.ConnectionError, requests.Timeout):
             if attempt:
                 raise
-            time.sleep(0.5)
+            time.sleep(max(0.0, float(getattr(app_config, "OIDC_RETRY_WAIT_SECONDS", 0.5))))
     raise RuntimeError("unreachable")
 
 

@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
 from webapi import main
+from webapi.routers import admin_core as admin_core_router
 from webapi.admin_auth import require_admin_auth, require_admin_auth_headers
 
 
@@ -101,7 +102,7 @@ def test_expected_token_is_not_in_error_response(monkeypatch):
 
 
 def _route(path: str, method: str) -> APIRoute:
-    for route in main.app.routes:
+    for route in [*main.app.routes, *admin_core_router.router.routes]:
         if isinstance(route, APIRoute) and route.path == path and method in route.methods:
             return route
     raise AssertionError(f"route not found: {method} {path}")

@@ -70,6 +70,10 @@
   .badge { border-radius: 999px; padding: 0 8px; font-size: 11px; border: 1px solid var(--line); background: var(--chip); color: var(--fg); }
   .badge.approved { background: var(--accent-weak); border-color: transparent; color: var(--accent); font-weight: 600; }
   .badge.abstain { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn); }
+  /* Service state (S5): shown while the AI that writes the answers is unavailable; the answers are then excerpts. */
+  .service-banner { background: var(--warn-bg); border-bottom: 1px solid var(--warn-line); color: var(--warn); padding: 8px 16px; font-size: 13px; line-height: 1.6; }
+  .service-banner[hidden] { display: none; }
+  .answer-notice { background: var(--warn-bg); border: 1px solid var(--warn-line); color: var(--warn); padding: 6px 10px; border-radius: 8px; font-size: 12px; margin-top: 8px; }
   .a { word-break: break-word; }
   .a p { margin: 0 0 .5em; }
   .a ul { margin: 0 0 .5em; padding-left: 1.3em; }
@@ -172,6 +176,8 @@
       <button class="icon-btn sources-btn" id="sourcesBtn" type="button" aria-label="出典を開く">出典</button>
     </header>
 
+    <div id="serviceBanner" class="service-banner" role="status" hidden></div>
+
     <div id="log" role="log" aria-live="polite" aria-relevant="additions"></div>
 
     <div class="composer-wrap">
@@ -209,6 +215,12 @@
     { v: "outdated", t: "情報が古い" }, { v: "wrong_source", t: "出典が合っていない" }, { v: "incomplete", t: "情報が足りない" }
   ];
   var controller = null, busy = false, historyEnabled = true;
+  // Wording of the service state. The server sends only a code (GET /system/status, and "service_notice" on an answer).
+  var SERVICE_TEXT = {
+    llm_unavailable: "現在、AI による文章生成は利用できません。登録文書の原文の抜粋を表示しています。",
+    answer_notice: "AI による文章生成が利用できなかったため、文書の原文の抜粋を表示しています。",
+    quota_notice: "本日の AI の利用上限に達したため、文書の原文の抜粋を表示しています。明日、またお試しください。"
+  };
 
   // Escaping and answer rendering: /static/js/render.js (tests/js/render.test.js).
   var R = window.KuradenRender;
@@ -492,6 +504,13 @@
     var txt = data ? (data.answer_with_footnotes || data.answer_text || "") : streamed;
     if (txt) a.innerHTML = renderAnswerHtml(txt, citeMap); else a.innerHTML = "";
     if (kind === "abstain") renderAbstain(card);
+    if (data && (data.service_notice === "llm_unavailable" || data.service_notice === "quota_exceeded")) {
+      var notice = document.createElement("div"); notice.className = "answer-notice"; notice.setAttribute("role", "note");
+      notice.textContent = data.service_notice === "quota_exceeded" ? SERVICE_TEXT.quota_notice : SERVICE_TEXT.answer_notice;
+      card.appendChild(notice);
+      // A reached limit is this person's (or this tenant's) matter, not the state of the service: no banner for the others.
+      if (data.service_notice === "llm_unavailable") showServiceBanner("llm_unavailable");
+    }
     if (data && data.interpretation && data.interpretation.summary) {
       var interp = document.createElement("div"); interp.className = "interp";
       interp.textContent = data.interpretation.summary + (ctx.deep ? "（詳しく調べた結果）" : "");
@@ -620,6 +639,20 @@
     }).catch(function () {});
   }
 
+  // The state of the service: normal, or degraded (answers are excerpts because the LLM is unavailable).
+  function showServiceBanner(reason) {
+    var banner = $("serviceBanner");
+    if (!reason) { banner.hidden = true; banner.textContent = ""; return; }
+    banner.textContent = SERVICE_TEXT[reason] || SERVICE_TEXT.llm_unavailable;
+    banner.hidden = false;
+  }
+  function refreshServiceStatus() {
+    fetch("/system/status?tenant_id=" + encodeURIComponent(tenant()), { headers: headers() })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) { if (s) showServiceBanner(s.service === "degraded" ? (s.reason || "llm_unavailable") : ""); })
+      .catch(function () { /* the state is a hint: never block the page on it */ });
+  }
+
   sendBtn.addEventListener("click", ask);
   newChatBtn.addEventListener("click", newConversation);
   tenantEl.addEventListener("change", function () { updateScope(); historyEnabled = true; loadHistory(); });
@@ -645,6 +678,10 @@
   applyBranding();
   applyRole();
   loadHistory();
+  refreshServiceStatus();
+  setInterval(refreshServiceStatus, 60000);
+  tenantEl.addEventListener("change", refreshServiceStatus);
+  apiKeyEl.addEventListener("change", refreshServiceStatus);
 })();
 </script>
 </body>

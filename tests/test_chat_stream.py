@@ -11,6 +11,7 @@ import config
 from rag_core import qa
 from rag_core.retrieval import RetrievedChunk
 from webapi import main
+from webapi.routers import chat as chat_router
 from webapi.api_auth import require_api_auth
 
 
@@ -210,9 +211,9 @@ def test_chat_stream_endpoint_approved_single_event(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "_approved_qa_index", None)
-    monkeypatch.setattr(main, "_approved_qa_index_path", None)
-    monkeypatch.setattr(main, "ensure_openai_client", _forbidden_client)
+    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", _forbidden_client)
 
     response = main.chat_stream(main.ChatRequest(question="営業時間を教えてください"))
 
@@ -235,7 +236,7 @@ def test_chat_stream_endpoint_error_before_first_token(monkeypatch, tmp_path):
     failing = _FakeStreamClient(
         [_FakeStatusError(429, "rate limit"), _FakeStatusError(429, "rate limit")]
     )
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: failing)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: failing)
 
     response = main.chat_stream(main.ChatRequest(question="PR2 を教えて"))
 
@@ -253,7 +254,7 @@ def test_chat_stream_endpoint_error_before_first_token(monkeypatch, tmp_path):
 
 
 def _route(path: str, method: str) -> APIRoute:
-    for route in main.app.routes:
+    for route in [*main.app.routes, *chat_router.router.routes]:
         if isinstance(route, APIRoute) and route.path == path and method in route.methods:
             return route
     raise AssertionError(f"route not found: {method} {path}")

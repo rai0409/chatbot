@@ -3,6 +3,16 @@
 #   docker inspect --format '{{index .RepoDigests 0}}' python:3.12-slim
 #   docker build --build-arg PYTHON_IMAGE=python:3.12-slim@sha256:<digest> .
 ARG PYTHON_IMAGE=python:3.12-slim
+# The administration console (webui/) is built here and only its static files are copied into the final image:
+# the image that runs has no Node. Pin it by digest like the Python image.
+ARG NODE_IMAGE=node:22-slim
+FROM ${NODE_IMAGE} AS webui
+WORKDIR /webui
+COPY webui/package.json webui/package-lock.json webui/.npmrc ./
+RUN npm ci --no-audit
+COPY webui/ ./
+RUN npm run build
+
 FROM ${PYTHON_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -52,11 +62,12 @@ RUN set -eux; \
       if [ "$WITH_LOCAL_MODELS" = "true" ]; then \
         extra="-r requirements-embedding.txt -c constraints/linux-py312-embedding.txt $cpu_index"; \
       fi; \
-      pip install --no-cache-dir -r requirements.txt -r requirements-ja.txt -r requirements-state.txt -r requirements-qdrant.txt \
+      pip install --no-cache-dir -r requirements.txt -r requirements-ja.txt -r requirements-state.txt -r requirements-qdrant.txt -r requirements-anthropic.txt \
         -c constraints/linux-py312.txt $extra; \
     fi
 
 COPY . .
+COPY --from=webui /webui/dist /app/webui/dist
 # best is not version-locked: PaddleOCR needs numpy<2.4 (constraints/ pins a
 # newer numpy), so pip moves numpy down. Record the versions of a best image.
 RUN set -eux; \

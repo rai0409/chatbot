@@ -23,12 +23,12 @@ Exit code: 0 pass, 1 fail, 2 insufficient, 3 refused or bad input.
 
 import argparse
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from eval.tenant_eval import conditions, evaluate, ledger, perturb, report
 from eval.tenant_eval.gate import Policy
 from eval.tenant_eval.runner import pipeline_answer_fn
-from rag_core import golden_qa, knob_registry, profile_loader, profile_store
+from rag_core import golden_qa, golden_store, knob_registry, profile_loader, profile_store
 
 EXIT = {"pass": 0, "fail": 1, "insufficient": 2}  # nosec B105 - decision labels, not credentials
 
@@ -53,8 +53,31 @@ def _parse_knobs(items: List[str]) -> Dict[str, Any]:
     return knob_registry.check_change(knobs) if knobs else {}
 
 
+def _load_cases(args) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """The golden cases to start from: those in the profile (default), those kept in the console, or both.
+
+    The console's cases (rag_core/golden_store.py, edited on the 'ゴールデン QA' screen) are read here, so what people write there is
+    what an evaluation judges on. With both, a case id that exists in the two places is a problem, not a silent choice."""
+    source = getattr(args, "golden_source", "profile") or "profile"
+    cases: List[Dict[str, Any]] = []
+    problems: List[str] = []
+    if source in ("profile", "both"):
+        cases, problems = golden_qa.load_cases(profile_loader.load_rag_profile(args.profile))
+    if source in ("console", "both"):
+        tenant = getattr(args, "golden_tenant", None) or args.tenant
+        console_cases, console_problems = golden_qa.load_cases({"golden_qa": golden_store.export_cases(tenant)})
+        known = {case["case_id"] for case in cases}
+        for case in console_cases:
+            if case["case_id"] in known:
+                problems.append(f"case_id '{case['case_id']}' is in the profile and in the console")
+        cases = cases + [case for case in console_cases if case["case_id"] not in known]
+        problems += [f"console: {message}" for message in console_problems]
+        cases.sort(key=lambda item: (-item["priority"], item["case_id"]))
+    return cases, problems
+
+
 def _select_cases(args) -> List[Dict[str, Any]]:
-    cases, problems = golden_qa.load_cases(profile_loader.load_rag_profile(args.profile))
+    cases, problems = _load_cases(args)
     if problems:
         raise ValueError("the golden cases have problems: " + "; ".join(problems))
     if args.exclude_change:
@@ -110,7 +133,8 @@ def _evaluate(args) -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(markdown, encoding="utf-8")
     print(json.dumps({"decision": gate["decision"], "ledger_seq": out["ledger_entry"]["seq"],
-                      "run_id": out["ledger_entry"]["run_id"], "n_cases": len(cases), "report": args.report or None},
+                      "run_id": out["ledger_entry"]["run_id"], "n_cases": len(cases), "report": args.report or None,
+                      "golden_source": getattr(args, "golden_source", "profile")},
                      ensure_ascii=False, indent=2))
     return EXIT[gate["decision"]]
 
@@ -130,6 +154,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ev.add_argument("--exclude-change", default=None)
     ev.add_argument("--budget", type=int, default=ledger.DEFAULT_BUDGET)
     ev.add_argument("--report", default=None)
+    ev.add_argument("--golden-source", choices=("profile", "console", "both"), default="profile",
+                    help="where the golden cases come from: the profile (default), the console's golden questions, or both")
+    ev.add_argument("--golden-tenant", default=None, help="the tenant of the console's golden questions (default: --tenant)")
     ev.add_argument("--perturb", action="store_true", help="add perturbed variants of the selected cases")
     ev.add_argument("--perturb-kinds", default="", help="comma-separated kinds (default: all)")
     sub.add_parser("ledger")

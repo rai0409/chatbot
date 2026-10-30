@@ -8,6 +8,7 @@ import config
 from eval.production_readiness_report import build_report
 from rag_core import answer_cache
 from webapi import main, metrics_registry, rate_limit
+from webapi.routers import chat as chat_router
 from webapi.rate_limit import FixedWindowRateLimiter
 
 
@@ -152,9 +153,9 @@ def _setup_auth_env(monkeypatch, tmp_path, *, rate_limit_enabled=False, limit="2
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
     answer_cache.clear()
     metrics_registry.reset()
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
-    monkeypatch.setattr(main, "answer_query_with_trace", lambda *a, **k: _fake_answer())
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *a, **k: None)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", lambda *a, **k: _fake_answer())
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: None)
 
 
 def test_auth_rejection_counter_missing_credentials(monkeypatch, tmp_path):

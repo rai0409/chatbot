@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from rag_core import change_ledger, source_registry as registry
+from rag_core import change_ledger, integrations, source_registry as registry
 from rag_core.source_registry import SourceError, SourceUnavailable
 from rag_core.source_scan import diff_manifests, name_conflicts, scan_folder
 
@@ -34,7 +34,11 @@ def scan_source(source_id: str, *, now: Optional[datetime] = None) -> Dict[str, 
     try:
         pulled: Dict[str, Any] = {}
         if record["kind"] != "folder":
-            puller = PULLERS.get(record["kind"]) or _builtin_puller(record["kind"])
+            puller = PULLERS.get(record["kind"])
+            if puller is None:
+                puller = _builtin_puller(record["kind"])
+                if puller is not None and record["kind"] in integrations.GATED:
+                    integrations.require(record["kind"], record["tenant_id"])  # the three layers; IntegrationDisabled below
             if puller is None:
                 raise SourceError(f"no connector for kind '{record['kind']}'")
             pulled = puller(record)
@@ -49,6 +53,13 @@ def scan_source(source_id: str, *, now: Optional[datetime] = None) -> Dict[str, 
         registry.update_state(source_id, last_scan_at=when.isoformat(), last_scan_run=entry["run_id"],
                               last_error="source_unavailable")
         return {"error": "source_unavailable", "run_id": entry["run_id"]}
+    except integrations.IntegrationDisabled as exc:
+        # Off on purpose, not a failure of the source: recorded as a failed scan, and (as always) never as "all deleted".
+        reason = f"integration_off:{exc.status.reason}"
+        entry = change_ledger.record("scan_failed", source_id=source_id, tenant_id=record["tenant_id"],
+                                     summary={"reason": reason}, now=when)
+        registry.update_state(source_id, last_scan_at=when.isoformat(), last_scan_run=entry["run_id"], last_error=reason)
+        return {"error": "integration_disabled", "reason": exc.status.reason, "run_id": entry["run_id"]}
     registry.save_manifest(source_id, "observed", scanned.manifest)
     delta = diff_manifests(applied, scanned.manifest)
     conflicts = name_conflicts(list(scanned.manifest))

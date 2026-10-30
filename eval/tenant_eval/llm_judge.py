@@ -31,21 +31,16 @@ def _expectation(case: Mapping[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def judge_case(
-    case: Mapping[str, Any], answer_text: str, *, tenant_id: str = "default", client: Any = None
-) -> Dict[str, str]:
-    """{"verdict": "pass" | "fail" | "error", "reason"}. Anything but a clear pass or fail is an error."""
-    messages = [
+def _messages(case: Mapping[str, Any], answer_text: str) -> list:
+    return [
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": f"<質問>\n{case['question']}\n</質問>\n\n<基準の回答>\n{_expectation(case)}\n</基準の回答>"
                                     f"\n\n<回答>\n{answer_text}\n</回答>"},
     ]
-    try:
-        text = llm.complete(messages, feature="judge", tenant_id=tenant_id, client=client, max_tokens=120)
-    except llm.LLMNotAllowed as exc:
-        return {"verdict": "error", "reason": f"not_allowed:{exc.decision.layer}"}
-    except Exception as exc:  # noqa: BLE001
-        return {"verdict": "error", "reason": f"error:{type(exc).__name__}"}
+
+
+def parse_judgement(text: str) -> Dict[str, str]:
+    """The judge's reply as {"verdict": "pass" | "fail" | "error", "reason"}. Anything but a clear pass or fail is an error."""
     try:
         data = json.loads(text[text.find("{"):text.rfind("}") + 1])
     except ValueError:
@@ -54,6 +49,19 @@ def judge_case(
     if verdict not in {"pass", "fail"}:
         return {"verdict": "error", "reason": "bad_output"}
     return {"verdict": verdict, "reason": str(data.get("reason") or "")[:300]}
+
+
+def judge_case(
+    case: Mapping[str, Any], answer_text: str, *, tenant_id: str = "default", client: Any = None
+) -> Dict[str, str]:
+    """{"verdict": "pass" | "fail" | "error", "reason"}. Anything but a clear pass or fail is an error."""
+    try:
+        text = llm.complete(_messages(case, answer_text), feature="judge", tenant_id=tenant_id, client=client, max_tokens=120)
+    except llm.LLMNotAllowed as exc:
+        return {"verdict": "error", "reason": f"not_allowed:{exc.decision.layer}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"verdict": "error", "reason": f"error:{type(exc).__name__}"}
+    return parse_judgement(text)
 
 
 def judge_rows(
@@ -68,6 +76,24 @@ def judge_rows(
             continue
         out[row["case_id"]] = judge_case(case, str(row.get("answer_text") or ""), tenant_id=tenant_id, client=client)
     return out
+
+
+# --- scoring a whole evaluation without waiting (rag_core/llm_batch.py) -------------------------------------------------------------
+
+
+def build_batch_requests(cases: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[str, Any]]) -> list:
+    """The scoring requests of an evaluation, one for each answered row, ready for llm_batch.submit (or run)."""
+    from rag_core.llm_batch import BatchRequest
+
+    by_id = {case["case_id"]: case for case in cases}
+    return [BatchRequest(custom_id=row["case_id"], messages=_messages(by_id[row["case_id"]], str(row.get("answer_text") or "")), max_tokens=120)
+            for row in rows if row["case_id"] in by_id and row.get("answered")]
+
+
+def judgements_from_batch(results: Mapping[str, Any]) -> Dict[str, Dict[str, str]]:
+    """The judgements of finished batch results (llm_batch.collect or run): case_id -> judgement, as judge_rows gives them."""
+    return {case_id: (parse_judgement(result.text) if not result.error else {"verdict": "error", "reason": result.error})
+            for case_id, result in results.items()}
 
 
 def agreement(human: Mapping[str, bool], judged: Mapping[str, Mapping[str, str]], *, alpha: float = 0.05) -> Dict[str, Any]:

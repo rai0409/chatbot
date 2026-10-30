@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import config
 from rag_core import answer_cache
 from webapi import main, metrics_registry, oidc_auth
+from webapi.routers import chat as chat_router
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
@@ -146,10 +147,10 @@ def test_callback_establishes_session_and_chat_works(monkeypatch, rsa_key):
                           to_dict=lambda: {"answer_text": "ok", "citations": [], "retrieved": []})
     trace = {"request_id": "r", "normalized_query": "q", "intent": "faq", "final_guard_reason": None,
              "final_used_fallback": False, "citations_count": 0, "latency_ms": 1, "after_rerank": [], "answer_mode": "grounded"}
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
     pipeline = SimpleNamespace(calls=[])
-    monkeypatch.setattr(main, "answer_query_with_trace", lambda *a, **k: (pipeline.calls.append(k) or (ans, trace)))
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *a, **k: None)
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", lambda *a, **k: (pipeline.calls.append(k) or (ans, trace)))
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: None)
 
     monkeypatch.setattr(oidc_auth, "_fetch_jwks", lambda uri: _jwks(rsa_key))
     client = TestClient(main.app)

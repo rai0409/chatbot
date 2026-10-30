@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import config
-from rag_core import contract_notify, contracts
+from rag_core import contract_notify, contracts, integrations
 from rag_core.connectors import outlook
 from rag_core.connectors import sharepoint as sp
 
@@ -31,6 +31,9 @@ def api(monkeypatch, tmp_path):
     monkeypatch.delenv("CONTRACT_REMINDER_DAYS", raising=False)
     monkeypatch.setattr(config, "BASE_DIR", tmp_path)
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
+    # Outlook drafts are an external integration: off until the environment lists it and the console switch is on.
+    monkeypatch.setattr(config, "EXTERNAL_INTEGRATIONS", ["outlook_draft"])
+    integrations.set_switch("outlook_draft", True, by="山田太郎", reason="test")
     from webapi import main
 
     return TestClient(main.app), tmp_path
@@ -184,6 +187,25 @@ def test_a_draft_is_created_only_for_a_confirmed_address_and_deadline(api, monke
     assert "contract_draft_created" in [e["action"] for e in _audit(tmp_path)]
     assert client.post("/admin/contracts/c1/draft", headers=ADMIN, json={**body, "kind": "bogus"}).status_code == 400
     assert client.post("/admin/contracts/c1/draft", headers=ADMIN, json={**body, "mailbox": "not a mailbox"}).status_code == 400
+
+
+def test_no_draft_is_made_while_a_layer_says_no(api, monkeypatch):
+    client, _tmp = api
+    _ready(client)
+    graph = Graph()
+    monkeypatch.setattr(outlook, "default_client", lambda: sp.GraphClient(lambda: "tok-123", graph))
+    body = {"tenant_id": "tenant_a", "kind": "end", "mailbox": "legal@example.co.jp"}
+    integrations.set_switch("outlook_draft", False, by="山田太郎", reason="stop")  # the console switch
+    off = client.post("/admin/contracts/c1/draft", headers=ADMIN, json=body)
+    assert off.status_code == 409 and off.json()["detail"] == "integration_off:switch_off" and graph.calls == []
+    integrations.set_switch("outlook_draft", True, by="山田太郎", reason="start")
+    integrations.set_switch("outlook_draft", False, by="山田太郎", reason="this tenant only", tenant_id="tenant_a")
+    tenant_off = client.post("/admin/contracts/c1/draft", headers=ADMIN, json=body)
+    assert tenant_off.status_code == 409 and tenant_off.json()["detail"] == "integration_off:tenant_off" and graph.calls == []
+    integrations.set_switch("outlook_draft", True, by="山田太郎", reason="restore", tenant_id="tenant_a")
+    monkeypatch.setattr(config, "EXTERNAL_INTEGRATIONS", [])  # the environment layer
+    env_off = client.post("/admin/contracts/c1/draft", headers=ADMIN, json=body)
+    assert env_off.status_code == 409 and env_off.json()["detail"] == "integration_off:env_not_allowed" and graph.calls == []
 
 
 def test_draft_failures_are_reported_without_details(api, monkeypatch):

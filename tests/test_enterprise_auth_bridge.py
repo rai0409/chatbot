@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import config
 from rag_core import answer_cache
 from webapi import main, metrics_registry
+from webapi.routers import chat as chat_router
 from webapi.api_auth import enforce_tenant_authorization, require_api_auth_headers
 
 TRUST = "proxy-trust-secret-xyz"
@@ -194,9 +195,9 @@ def _setup_chat(monkeypatch, tmp_path):
         pipeline.calls.append((a, k))
         return _fake_answer()
 
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
-    monkeypatch.setattr(main, "answer_query_with_trace", fake)
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *a, **k: None)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", fake)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: None)
     return pipeline
 
 

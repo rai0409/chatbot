@@ -79,7 +79,19 @@ def _pipeline_state() -> Tuple:
         str(getattr(config, "KEYWORD_INDEX_ENGINE", "") or ""),
         active_normalization_version(),
         os.getenv("QUERY_PREPROCESS_ENABLED", ""),
+        # Which model answers may change with the model profiles file (rag_core/llm_profiles.py); empty without one.
+        _profiles_fingerprint(),
     )
+
+
+def _profiles_fingerprint() -> str:
+    try:
+        from rag_core import llm_profiles
+
+        # The file, and the tiers assigned in the console: both change which model answers.
+        return llm_profiles.fingerprint() + ":" + llm_profiles.assignment_digest()
+    except Exception:  # noqa: BLE001 - the cache key never breaks an answer
+        return "unknown"
 
 
 # Settings that change the answer for the same question, corpus and models: retrieval fusion, boosts,

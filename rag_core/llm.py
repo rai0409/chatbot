@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import config
-from rag_core.utils import ensure_openai_client
+from rag_core import llm_gateway, llm_profiles
 
 FEATURES = ("generate", "rewrite", "verify", "judge")
 LAYERS = ("global", "tenant", "feature", "endpoint")
@@ -81,10 +81,22 @@ def external_blocked() -> bool:
     return is_production() and external_endpoint() and not bool(getattr(config, "LLM_EXTERNAL_ALLOWED", False))
 
 
+def _endpoint_blocked(feature: str, tenant_id: str) -> bool:
+    """Production refuses an external endpoint unless LLM_EXTERNAL_ALLOWED. With model profiles (rag_core/llm_profiles.py)
+    the feature is refused only when every profile of its route is blocked; a blocked profile is skipped otherwise."""
+    if not llm_profiles.configured():
+        return external_blocked()
+    return all(llm_profiles.blocked(p) for p in llm_profiles.chain(feature, tenant_id))
+
+
 def production_problem() -> Optional[str]:
     """The start-up problem for the production guard, or None."""
-    if master_enabled() and external_blocked():
-        return ("LLM_EXTERNAL_ALLOWED=true, or an internal OPENAI_BASE_URL (the LLM endpoint is external; "
+    if llm_profiles.configured():
+        problems = llm_profiles.validate()
+        if problems:
+            return f"LLM_PROFILES_FILE: {problems[0]}"
+    if master_enabled() and _endpoint_blocked("generate", "default"):
+        return ("LLM_EXTERNAL_ALLOWED=true, or an internal endpoint (the LLM endpoint is external; "
                 "document text would leave the deployment)")
     return None
 
@@ -106,7 +118,7 @@ def check(feature: str, tenant_id: str = "default") -> Decision:
         return refuse("tenant", "the tenant is not on LLM_TENANT_ALLOWLIST")
     if feature not in _names(getattr(config, "LLM_FEATURES", ["generate"])):
         return refuse("feature", f"'{feature}' is not in LLM_FEATURES")
-    if external_blocked():
+    if _endpoint_blocked(feature, tenant):
         return refuse("endpoint", "the endpoint is external and LLM_EXTERNAL_ALLOWED is not true")
     return Decision(True, feature, tenant, "", "")
 
@@ -166,25 +178,32 @@ def complete(
     if not decision.allowed:
         _count(feature, "refused")
         raise LLMNotAllowed(decision)
-    if client is None:
-        client = ensure_openai_client(base_url=getattr(config, "OPENAI_BASE_URL", None))
     attempts = 1 + max(0, int(getattr(config, "CHAT_COMPLETION_MAX_RETRIES", 1)))
     backoff = float(getattr(config, "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", 1.0))
-    limit = int(max_tokens or getattr(config, "LLM_FEATURE_MAX_TOKENS", 512))
-    for attempt in range(attempts):
-        try:
-            response = client.chat.completions.create(
-                model=config.CHAT_MODEL,
-                messages=messages,
-                temperature=temperature,
-                timeout=float(getattr(config, "CHAT_COMPLETION_TIMEOUT_SECONDS", 30.0)),
-                max_tokens=limit,
-            )
-            _count(feature, "calls")
-            return response.choices[0].message.content or ""
-        except Exception as exc:  # noqa: BLE001 - classified below
-            if attempt >= attempts - 1 or not _retryable(exc):
-                _count(feature, "errors")
-                raise
-            time.sleep(backoff * (2 ** attempt))
-    raise RuntimeError("unreachable: completion retry loop exhausted")
+
+    def request(chat_client: Any, profile: llm_profiles.Profile) -> Any:
+        limit = int(max_tokens or profile.max_tokens or getattr(config, "LLM_FEATURE_MAX_TOKENS", 512))
+        timeout = float(profile.timeout_seconds or getattr(config, "CHAT_COMPLETION_TIMEOUT_SECONDS", 30.0))
+        for attempt in range(attempts):
+            try:
+                return chat_client.chat.completions.create(
+                    model=profile.model or config.CHAT_MODEL, messages=messages, temperature=temperature,
+                    timeout=timeout, max_tokens=limit,
+                )
+            except Exception as exc:  # noqa: BLE001 - classified here; the gateway counts what is left after the retries
+                if attempt >= attempts - 1 or not _retryable(exc):
+                    raise
+                time.sleep(backoff * (2 ** attempt))
+        raise RuntimeError("unreachable: completion retry loop exhausted")
+
+    try:
+        response = llm_gateway.invoke(
+            feature, tenant_id, request, client=client,
+            estimate_input="".join(str(m.get("content") or "") for m in messages),
+            user_visible_text=lambda r: r.choices[0].message.content or "",
+        )
+    except Exception:
+        _count(feature, "errors")
+        raise
+    _count(feature, "calls")
+    return response.choices[0].message.content or ""

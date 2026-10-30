@@ -72,6 +72,7 @@ def server(tmp_path_factory):
     uvicorn = pytest.importorskip("uvicorn")
     from rag_core import retrieval
     from webapi import main
+    from webapi.routers import chat as chat_router
 
     tmp = tmp_path_factory.mktemp("e2e")
     ingest_root = tmp / "ingest"
@@ -86,12 +87,12 @@ def server(tmp_path_factory):
     mp.setenv("OIDC_COOKIE_SECURE", "false")
     mp.setenv("INGEST_ALLOWED_ROOTS", str(ingest_root))
     mp.setattr(config, "RUNS_DIR", str(tmp / "runs"))
-    mp.setattr(main, "answer_query_stream", _fake_answer_stream)
-    mp.setattr(main, "ensure_openai_client", lambda base_url=None: None)
-    mp.setattr(main, "_approved_qa_lookup", lambda question, tenant_id="default": None)
-    mp.setattr(main, "_approved_exact_chat_lookup", lambda question, tenant_id: None)
+    mp.setattr(chat_router, "answer_query_stream", _fake_answer_stream)
+    mp.setattr(chat_router, "ensure_openai_client", lambda base_url=None: None)
+    mp.setattr(chat_router, "_approved_qa_lookup", lambda question, tenant_id="default": None)
+    mp.setattr(chat_router, "_approved_exact_chat_lookup", lambda question, tenant_id: None)
     mp.setattr(retrieval, "chunk_row", lambda chunk_id, collection_name=None: dict(CHUNK) if chunk_id == CITATION["chunk_id"] else None)
-    mp.setattr(main, "append_feedback_audit_event", lambda event: feedback.append(event) or True)
+    mp.setattr(chat_router, "append_feedback_audit_event", lambda event: feedback.append(event) or True)
 
     port = _free_port()
     srv = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=port, log_level="warning"))

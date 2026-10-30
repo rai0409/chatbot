@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 import config
 from rag_core import answer_cache, embedder, qa, store
 from webapi import ingestion_jobs, main, metrics_registry
+from webapi.routers import chat as chat_router
 
 
 class _Recorder:
@@ -58,8 +59,8 @@ def _setup(monkeypatch, tmp_path):
     answer_cache.clear()
     metrics_registry.reset()
     ingestion_jobs.reset()
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *a, **k: None)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: None)
 
 
 def _allow_staging_collection(monkeypatch, tenant_id="tenant_a", collection="tenant_a_stage_v1"):
@@ -77,7 +78,7 @@ def _allow_staging_collection(monkeypatch, tenant_id="tenant_a", collection="ten
 def test_chat_default_request_does_not_select_collection(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     recorder = _Recorder(result=_fake_answer())
-    monkeypatch.setattr(main, "answer_query_with_trace", recorder)
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", recorder)
 
     payload = main.chat(main.ChatRequest(question="質問です", tenant_id="default"))
 
@@ -93,9 +94,9 @@ def test_chat_staging_collection_is_validated_and_threaded(monkeypatch, tmp_path
         "staging_collection_status",
         lambda name, tenant_id: {"allowed": True, "reason": "prompt072_execute_job_found"},
     )
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *a, **k: (_ for _ in ()).throw(AssertionError("approved QA bypassed in staging")))
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: (_ for _ in ()).throw(AssertionError("approved QA bypassed in staging")))
     recorder = _Recorder(result=_fake_answer())
-    monkeypatch.setattr(main, "answer_query_with_trace", recorder)
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", recorder)
 
     payload = main.chat(
         main.ChatRequest(
@@ -172,7 +173,7 @@ def test_search_can_specify_staging_collection(monkeypatch, tmp_path):
         lambda name, tenant_id: {"allowed": True, "reason": "prompt072_execute_job_found"},
     )
     recorder = _Recorder(result=[])
-    monkeypatch.setattr(main, "retrieve_chunks", recorder)
+    monkeypatch.setattr(chat_router, "retrieve_chunks", recorder)
 
     payload = main.search(
         main.SearchRequest(query="検索", tenant_id="tenant_a", staging_collection="tenant_a_stage_v1")

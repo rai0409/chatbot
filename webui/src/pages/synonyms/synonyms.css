@@ -1,0 +1,6 @@
+.syn-count { margin-left: 6px; }
+.syn-approved { color: var(--ok); font-weight: 600; }
+.syn-rejected { color: var(--err); text-decoration: line-through; }
+.syn-actions { white-space: nowrap; }
+.syn-actions button { margin-right: 4px; margin-bottom: 4px; }
+@media (max-width: 640px) { .syn-actions { white-space: normal; } }

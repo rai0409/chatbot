@@ -11,15 +11,38 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
-from rag_core import source_registry as registry
+import config
+from rag_core import integrations, source_registry as registry
 from rag_core.source_registry import SourceError
 from rag_core.source_scan import max_file_bytes, supported_extensions
 
+# The defaults. A deployment changes them with GRAPH_BASE_URL / GRAPH_TOKEN_URL / GRAPH_SCOPE / GRAPH_MAX_WAIT_SECONDS
+# (config.py); the functions below read the settings at call time.
 GRAPH = "https://graph.microsoft.com/v1.0"
 TOKEN_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"  # nosec B105 - an endpoint, not a credential
 SCOPE = "https://graph.microsoft.com/.default"
 MAX_WAIT_SECONDS = 60
 RETRYABLE = {429, 503, 504}
+
+
+def graph_base() -> str:
+    return (str(getattr(config, "GRAPH_BASE_URL", "") or "").strip() or GRAPH).rstrip("/")
+
+
+def token_url() -> str:
+    return str(getattr(config, "GRAPH_TOKEN_URL", "") or "").strip() or TOKEN_URL
+
+
+def graph_scope() -> str:
+    return str(getattr(config, "GRAPH_SCOPE", "") or "").strip() or SCOPE
+
+
+def _max_wait() -> float:
+    return max(0.0, float(getattr(config, "GRAPH_MAX_WAIT_SECONDS", MAX_WAIT_SECONDS)))
+
+
+def _http_timeout() -> float:
+    return max(1.0, float(getattr(config, "GRAPH_HTTP_TIMEOUT_SECONDS", 60.0)))
 
 Transport = Callable[[str, str, Dict[str, str], Optional[bytes]], Tuple[int, bytes, Dict[str, str]]]
 
@@ -36,15 +59,29 @@ class ResyncRequired(GraphError):
     """HTTP 410: the delta link is no longer valid; start again from a full listing."""
 
 
-def urllib_transport(method: str, url: str, headers: Dict[str, str], body: Optional[bytes] = None) -> Tuple[int, bytes, Dict[str, str]]:
+def _send(method: str, url: str, headers: Dict[str, str], body: Optional[bytes] = None) -> Tuple[int, bytes, Dict[str, str]]:
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310  # nosec B310 - https URLs of the Graph API / its download links
+        with urllib.request.urlopen(request, timeout=_http_timeout()) as response:  # noqa: S310  # nosec B310 - https URLs of the Graph API / its download links
             return response.status, response.read(), {k.lower(): v for k, v in response.headers.items()}
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read() or b"", {k.lower(): v for k, v in (exc.headers or {}).items()}
     except urllib.error.URLError as exc:
         raise GraphError(f"network error: {type(exc.reason).__name__}") from None
+
+
+def transport_for(integration: str) -> Transport:
+    """The transport of one integration. It is the only place where a request to Graph leaves, so the environment layer and
+    the console switch of that integration (rag_core/integrations.py) are checked here, before anything is sent."""
+
+    def transport(method: str, url: str, headers: Dict[str, str], body: Optional[bytes] = None) -> Tuple[int, bytes, Dict[str, str]]:
+        integrations.require_egress(integration)
+        return _send(method, url, headers, body)
+
+    return transport
+
+
+urllib_transport = transport_for("sharepoint")
 
 
 def token_provider(env: Optional[Dict[str, str]] = None, transport: Transport = urllib_transport,
@@ -65,8 +102,8 @@ def token_provider(env: Optional[Dict[str, str]] = None, transport: Transport = 
         if cache["token"] and clock() < cache["expires"] - 60:
             return cache["token"]
         form = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": client_id,
-                                       "client_secret": secret, "scope": SCOPE}).encode("utf-8")
-        status, body, _headers = transport("POST", TOKEN_URL.format(tenant=urllib.parse.quote(tenant)),
+                                       "client_secret": secret, "scope": graph_scope()}).encode("utf-8")
+        status, body, _headers = transport("POST", token_url().format(tenant=urllib.parse.quote(tenant)),
                                            {"Content-Type": "application/x-www-form-urlencoded"}, form)
         try:
             data = json.loads(body.decode("utf-8"))
@@ -101,7 +138,7 @@ class GraphClient:
                     wait = float(response_headers.get("retry-after", 2 ** attempt))
                 except ValueError:
                     wait = float(2 ** attempt)
-                self._sleep(min(max(wait, 0.0), MAX_WAIT_SECONDS))
+                self._sleep(min(max(wait, 0.0), _max_wait()))
                 continue
             raise GraphError(f"Graph request failed (HTTP {status})", status)
         raise GraphError("Graph request failed", 0)
@@ -119,14 +156,14 @@ class GraphClient:
                     wait = float(response_headers.get("retry-after", 2 ** attempt))
                 except ValueError:
                     wait = float(2 ** attempt)
-                self._sleep(min(max(wait, 0.0), MAX_WAIT_SECONDS))
+                self._sleep(min(max(wait, 0.0), _max_wait()))
                 continue
             raise GraphError(f"Graph request failed (HTTP {status})", status)
         raise GraphError("Graph request failed", 0)
 
     def delta_pages(self, drive_id: str, delta_link: Optional[str] = None) -> Iterator[Dict[str, Any]]:
         """The pages of the drive's delta feed; the last one carries @odata.deltaLink."""
-        url = delta_link or f"{GRAPH}/drives/{urllib.parse.quote(drive_id)}/root/delta"
+        url = delta_link or f"{graph_base()}/drives/{urllib.parse.quote(drive_id)}/root/delta"
         for _ in range(self.max_pages):
             page = json.loads(self._request(url).decode("utf-8"))
             yield page

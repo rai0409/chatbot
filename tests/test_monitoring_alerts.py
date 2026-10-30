@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import config
 from rag_core import answer_cache
 from webapi import main, metrics_registry
+from webapi.routers import chat as chat_router
 from webapi.alerting import (
     CRITICAL,
     OK,
@@ -197,7 +198,7 @@ def test_metrics_endpoint_shape_unchanged(monkeypatch, tmp_path):
 
 def test_feedback_counter_increments_with_stable_label(monkeypatch, tmp_path):
     _setup_chat(monkeypatch, tmp_path)
-    monkeypatch.setattr(main, "append_feedback_audit_event", lambda event: True)
+    monkeypatch.setattr(chat_router, "append_feedback_audit_event", lambda event: True)
     client = TestClient(main.app)
 
     resp = client.post(

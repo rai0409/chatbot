@@ -15,6 +15,8 @@ import urllib.request
 from email.message import EmailMessage
 from typing import Any, Callable, Dict, List, Optional
 
+import config
+from rag_core import integrations
 from webapi.alerting import CRITICAL, OK, WARN
 
 _MAX_ATTEMPTS = 3
@@ -69,14 +71,17 @@ def build_message(result: Dict[str, Any]) -> str:
 
 
 def _default_slack_send(webhook: str, text: str) -> None:
+    integrations.require_egress("slack")  # environment layer + console switch (rag_core/integrations.py)
     data = json.dumps({"text": text}).encode("utf-8")
     req = urllib.request.Request(webhook, data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310 (webhook is operator-set)  # nosec B310
+    timeout = float(getattr(config, "NOTIFY_SLACK_TIMEOUT_SECONDS", 10.0))
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (webhook is operator-set)  # nosec B310
         if resp.status >= 300:
             raise RuntimeError(f"slack http {resp.status}")
 
 
 def _default_email_send(subject: str, body: str) -> None:
+    integrations.require_egress("smtp")  # environment layer + console switch (rag_core/integrations.py)
     host = _env("ALERT_SMTP_HOST")
     port = int(_env("ALERT_SMTP_PORT") or "587")
     user = _env("ALERT_SMTP_USER")
@@ -87,7 +92,7 @@ def _default_email_send(subject: str, body: str) -> None:
     msg["From"] = _env("ALERT_EMAIL_FROM")
     msg["To"] = _env("ALERT_EMAIL_TO")
     msg.set_content(body)
-    with smtplib.SMTP(host, port, timeout=15) as smtp:
+    with smtplib.SMTP(host, port, timeout=float(getattr(config, "NOTIFY_SMTP_TIMEOUT_SECONDS", 15.0))) as smtp:
         if use_tls:
             smtp.starttls()
         if user and password:
@@ -101,6 +106,9 @@ def _with_retry(fn: Callable[[], None], *, sleep: Callable[[float], None]) -> Di
         try:
             fn()
             return {"ok": True, "attempts": attempt}
+        except integrations.IntegrationDisabled as exc:
+            # Off on purpose: retrying cannot help and nothing left the system.
+            return {"ok": False, "attempts": attempt, "error_type": "IntegrationDisabled", "reason": exc.status.reason}
         except Exception as exc:  # noqa: BLE001
             # Never include the exception detail verbatim (could echo a URL);
             # record only the type.

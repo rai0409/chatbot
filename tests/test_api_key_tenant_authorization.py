@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 import config
 from rag_core import answer_cache
 from webapi import main, metrics_registry
+from webapi.routers import chat as chat_router
 from webapi.api_auth import (
     enforce_tenant_authorization,
     require_api_auth_headers,
@@ -211,10 +212,10 @@ def _setup_endpoint_env(monkeypatch, tmp_path, tenant_map="key-a=tenant_a,key-b=
     pipeline = _Recorder(result=_fake_answer())
     stream_pipeline = _Recorder(result=iter(()))
     approved_lookup = _Recorder(result=None)
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
-    monkeypatch.setattr(main, "answer_query_with_trace", pipeline)
-    monkeypatch.setattr(main, "answer_query_stream", stream_pipeline)
-    monkeypatch.setattr(main, "_approved_qa_lookup", approved_lookup)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", pipeline)
+    monkeypatch.setattr(chat_router, "answer_query_stream", stream_pipeline)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", approved_lookup)
     return SimpleNamespace(
         pipeline=pipeline,
         stream_pipeline=stream_pipeline,
@@ -367,7 +368,7 @@ def test_product_preview_unauthorized_tenant_returns_403(monkeypatch, tmp_path):
 
 def test_chat_feedback_enforces_tenant(monkeypatch, tmp_path):
     _setup_endpoint_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(main, "append_feedback_audit_event", lambda event: True)
+    monkeypatch.setattr(chat_router, "append_feedback_audit_event", lambda event: True)
     client = TestClient(main.app)
 
     denied = client.post(

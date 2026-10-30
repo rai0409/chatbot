@@ -3,7 +3,7 @@ import json
 import pytest
 
 import config
-from rag_core import change_ledger, source_registry as registry, source_sync
+from rag_core import change_ledger, integrations, source_registry as registry, source_sync
 from rag_core.connectors import sharepoint as sp
 from rag_core.source_registry import SourceError
 from scripts import sources as cli
@@ -54,6 +54,8 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setenv("SOURCES_DIR", str(roots / "state"))
     monkeypatch.delenv("INGEST_MAX_FILE_BYTES", raising=False)
     monkeypatch.setattr(config, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(config, "RUNTIME_SETTINGS_DIR", str(tmp_path / "settings"))  # the console switches of this test only
+    monkeypatch.setattr(config, "EXTERNAL_INTEGRATIONS", [])
     return roots
 
 
@@ -302,11 +304,25 @@ def test_a_scan_pulls_the_library_and_then_scans_the_mirror(env, monkeypatch):
     _body(graph, "f2", "h1")
     monkeypatch.setattr(sp, "default_client", lambda: _client(graph))
     _record(env)
+    monkeypatch.setattr(config, "EXTERNAL_INTEGRATIONS", ["sharepoint"])  # environment layer
+    integrations.set_switch("sharepoint", True, by="山田太郎", reason="test")  # console switch
     out = source_sync.scan_source("sp1")
     assert out["counts"] == {"added": 2, "modified": 0, "deleted": 0} and out["total_files"] == 2
     pulled = change_ledger.read_entries("sp1")[0]["summary"]["pulled"]
     assert pulled["downloaded"] == 2 and "a.pdf" not in json.dumps(pulled)
     assert sorted(registry.load_manifest("sp1", "observed")) == ["a.pdf", "b.pdf"]
+
+
+def test_a_scan_is_recorded_as_failed_and_never_as_deleted_while_the_integration_is_off(env, monkeypatch):
+    monkeypatch.setattr(sp, "default_client", lambda: pytest.fail("the connector must not be reached while it is off"))
+    _record(env)
+    registry.save_manifest("sp1", "applied", {"a.pdf": {"sha256": "x", "size": 1}})
+    out = source_sync.scan_source("sp1")  # no layer allows it: the environment layer is empty
+    assert out["error"] == "integration_disabled" and out["reason"] == "env_not_allowed"
+    entry = change_ledger.read_entries("sp1")[0]
+    assert entry["kind"] == "scan_failed" and entry["summary"]["reason"] == "integration_off:env_not_allowed"
+    assert registry.get("sp1")["state"]["last_error"] == "integration_off:env_not_allowed"
+    assert sorted(registry.load_manifest("sp1", "applied")) == ["a.pdf"]  # nothing was treated as deleted
 
 
 def test_the_command_line_registers_a_sharepoint_source(env, capsys):

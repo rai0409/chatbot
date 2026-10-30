@@ -12,6 +12,7 @@ import config
 from rag_core import answer_cache, interpretation, qa, query_route, retrieval, search_mode
 from rag_core.retrieval import RetrievedChunk
 from webapi import main, metrics_registry
+from webapi.routers import chat as chat_router
 
 
 # --- routing ---------------------------------------------------------------------------------------
@@ -159,11 +160,11 @@ def api(monkeypatch, tmp_path):
         seen["stream"].append({"deep": search_mode.is_deep(), "top_k": kwargs.get("top_k")})
         yield "final", (result(), trace(question))
 
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
-    monkeypatch.setattr(main, "answer_query_with_trace", chat)
-    monkeypatch.setattr(main, "answer_query_stream", stream)
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *a, **k: None)
-    monkeypatch.setattr(main, "append_audit_event", lambda kind, event: None)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", chat)
+    monkeypatch.setattr(chat_router, "answer_query_stream", stream)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: None)
+    monkeypatch.setattr(chat_router, "append_audit_event", lambda kind, event: None)
     return SimpleNamespace(client=TestClient(main.app), seen=seen)
 
 

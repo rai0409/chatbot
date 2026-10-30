@@ -18,6 +18,7 @@ from rag_core.product_profile import load_product_profile
 from rag_core.product_route_policy import build_route_policy
 from rag_core.tenant_profile import validate_tenant_profile_mapping
 from webapi import admin_auth, ingestion_jobs, main, oidc_auth, rbac
+from webapi.routers import chat as chat_router
 from webapi.api_auth import ApiAuthContext, enforce_tenant_authorization, require_api_auth_headers
 
 
@@ -87,7 +88,7 @@ def test_exact_lookup_reloads_after_index_update(monkeypatch, tmp_path):
 def test_chat_exact_lookup_not_called_when_approved_qa_disabled(monkeypatch):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", False)
     monkeypatch.setattr(
-        main, "lookup_approved_qa_exact", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run"))
+        chat_router, "lookup_approved_qa_exact", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run"))
     )
     assert main._approved_exact_chat_lookup("質問", "tenant_a") is None
 
