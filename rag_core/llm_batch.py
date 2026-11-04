@@ -139,6 +139,8 @@ def _profile_for(feature: str, tenant_id: str, profile_name: Optional[str]) -> l
 def submit(requests: Sequence[BatchRequest], *, feature: str = "judge", tenant_id: str = "default", profile: Optional[str] = None,
            client: Any = None, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Hand the requests to the provider's batch API and return the job at once."""
+    if getattr(config, "LLM_QUOTA_STRICT_POSTGRES", False):
+        raise BatchError("native batch is unavailable with strict PostgreSQL quota")
     _check(requests)
     decision = llm.check(feature, tenant_id)
     if not decision.allowed:

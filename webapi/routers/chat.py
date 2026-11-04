@@ -1097,7 +1097,10 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
                 tenant_id=tenant_id,
                 rag_profile_id=rag_profile_id,
             )
+            cache_key = (*cache_key, "profile-validation-v1")
             cached = answer_cache.get(cache_key)
+            if cached is not None and not _cache_validation_passed(cached):
+                cached = None
             if cached is not None:
                 append_audit_event(
                     "chat",
@@ -1181,21 +1184,8 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         payload["interpretation"] = trace.get("interpretation")
         # The screen says "the AI is unavailable, this is the text of the documents" for this answer (S3/S5).
         payload["service_notice"] = records_hook.service_notice(trace)
-        payload["profile_validation"] = trace.get(
-            "profile_validation",
-            {
-                "passed": True,
-                "skipped": True,
-                "matched_rule_id": "",
-                "question_type": trace.get("question_type", "other"),
-                "missing_any": [],
-                "missing_all": [],
-                "forbidden_hits": [],
-                "fallback_if_failed": False,
-                "reason": "profile validation trace unavailable",
-            },
-        )
-        if cache_key is not None and ans.guard_reason is None and not ans.used_fallback:
+        payload["profile_validation"] = _profile_validation_or_skipped(trace)
+        if cache_key is not None and ans.guard_reason is None and not ans.used_fallback and _cache_validation_passed(payload):
             # Only clean grounded answers are cacheable; guard/no-answer and
             # extractive-fallback responses are never cached.
             # Stage 14: without the caller's conversation context (it holds that
@@ -1232,6 +1222,20 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
 
 def _sse_event(name: str, payload: Dict[str, Any]) -> str:
     return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _profile_validation_or_skipped(trace: Dict[str, Any]) -> Dict[str, Any]:
+    return trace.get("profile_validation") or {
+        "passed": False, "skipped": True, "matched_rule_id": "",
+        "question_type": trace.get("question_type", "other"), "missing_any": [],
+        "missing_all": [], "forbidden_hits": [], "fallback_if_failed": False,
+        "reason": "profile validation trace unavailable",
+    }
+
+
+def _cache_validation_passed(payload: Dict[str, Any]) -> bool:
+    validation = payload.get("profile_validation")
+    return isinstance(validation, dict) and validation.get("passed") is True and not validation.get("skipped")
 
 
 @router.post("/chat/stream")
@@ -1308,7 +1312,10 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                     max_context_chars=effective_max_context_chars, tenant_id=tenant_id,
                     rag_profile_id=rag_profile_id,
                 )
+                cache_key = (*cache_key, "profile-validation-v1")
                 cached = answer_cache.get(cache_key)
+                if cached is not None and not _cache_validation_passed(cached):
+                    cached = None
                 if cached is not None:
                     hit = dict(cached)
                     if req.trace_id:
@@ -1358,9 +1365,8 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                     final_payload["question_type"] = trace.get("question_type", "other")
                     final_payload["interpretation"] = trace.get("interpretation")
                     final_payload["service_notice"] = records_hook.service_notice(trace)
-                    if "profile_validation" in trace:
-                        final_payload["profile_validation"] = trace["profile_validation"]
-                    if cache_key is not None and result.guard_reason is None and not result.used_fallback:
+                    final_payload["profile_validation"] = _profile_validation_or_skipped(trace)
+                    if cache_key is not None and result.guard_reason is None and not result.used_fallback and _cache_validation_passed(final_payload):
                         answer_cache.put(cache_key, {
                             k: v for k, v in final_payload.items()
                             if k not in {"conversation_context", "trace_id", "request_id", "feedback_token"}

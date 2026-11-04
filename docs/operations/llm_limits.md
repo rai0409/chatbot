@@ -65,3 +65,6 @@ LLM の呼び出しの回数カウンターから、次の信号が出ます（�
 | `llm_quota_exceeded` | 上限で断った回数 | 1 回 / 100 回 |
 
 通知（Slack・メール）に送るには、`scripts/monitoring_runner.sh`（`/metrics` の記録とアラートの評価）を定期実行し、通知の連携（`slack` / `smtp`）をオンにします（`docs/operations/integrations.md`）。
+# 未完成の PostgreSQL 厳格モード
+
+`LLM_QUOTA_STRICT_POSTGRES` は既定で無効です。有効にすると現時点ではすべての Gateway 呼び出しと Native Batch の送信を拒否します。PostgreSQL 台帳との統合、送信単位の予約・精算、対応モデルの検証は未実装です。本番では有効にしないでください。無効時は従来の JSONL 集計を使用します。

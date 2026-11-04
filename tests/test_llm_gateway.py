@@ -14,6 +14,23 @@ ADMIN_TOKEN = "installation-admin-token-not-a-secret-0123"
 ADMIN = {"x-admin-token": ADMIN_TOKEN}
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_strict_quota_refuses_unverified_callbacks_before_call(monkeypatch, stream):
+    monkeypatch.setattr(config, "LLM_QUOTA_STRICT_POSTGRES", True)
+    called = []
+
+    def send(*args):
+        called.append(args)
+        return iter(["unexpected"]) if stream else "unexpected"
+
+    with pytest.raises(llm_gateway.StrictQuotaUnavailable):
+        if stream:
+            list(llm_gateway.invoke_stream("judge", "default", send))
+        else:
+            llm_gateway.invoke("judge", "default", send)
+    assert called == []
+
+
 class Clock:
     def __init__(self, now=1000.0):
         self.now = now
@@ -417,3 +434,112 @@ def test_a_day_of_usage_is_kept_in_its_own_file(provider, tmp_path):
     assert (tmp_path / "runs" / "usage" / f"llm_usage-{day.isoformat()}.jsonl").exists()
     assert list(llm_usage.read(2, today=day + timedelta(days=1))) != []  # yesterday and "today" of a later reader
     assert list(llm_usage.read(2, today=day + timedelta(days=5))) == []
+
+
+@pytest.mark.parametrize("status", [400, 422])
+@pytest.mark.parametrize("stream", [False, True])
+def test_malformed_half_open_trial_releases_slot(provider, monkeypatch, status, stream):
+    clock = Clock()
+    breaker = _breaker(clock, threshold=1)
+    monkeypatch.setattr(llm_gateway, "breaker_for", lambda profile: breaker)
+    breaker.record_failure()
+    clock.now += 61
+
+    class Refused(Exception):
+        status_code = status
+
+    def refused(client, profile):
+        raise Refused()
+
+    with pytest.raises(Refused):
+        if stream:
+            list(llm_gateway.invoke_stream("judge", "default", refused))
+        else:
+            llm_gateway.invoke("judge", "default", refused)
+    assert breaker.state() == HALF_OPEN
+    assert breaker.allow()
+
+
+@pytest.mark.parametrize("status", [400, 422])
+@pytest.mark.parametrize("stream", [False, True])
+def test_malformed_closed_call_preserves_failure_count(provider, monkeypatch, stream, status):
+    breaker = _breaker(Clock(), threshold=2)
+    monkeypatch.setattr(llm_gateway, "breaker_for", lambda profile: breaker)
+    breaker.record_failure()
+
+    class Refused(Exception):
+        status_code = status
+
+    def refused(client, profile):
+        raise Refused()
+
+    with pytest.raises(Refused):
+        if stream:
+            list(llm_gateway.invoke_stream("judge", "default", refused))
+        else:
+            llm_gateway.invoke("judge", "default", refused)
+    breaker.record_failure()
+    assert breaker.state() == OPEN
+
+
+def test_probe_identity_expiration_and_stale_outcomes():
+    clock = Clock()
+    breaker = _breaker(clock, threshold=1, probes=2)
+    _, closed_call = breaker.allow_with_probe()
+    breaker.record_failure(closed_call)
+    clock.now += 61
+    _, first = breaker.allow_with_probe()
+    _, second = breaker.allow_with_probe()
+    breaker.release_probe(first)
+    _, third = breaker.allow_with_probe()
+    breaker.release_probe(first)
+    assert not breaker.allow()
+    breaker.record_success(first)
+    breaker.record_failure(closed_call)
+    assert breaker.state() == HALF_OPEN
+    clock.now += 60
+    breaker.record_success(second)
+    breaker.record_failure(third)
+    assert breaker.state() == HALF_OPEN
+    allowed, replacement = breaker.allow_with_probe()
+    assert allowed
+    breaker.record_failure(replacement)
+    assert breaker.state() == OPEN
+    clock.now += 61
+    _, newer = breaker.allow_with_probe()
+    breaker.record_success(replacement)
+    breaker.record_failure(second)
+    assert breaker.state() == HALF_OPEN
+    breaker.record_success(newer)
+    assert breaker.state() == CLOSED
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("fails", [False, True])
+def test_gateway_ignores_expired_probe_outcome(provider, monkeypatch, stream, fails):
+    clock = Clock()
+    breaker = _breaker(clock, threshold=1)
+    monkeypatch.setattr(llm_gateway, "breaker_for", lambda profile: breaker)
+    breaker.record_failure()
+    clock.now += 61
+
+    def response(client, profile):
+        clock.now += 60
+        allowed, replacement = breaker.allow_with_probe()
+        assert allowed
+        breaker.record_failure(replacement)
+        if fails:
+            raise ConnectionError("late")
+        return iter(["answer"]) if stream else "answer"
+
+    if fails:
+        with pytest.raises(ConnectionError):
+            if stream:
+                list(llm_gateway.invoke_stream("judge", "default", response))
+            else:
+                llm_gateway.invoke("judge", "default", response)
+    elif stream:
+        assert list(llm_gateway.invoke_stream("judge", "default", response)) == ["answer"]
+    else:
+        assert llm_gateway.invoke("judge", "default", response) == "answer"
+    assert breaker.state() == OPEN

@@ -29,6 +29,17 @@ class LLMUnavailable(RuntimeError):
     """No profile of the route could be called (every breaker is open)."""
 
 
+class StrictQuotaUnavailable(LLMUnavailable):
+    """Strict accounting cannot currently authenticate a safe provider call."""
+
+
+def _require_strict_accounting() -> None:
+    # No provider/model contract is certified yet. Never run an arbitrary callback:
+    # it can send more than once and its billing bound cannot be established here.
+    if getattr(config, "LLM_QUOTA_STRICT_POSTGRES", False):
+        raise StrictQuotaUnavailable("no provider is certified for strict PostgreSQL quota")
+
+
 def set_metrics_hook(hook: Optional[Callable[[str, Optional[str]], None]]) -> None:
     """hook(name, label): the web layer passes its counter here (this module does not import it)."""
     _METRICS.clear()
@@ -141,13 +152,16 @@ def invoke(
     `do_call(client, profile)` performs it (with its own retries) and returns the provider's answer.
     `estimate_input` is the prompt text, used to estimate the tokens when the answer carries no usage;
     `user_visible_text(result)` gives the answer text for the same estimate."""
+    _require_strict_accounting()
     _check_quota(feature, tenant_id)
     chain = _usable(feature, tenant_id)
     last_error: Optional[BaseException] = None
     tried = 0
     for index, profile in enumerate(chain):
         breaker = breaker_for(profile)
-        if breaker_enabled() and not breaker.allow():
+        enabled = breaker_enabled()
+        allowed, probe = breaker.allow_with_probe() if enabled else (True, None)
+        if not allowed:
             _record(profile, feature, tenant_id, "breaker_open", time.perf_counter())
             _count("llm_breaker_open_total", profile.name)
             continue
@@ -156,13 +170,16 @@ def invoke(
         try:
             result = do_call(_client_for(profile, client, index == 0), profile)
         except Exception as exc:  # noqa: BLE001 - classified; the caller decides what a failure means for the answer
-            if breaker_enabled() and _counts_as_failure(exc):
-                breaker.record_failure()
+            if breaker_enabled():
+                if _counts_as_failure(exc):
+                    breaker.record_failure(probe)
+                else:
+                    breaker.release_probe(probe)
             _record(profile, feature, tenant_id, "error", started, error_type=type(exc).__name__)
             last_error = exc
             continue
         if breaker_enabled():
-            breaker.record_success()
+            breaker.record_success(probe)
         try:
             text = user_visible_text(result) if user_visible_text else ""
         except Exception:  # noqa: BLE001 - an odd answer shape only costs the estimate
@@ -181,12 +198,15 @@ def invoke_stream(
 ) -> Iterator[str]:
     """Like `invoke` for a stream of text. Another profile is tried only while nothing has been sent yet: once the first
     piece is out, a failure ends the stream (a different answer in the middle would be a different text)."""
+    _require_strict_accounting()
     _check_quota(feature, tenant_id)
     chain = _usable(feature, tenant_id)
     last_error: Optional[BaseException] = None
     for index, profile in enumerate(chain):
         breaker = breaker_for(profile)
-        if breaker_enabled() and not breaker.allow():
+        enabled = breaker_enabled()
+        allowed, probe = breaker.allow_with_probe() if enabled else (True, None)
+        if not allowed:
             _record(profile, feature, tenant_id, "breaker_open", time.perf_counter())
             _count("llm_breaker_open_total", profile.name)
             continue
@@ -197,15 +217,18 @@ def invoke_stream(
                 emitted.append(piece)
                 yield piece
         except Exception as exc:  # noqa: BLE001
-            if breaker_enabled() and _counts_as_failure(exc):
-                breaker.record_failure()
+            if breaker_enabled():
+                if _counts_as_failure(exc):
+                    breaker.record_failure(probe)
+                else:
+                    breaker.release_probe(probe)
             _record(profile, feature, tenant_id, "error", started, error_type=type(exc).__name__)
             last_error = exc
             if emitted:
                 raise
             continue
         if breaker_enabled():
-            breaker.record_success()
+            breaker.record_success(probe)
         _record(profile, feature, tenant_id, "ok", started, estimate=(llm_usage.estimate_tokens(estimate_input),
                                                                        llm_usage.estimate_tokens("".join(emitted))))
         return

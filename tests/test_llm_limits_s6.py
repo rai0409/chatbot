@@ -16,6 +16,17 @@ ADMIN = {"x-admin-token": ADMIN_TOKEN}
 TENANT_A = {"x-admin-token": TENANT_A_TOKEN}
 
 
+def test_strict_quota_refuses_native_batch_before_any_provider_operation(monkeypatch):
+    monkeypatch.setattr(config, "LLM_QUOTA_STRICT_POSTGRES", True)
+    called = []
+    client = SimpleNamespace(files=SimpleNamespace(create=lambda **kw: called.append(kw)),
+                             batches=SimpleNamespace(create=lambda **kw: called.append(kw)))
+    request = llm_batch.BatchRequest("one", [{"role": "user", "content": "hi"}])
+    with pytest.raises(llm_batch.BatchError, match="strict PostgreSQL quota"):
+        llm_batch.submit([request], client=client)
+    assert called == []
+
+
 class Provider:
     def __init__(self):
         self.calls = []

@@ -41,7 +41,7 @@ def test_profile_fallback_never_turns_an_abstention_into_an_answer(monkeypatch):
     assert out is guarded and trace["profile_validation"]["skipped"] is True
 
 
-def test_empty_profile_fallback_keeps_the_answer(monkeypatch):
+def test_empty_profile_fallback_rejects_the_answer(monkeypatch):
     from rag_core import qa
 
     monkeypatch.setattr(qa, "load_rag_profile", lambda profile_id: {"rules": []})
@@ -52,7 +52,9 @@ def test_empty_profile_fallback_keeps_the_answer(monkeypatch):
     answer = _answer(None)
     state = SimpleNamespace(selected_context=[], retrieved=[], rewritten_query="", augmented_query="")
     out = qa._apply_profile_validation("手順は？", answer, {}, state, rag_profile_id=None, started_at=time.time())
-    assert out is answer and out.answer_text == "本文"
+    assert out.guard_reason == "insufficient_evidence"
+    assert out.used_fallback is True and out.citations == []
+    assert "本文" not in out.answer_text and "本文" not in out.answer_with_footnotes
 
 
 # --- 8. keyword lane -----------------------------------------------------------------------------

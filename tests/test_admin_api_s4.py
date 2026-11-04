@@ -236,6 +236,27 @@ def test_the_audit_log_is_read_newest_first_filtered_and_checked(api):
 # --- proposals, versions, evaluations, settings ---------------------------------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("path,keys", [
+    ("/admin/proposals", {"states", "proposals"}),
+    ("/admin/proposals/p1", {"id", "history", "summary"}),
+    ("/admin/profiles", {"profiles"}),
+    ("/admin/profiles/volcano_demo/versions", {"profile_id", "active", "versions", "history"}),
+    ("/admin/profiles/volcano_demo/diff?left=source&right=source", {"left", "right", "files", "identical"}),
+    ("/admin/evaluations", {"chain_intact", "total", "entries"}),
+    ("/admin/knobs", {"knobs"}),
+])
+def test_change_management_reads_require_installation_admin(api, monkeypatch, path, keys):
+    client, _tmp = api
+    from rag_core import profile_store
+
+    assert client.post("/admin/proposals", headers=ADMIN, json={"id": "p1", "profile_id": "volcano_demo", "title": "test", "actor": "admin"}).status_code == 200
+    monkeypatch.setattr(profile_store, "diff_versions", lambda profile_id, left, right: {"left": left, "right": right, "files": {}, "identical": True})
+    response = client.get(path, headers=ADMIN)
+    assert response.status_code == 200 and keys <= response.json().keys()
+    assert client.get(path, headers=TENANT_A).status_code == 403
+    assert client.get(path).status_code in (401, 403)
+
+
 def test_a_proposal_moves_with_a_named_person_and_the_proposer_cannot_approve(api):
     client, tmp_path = api
     new = {"id": "p1", "profile_id": "volcano_demo", "title": "表記ゆれの辞書を足す", "actor": "山田太郎"}
@@ -273,17 +294,21 @@ def test_profile_versions_evaluations_and_settings_can_be_read(api):
     assert any(k["name"] == "RAG_HARD_MAX_DIST" and k["risk"] == "high" for k in knobs) and all("value" in k for k in knobs)
 
 
-def test_monitoring_puts_feedback_and_records_side_by_side(api):
+def test_monitoring_puts_feedback_and_records_side_by_side(api, monkeypatch):
     client, _tmp = api
     from rag_core import audit_log
+    from eval.tenant_eval import proposals
 
+    live = {"id": "live-1", "title": "private", "state": "live", "profile_id": "p", "history": [], "rev": 1}
+    monkeypatch.setattr(proposals, "list_proposals", lambda *args: [live])
     audit_log.append_feedback_audit_event({"feedback_token": "t", "feedback_type": "bad", "tenant_id": "tenant_a"})
     audit_log.append_feedback_audit_event({"feedback_token": "u", "feedback_type": "good", "tenant_id": "tenant_b"})
     body = client.get("/admin/monitoring", headers=ADMIN).json()
     day = next(iter(body["feedback_by_day"].values()))
-    assert day == {"bad": 1, "good": 1} and body["records"]["total"] == 0 and body["changes_in_rollout"] == []
+    assert day == {"bad": 1, "good": 1} and body["records"]["total"] == 0 and body["changes_in_rollout"][0]["id"] == "live-1"
     own = client.get("/admin/monitoring", headers=TENANT_A).json()
     assert next(iter(own["feedback_by_day"].values())) == {"bad": 1}
+    assert own["changes_in_rollout"] == []
 
 
 def test_the_access_overview_shows_the_set_up_without_a_key_or_a_group_name(api, monkeypatch):

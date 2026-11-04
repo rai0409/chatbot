@@ -33,6 +33,7 @@ def _fake_pipeline(calls, *, guard_reason=None, used_fallback=False):
             "citations_count": 0,
             "latency_ms": 1,
             "after_rerank": [],
+            "profile_validation": {"passed": True, "matched_rule_id": "test-rule"},
         }
         return ans, trace
 
@@ -199,3 +200,29 @@ def test_approved_exact_match_precedes_and_is_uncached(monkeypatch, tmp_path):
     assert second["request_id"] != first["request_id"]
     assert second["trace_id"] != first["trace_id"]
     assert answer_cache.size() == 0
+
+
+def test_unverified_legacy_cache_is_not_republished(monkeypatch, tmp_path):
+    calls, _ = _setup_chat(monkeypatch, tmp_path, enabled=True)
+    key = answer_cache.build_key("質問です", top_k=config.TOP_K, max_context_chars=config.MAX_CONTEXT_CHARS,
+                                 tenant_id="default", rag_profile_id="default")
+    answer_cache.put(key, {"answer_text": "古い未検証本文", "profile_validation": {"passed": True, "skipped": True}})
+    first = main.chat(main.ChatRequest(question="質問です"))
+    second = main.chat(main.ChatRequest(question="質問です"))
+    assert len(calls) == 1 and first == second
+    assert "古い未検証本文" not in first["answer_text"]
+
+
+def test_missing_validation_trace_is_skipped_and_not_cached(monkeypatch, tmp_path):
+    calls, _ = _setup_chat(monkeypatch, tmp_path, enabled=True)
+    fake = _fake_pipeline(calls)
+    def without_validation(*args, **kwargs):
+        answer, trace = fake(*args, **kwargs)
+        del trace["profile_validation"]
+        return answer, trace
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", without_validation)
+    first = main.chat(main.ChatRequest(question="質問です"))
+    main.chat(main.ChatRequest(question="質問です"))
+    assert first["profile_validation"]["passed"] is False
+    assert first["profile_validation"]["skipped"] is True
+    assert len(calls) == 2 and answer_cache.size() == 0

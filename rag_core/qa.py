@@ -14,7 +14,7 @@ from rag_core.keyword_scorer import apply_keyword_boost, classify_query_type, sc
 from rag_core import answer_rewrite, grounding, interpretation, llm, llm_gateway, llm_profiles, multi_query, query_route, search_mode
 from rag_core.profile_engine import apply_profile_boost
 from rag_core.profile_loader import load_rag_profile
-from rag_core.profile_validation import validate_answer_with_profile
+from rag_core.profile_validation import resolve_validation_rule, validate_answer_with_profile
 from rag_core.question_types import detect_question_type
 from rag_core.reranker import rerank_chunks
 from rag_core.retrieval import QueryEmbeddingBatch, RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, fusion_scale, hybrid_retrieve, keyword_index_path_for_collection, normalize_tenant_id, vector_retrieve
@@ -981,7 +981,7 @@ def _profile_validation_skipped(
     reason: str,
 ) -> Dict[str, object]:
     return {
-        "passed": True,
+        "passed": False,
         "skipped": True,
         "matched_rule_id": "",
         "question_type": question_type or "other",
@@ -1003,9 +1003,10 @@ def _apply_profile_validation(
     *,
     rag_profile_id: Optional[str],
     started_at: float,
+    profile_snapshot: Optional[dict] = None,
 ) -> AnswerResult:
     profile_id = rag_profile_id or "default"
-    profile = load_rag_profile(profile_id)
+    profile = profile_snapshot if profile_snapshot is not None else load_rag_profile(profile_id)
     warnings = profile.get("warnings") if isinstance(profile, dict) else []
     if not isinstance(warnings, list):
         warnings = []
@@ -1015,59 +1016,47 @@ def _apply_profile_validation(
     trace["rag_profile_version"] = str(profile.get("profile_version") or "") if isinstance(profile, dict) else ""
     trace["question_type"] = question_type
 
-    if warnings:
+    if result.guard_reason:
+        # Guarded answers must never be replaced by a profile fallback.
         trace["profile_validation"] = _profile_validation_skipped(
-            profile_id,
-            question_type,
-            [str(item) for item in warnings],
-            "profile load warning; validation skipped",
+            profile_id, question_type, [str(item) for item in warnings], "guarded answer; validation skipped"
         )
         return result
-    if result.guard_reason:
-        # Stage 14: the guard decided not to answer. The profile fallback used
-        # to replace that with an extract of the very chunk the guard rejected,
-        # with citations; an abstention is never turned into an answer here.
+    if warnings:
         trace["profile_validation"] = _profile_validation_skipped(
-            profile_id, question_type, [], "guarded answer; validation skipped"
+            profile_id, question_type, [str(item) for item in warnings], "profile load warning; validation skipped"
         )
         return result
 
     validation_result = validate_answer_with_profile(question, result.answer_text, question_type, profile)
     trace["profile_validation"] = validation_result
-    if validation_result.get("passed") or not validation_result.get("fallback_if_failed"):
+    if validation_result.get("skipped") or validation_result.get("passed") or not validation_result.get("fallback_if_failed"):
         return result
 
     raw = extractive_fallback(question, state.selected_context)
-    if not str(raw or "").strip():
-        # No extract either: keep the answer (and its failed validation in the
-        # trace) instead of returning an empty answer text.
-        trace["profile_validation_after_fallback"] = {"skipped": True, "reason": "empty fallback"}
-        return result
-    fallback_result = _build_answer_result(
-        raw,
-        state.selected_context,
-        intent=result.intent,
-        guard_reason=result.guard_reason,
-        used_fallback=True,
-        retrieved=state.retrieved,
-        rewritten_query=state.rewritten_query,
-        augmented_query=state.augmented_query,
-    )
-    fallback_validation = validate_answer_with_profile(
-        question,
-        fallback_result.answer_text,
-        question_type,
-        profile,
-    )
-    trace["profile_validation_after_fallback"] = fallback_validation
+    fallback_result = None
+    if str(raw or "").strip():
+        fallback_result = _build_answer_result(
+            raw, state.selected_context, intent=result.intent, guard_reason=None,
+            used_fallback=True, retrieved=state.retrieved,
+            rewritten_query=state.rewritten_query, augmented_query=state.augmented_query,
+        )
+        fallback_validation = validate_answer_with_profile(
+            question, fallback_result.answer_text, question_type, profile,
+        )
+        trace["profile_validation_after_fallback"] = fallback_validation
+        if not fallback_validation.get("passed"):
+            fallback_result = None
+    if fallback_result is None:
+        fallback_result = _build_answer_result(
+            _guard_fallback_raw("insufficient_evidence"), [], intent=result.intent,
+            guard_reason="insufficient_evidence", used_fallback=True,
+            retrieved=state.retrieved, rewritten_query=state.rewritten_query,
+            augmented_query=state.augmented_query,
+        )
     _set_final_trace(
-        trace,
-        started_at,
-        state.selected_context,
-        guard_reason=fallback_result.guard_reason,
-        used_fallback=True,
-        answer_mode="fallback",
-        citations_count=len(fallback_result.citations),
+        trace, started_at, state.selected_context, guard_reason=fallback_result.guard_reason,
+        used_fallback=True, answer_mode="fallback", citations_count=len(fallback_result.citations),
     )
     return fallback_result
 
@@ -1680,6 +1669,7 @@ def answer_query_stream(
     Yields ("meta", dict), then zero or more ("delta", {"text": ...}), then
     ("final", (AnswerResult, trace)). Deltas are provisional; the final event
     is authoritative (validation/extractive fallback may correct the text).
+    Forced profile validation buffers generated text until validation completes.
     Guard/no-answer paths emit meta then final with no deltas.
     """
     started_at = time.perf_counter()
@@ -1774,6 +1764,13 @@ def answer_query_stream(
         yield "final", (result, trace)
         return
 
+    # Freeze the profile used for both the disclosure decision and validation.
+    stream_profile = load_rag_profile(rag_profile_id or "default")
+    stream_type = detect_question_type(question, stream_profile)
+    stream_rule = resolve_validation_rule(question, stream_type, stream_profile)
+    enforce = bool(not stream_profile.get("warnings") and stream_rule and stream_rule.get("fallback_if_failed") is True)
+    buffered_chars = 0
+    max_buffer_chars = 1_000_000
     messages = build_messages(q, build_evidence_blocks(grounded))
     pieces: List[str] = []
     generation_started = time.perf_counter()
@@ -1784,8 +1781,12 @@ def answer_query_stream(
             "generate", tenant_id, lambda chat_client, profile: _stream_chat_completion(chat_client, messages, profile),
             client=client, estimate_input="".join(str(m.get("content") or "") for m in messages),
         ):
+            buffered_chars += len(delta_text)
+            if enforce and buffered_chars > max_buffer_chars:
+                raise ValueError("profile validation stream buffer limit exceeded")
             pieces.append(delta_text)
-            yield "delta", {"text": delta_text}
+            if not enforce:
+                yield "delta", {"text": delta_text}
     except Exception as exc:
         trace.setdefault("stage_latency_ms", {})["generation_ms"] = int(
             (time.perf_counter() - generation_started) * 1000
@@ -1797,7 +1798,7 @@ def answer_query_stream(
         # Once any streamed text has been emitted, returning a different
         # extractive fallback as the final answer would create an inconsistent
         # client-visible stream. Do not retry or replace partial output.
-        if pieces:
+        if pieces or (enforce and buffered_chars > max_buffer_chars):
             raise
 
         result = _llm_unavailable_result(q, state, state.retrieved)
@@ -1844,6 +1845,9 @@ def answer_query_stream(
         citations_count=len(result.citations),
     )
     result = _apply_profile_validation(
-        question, result, trace, state, rag_profile_id=rag_profile_id, started_at=started_at
+        question, result, trace, state, rag_profile_id=rag_profile_id, started_at=started_at,
+        profile_snapshot=stream_profile,
     )
+    if enforce and not result.guard_reason:
+        yield "delta", {"text": result.answer_text}
     yield "final", (result, trace)

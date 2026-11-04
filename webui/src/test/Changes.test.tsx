@@ -18,13 +18,43 @@ beforeEach(() => {
   }
 });
 
-function openTab(name: string) {
-  fireEvent.click(screen.getByRole("tab", { name }));
+async function openTab(name: string) {
+  fireEvent.click(await screen.findByRole("tab", { name }));
 }
 
 async function openProposal(title: RegExp) {
   fireEvent.click(await screen.findByRole("button", { name: title }));
 }
+
+describe("access scope", () => {
+  it("shows all five tabs to installation administrators", async () => {
+    const mock = stubApi({ "GET /admin/proposals": LIST });
+    render(<ChangesPage />);
+    expect(await screen.findAllByRole("tab")).toHaveLength(5);
+    await screen.findByRole("row", { name: /シノニムを足す/ });
+    expect(mock.mock.calls.map((c) => c[0])).toEqual(["/admin/access", "/admin/proposals"]);
+  });
+
+  it("loads only monitoring for tenant administrators", async () => {
+    const mock = stubApi({ "GET /admin/access": { you: { reach: "tenants", tenants: ["tenant_a"] } }, "GET /admin/monitoring?days=14": { ...MONITORING, changes_in_rollout: [] } });
+    render(<ChangesPage />);
+    expect(await screen.findByText("記録の件数")).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    expect(screen.getByRole("tab", { name: "監視" })).toBeInTheDocument();
+    expect(mock.mock.calls.map((c) => c[0])).toEqual(["/admin/access", "/admin/monitoring?days=14"]);
+  });
+
+  it("hides tabs and retries when access fails", async () => {
+    const mock = stubApi({ "GET /admin/access": () => jsonResponse({ detail: "error" }, 500) });
+    render(<ChangesPage />);
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(mock.mock.calls.map((c) => c[0])).toEqual(["/admin/access"]);
+    fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
+    await waitFor(() => expect(mock).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("tab")).toBeNull();
+  });
+});
 
 describe("proposals: the list", () => {
   it("shows the proposals with state, category, approvals and decision", async () => {
@@ -55,7 +85,7 @@ describe("proposals: the list", () => {
   });
 
   it("shows an error with a retry button", async () => {
-    const mock = vi.fn().mockResolvedValueOnce(jsonResponse({ detail: "boom" }, 500)).mockImplementation(() => Promise.resolve(jsonResponse(LIST)));
+    const mock = vi.fn().mockResolvedValueOnce(jsonResponse({ you: { reach: "installation", tenants: null } })).mockResolvedValueOnce(jsonResponse({ detail: "boom" }, 500)).mockImplementation(() => Promise.resolve(jsonResponse(LIST)));
     vi.stubGlobal("fetch", mock);
     render(<ChangesPage />);
     expect(await screen.findByRole("alert")).toHaveTextContent("取得できませんでした");
@@ -345,7 +375,7 @@ describe("profile versions", () => {
   it("lists the profiles and the versions with the active one marked and the history of the pointer", async () => {
     stubApi(routes);
     render(<ChangesPage />);
-    openTab("プロファイル版");
+    await openTab("プロファイル版");
     const row = await screen.findByRole("row", { name: /sample/ });
     expect(row).toHaveTextContent("aaaa1111bbbb2222");
     fireEvent.click(within(row).getByRole("button", { name: /版を見る/ }));
@@ -359,7 +389,7 @@ describe("profile versions", () => {
   it("activates a version after a reason, with the name, and says it affects every tenant", async () => {
     const mock = stubApi({ ...routes, "POST /admin/profiles/sample/activate": { active: {}, previous: {} } });
     render(<ChangesPage />);
-    openTab("プロファイル版");
+    await openTab("プロファイル版");
     fireEvent.click(await screen.findByRole("button", { name: /版を見る/ }));
     const row = await screen.findByRole("row", { name: /cccc3333dddd4444/ });
     fireEvent.click(within(row).getByRole("button", { name: "この版を有効にする" }));
@@ -384,7 +414,7 @@ describe("profile versions", () => {
     const mock = stubApi({ ...routes, "POST /admin/profiles/sample/rollback": { active: {} } });
     window.localStorage.setItem("console.actorName", "田中太郎");
     render(<ChangesPage />);
-    openTab("プロファイル版");
+    await openTab("プロファイル版");
     fireEvent.click(await screen.findByRole("button", { name: /版を見る/ }));
     fireEvent.click(await screen.findByRole("button", { name: "前の版に戻す" }));
     fireEvent.change(within(screen.getByRole("dialog")).getByRole("textbox"), { target: { value: "問題が出た" } });
@@ -397,7 +427,7 @@ describe("profile versions", () => {
     stubApi({ ...routes, "POST /admin/profiles/sample/activate": () => jsonResponse({ detail: "forbidden" }, 403 ) });
     window.localStorage.setItem("console.actorName", "田中太郎");
     render(<ChangesPage />);
-    openTab("プロファイル版");
+    await openTab("プロファイル版");
     fireEvent.click(await screen.findByRole("button", { name: /版を見る/ }));
     const row = await screen.findByRole("row", { name: /cccc3333dddd4444/ });
     fireEvent.click(within(row).getByRole("button", { name: "この版を有効にする" }));
@@ -413,7 +443,7 @@ describe("profile versions", () => {
       "GET /admin/profiles/sample/diff?left=aaaa1111bbbb2222&right=source": { left: "aaaa1111bbbb2222", right: "source", files: { "synonyms.json": "changed", "rules.json": "same" }, identical: false },
     });
     render(<ChangesPage />);
-    openTab("プロファイル版");
+    await openTab("プロファイル版");
     fireEvent.click(await screen.findByRole("button", { name: /版を見る/ }));
     await screen.findByRole("row", { name: /cccc3333dddd4444/ });
     const run = screen.getByRole("button", { name: "比べる" });
@@ -431,7 +461,7 @@ describe("profile versions", () => {
   it("says when there is no stored profile", async () => {
     stubApi({ "GET /admin/proposals": LIST, "GET /admin/profiles": { profiles: [] } });
     render(<ChangesPage />);
-    openTab("プロファイル版");
+    await openTab("プロファイル版");
     expect(await screen.findByText("保存済みのプロファイルはまだありません。")).toBeInTheDocument();
   });
 });
@@ -442,7 +472,7 @@ describe("evaluation ledger, settings and monitoring", () => {
   it("shows the ledger with the digest cut to 12 characters and the chain as intact", async () => {
     stubApi({ ...base, "GET /admin/evaluations?limit=200": EVALUATIONS });
     render(<ChangesPage />);
-    openTab("評価台帳");
+    await openTab("評価台帳");
     expect(await screen.findByText(/鎖は正常です/)).toBeInTheDocument();
     expect(screen.getByText(/コマンドラインで実行/)).toBeInTheDocument();
     const rows = screen.getAllByRole("row").slice(1);
@@ -455,7 +485,7 @@ describe("evaluation ledger, settings and monitoring", () => {
   it("warns loudly when the chain is broken, and says what to do when the ledger is empty", async () => {
     const mock = stubApi({ ...base, "GET /admin/evaluations?limit=200": { chain_intact: false, total: 0, entries: [] } });
     render(<ChangesPage />);
-    openTab("評価台帳");
+    await openTab("評価台帳");
     expect(await screen.findByRole("alert")).toHaveTextContent("鎖が壊れています");
     expect(screen.getByText(/評価をコマンドラインで実行すると/)).toBeInTheDocument();
     expect(mock).toHaveBeenCalled();
@@ -464,7 +494,7 @@ describe("evaluation ledger, settings and monitoring", () => {
   it("lists the settings with limits, risk and the current value", async () => {
     stubApi({ ...base, "GET /admin/knobs": { knobs: KNOBS } });
     render(<ChangesPage />);
-    openTab("設定項目");
+    await openTab("設定項目");
     const guard = await screen.findByRole("row", { name: /RAG_HARD_MAX_DIST/ });
     expect(guard).toHaveTextContent("0.3 〜 1.5");
     expect(guard).toHaveTextContent("高");
@@ -480,7 +510,7 @@ describe("evaluation ledger, settings and monitoring", () => {
       "GET /admin/proposals/p-003": proposal({ id: "p-003", title: "ブースト調整", state: "canary" }, { id: "p-003", title: "ブースト調整", state: "canary" }),
     });
     render(<ChangesPage />);
-    openTab("監視");
+    await openTab("監視");
     const day = await screen.findByRole("row", { name: /2026-10-01/ });
     expect(day).toHaveTextContent("4");
     expect(screen.getByText("120")).toBeInTheDocument();
@@ -496,7 +526,7 @@ describe("evaluation ledger, settings and monitoring", () => {
   it("shows an error with a retry for the settings", async () => {
     stubApi({ ...base, "GET /admin/knobs": () => jsonResponse({ detail: "x" }, 500) });
     render(<ChangesPage />);
-    openTab("設定項目");
+    await openTab("設定項目");
     expect(await screen.findByRole("alert")).toHaveTextContent("取得できませんでした");
     expect(screen.getByRole("button", { name: "再読み込み" })).toBeInTheDocument();
   });

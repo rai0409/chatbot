@@ -389,6 +389,7 @@ BUSINESS_HOURS_END = int(getenv_first("BUSINESS_HOURS_END", default="21"))
 # Daily limits (0 = no limit). The console can set them for all or for one tenant (runtime settings, with a reason); these are
 # what applies until it does. The day is the local day of the business hours (BUSINESS_HOURS_UTC_OFFSET). User limits need an
 # identified caller: without one (API authentication off) only the tenant and global limits apply.
+LLM_QUOTA_STRICT_POSTGRES = _get_bool("LLM_QUOTA_STRICT_POSTGRES", default=False)
 LLM_QUOTA_USER_DAILY_CALLS = int(getenv_first("LLM_QUOTA_USER_DAILY_CALLS", default="0"))
 LLM_QUOTA_USER_DAILY_TOKENS = int(getenv_first("LLM_QUOTA_USER_DAILY_TOKENS", default="0"))
 LLM_QUOTA_TENANT_DAILY_TOKENS = int(getenv_first("LLM_QUOTA_TENANT_DAILY_TOKENS", default="0"))

@@ -88,6 +88,7 @@ type Handler = unknown | ((body: unknown) => Response);
 
 /** A fetch that answers by "METHOD /path?query". Anything not listed is a 404. The calls are on the returned mock. */
 export function stubApi(routes: Record<string, Handler>) {
+  routes = { "GET /admin/access": { you: { reach: "installation", tenants: null } }, ...routes };
   const mock = vi.fn((url: string, init?: RequestInit) => {
     const key = `${(init?.method ?? "GET").toUpperCase()} ${url}`;
     if (!(key in routes)) return Promise.resolve(jsonResponse({ detail: `no route ${key}` }, 404));

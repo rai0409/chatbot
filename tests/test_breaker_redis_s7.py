@@ -170,3 +170,49 @@ def test_the_breaker_backend_is_part_of_the_readiness_check(monkeypatch):
     monkeypatch.setattr(state_backend, "redis_client", lambda: type("R", (), {"ping": lambda self: True})())
     health = state_backend.health()
     assert health["redis"]["ok"] is True and "BREAKER_BACKEND" in health["redis"]["used_by"]
+
+
+def test_inconclusive_probe_is_shared_and_stale_probe_cannot_release_a_new_period():
+    redis, clock = FakeRedis(), Clock()
+    a, b = _breaker(_store(redis), clock, threshold=1), _breaker(_store(redis), clock, threshold=1)
+    a.record_failure()
+    clock.now += 61
+    allowed, old_probe = a.allow_with_probe()
+    assert allowed and not b.allow()
+    redis.conflicts_to_inject = 1
+    a.release_probe(old_probe)
+    allowed, probe = b.allow_with_probe()
+    assert allowed and probe != old_probe
+    b.record_failure()
+    a.release_probe(old_probe)
+    assert b.state() == OPEN and not b.allow()
+    clock.now += 61
+    allowed, new_probe = b.allow_with_probe()
+    assert allowed and new_probe != old_probe
+    a.release_probe(old_probe)
+    assert not a.allow()
+    b.release_probe(new_probe)
+    assert a.allow()
+
+
+def test_probe_leases_are_shared_idempotent_and_expire_after_conflicts():
+    redis, clock = FakeRedis(), Clock()
+    a, b = _breaker(_store(redis), clock, threshold=1, probes=2), _breaker(_store(redis), clock, threshold=1, probes=2)
+    a.record_failure()
+    clock.now += 61
+    _, first = a.allow_with_probe()
+    _, second = b.allow_with_probe()
+    redis.conflicts_to_inject = 1
+    a.release_probe(first)
+    _, third = a.allow_with_probe()
+    a.release_probe(first)
+    assert not b.allow()
+    clock.now += 60
+    b.record_success(second)
+    a.record_failure(third)
+    assert a.state() == HALF_OPEN
+    redis.conflicts_to_inject = 1
+    allowed, replacement = b.allow_with_probe()
+    assert allowed
+    b.record_success(replacement)
+    assert a.state() == CLOSED

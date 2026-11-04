@@ -13,8 +13,9 @@
   GET  /admin/knobs                     the settings an evaluation may change, with their limits and the value in force
   GET  /admin/monitoring                feedback by day and the counts of the records, to watch a change that is live
 
-Reading is open to every administrator. Anything that changes the installation (a proposal, a version, a rollout) is the
-installation administrator's. A change that needs a person (a proposal, an approval) takes a name: the same person cannot
+Proposal, profile, evaluation and settings reads are restricted to installation administrators. Monitoring is available
+to all administrators, scoped to their tenants, and excludes proposal details for tenant administrators. Anything that
+changes the installation (a proposal, a version, a rollout) is the installation administrator's. A change that needs a person (a proposal, an approval) takes a name: the same person cannot
 propose and approve the same change. It is a statement of who did it, kept in the record and the audit log.
 """
 from __future__ import annotations
@@ -86,7 +87,8 @@ def _profile_error(exc: Exception) -> HTTPException:
 
 
 @router.get("/admin/proposals")
-def list_proposals(state: Optional[str] = None, _admin_auth: None = Depends(require_admin_auth)):
+def list_proposals(request: Request, state: Optional[str] = None, _admin_auth: None = Depends(require_admin_auth)):
+    require_global(admin_common.request_scope(request))
     if state is not None and state not in proposals.STATES:
         raise HTTPException(status_code=400, detail=f"'state' is one of: {', '.join(proposals.STATES)}")
     try:
@@ -97,7 +99,8 @@ def list_proposals(state: Optional[str] = None, _admin_auth: None = Depends(requ
 
 
 @router.get("/admin/proposals/{proposal_id}")
-def get_proposal(proposal_id: str, _admin_auth: None = Depends(require_admin_auth)):
+def get_proposal(proposal_id: str, request: Request, _admin_auth: None = Depends(require_admin_auth)):
+    require_global(admin_common.request_scope(request))
     try:
         p = proposals.get(proposal_id)
     except proposals.ProposalError as exc:
@@ -152,7 +155,8 @@ def move_proposal(proposal_id: str, move: str, body: Move, request: Request, _ad
 
 
 @router.get("/admin/profiles")
-def list_profiles(_admin_auth: None = Depends(require_admin_auth)):
+def list_profiles(request: Request, _admin_auth: None = Depends(require_admin_auth)):
+    require_global(admin_common.request_scope(request))
     root = profile_store.store_root()
     rows: List[Dict[str, Any]] = []
     if root.is_dir():
@@ -168,7 +172,8 @@ def list_profiles(_admin_auth: None = Depends(require_admin_auth)):
 
 
 @router.get("/admin/profiles/{profile_id}/versions")
-def profile_versions(profile_id: str, _admin_auth: None = Depends(require_admin_auth)):
+def profile_versions(profile_id: str, request: Request, _admin_auth: None = Depends(require_admin_auth)):
+    require_global(admin_common.request_scope(request))
     try:
         versions = profile_store.list_versions(profile_id)
         pointer = profile_store._read_pointer(profile_id)
@@ -179,7 +184,8 @@ def profile_versions(profile_id: str, _admin_auth: None = Depends(require_admin_
 
 
 @router.get("/admin/profiles/{profile_id}/diff")
-def profile_diff(profile_id: str, left: str, right: str, _admin_auth: None = Depends(require_admin_auth)):
+def profile_diff(profile_id: str, left: str, right: str, request: Request, _admin_auth: None = Depends(require_admin_auth)):
+    require_global(admin_common.request_scope(request))
     try:
         return profile_store.diff_versions(profile_id, left, right)
     except profile_store.ProfileStoreError as exc:
@@ -216,7 +222,8 @@ def profile_rollback(profile_id: str, body: Rollback, request: Request, _admin_a
 
 
 @router.get("/admin/evaluations")
-def evaluations(limit: int = 50, _admin_auth: None = Depends(require_admin_auth)):
+def evaluations(request: Request, limit: int = 50, _admin_auth: None = Depends(require_admin_auth)):
+    require_global(admin_common.request_scope(request))
     try:
         intact = True
         try:
@@ -230,7 +237,8 @@ def evaluations(limit: int = 50, _admin_auth: None = Depends(require_admin_auth)
 
 
 @router.get("/admin/knobs")
-def knobs(_admin_auth: None = Depends(require_admin_auth)):
+def knobs(request: Request, _admin_auth: None = Depends(require_admin_auth)):
+    require_global(admin_common.request_scope(request))
     return {"knobs": [{"name": k.name, "kind": k.kind, "stage": k.stage, "risk": k.risk, "lo": k.lo, "hi": k.hi,
                        "description": k.description, "value": knob_registry.read(k.name)} for k in knob_registry.REGISTRY]}
 

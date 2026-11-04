@@ -138,6 +138,7 @@ def _fake_pipeline(calls):
             "citations_count": 0,
             "latency_ms": 1,
             "after_rerank": [],
+            "profile_validation": {"passed": True, "matched_rule_id": "test-rule"},
         }
         return answer, trace
 

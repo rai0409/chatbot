@@ -167,7 +167,8 @@ def test_a_disabled_validation_rule_is_not_applied():
     rule = {"rule_id": "r", "applies_to_question_type": "t", "answer_must_contain_any": ["必須"],
             "fallback_if_failed": True}
     profile = {"validation_rules": [{**rule, "enabled": False}]}
-    assert profile_validation.validate_answer_with_profile("q", "本文", "t", profile)["passed"] is True
+    skipped = profile_validation.validate_answer_with_profile("q", "本文", "t", profile)
+    assert skipped["passed"] is False and skipped["skipped"] is True
     profile = {"validation_rules": [{**rule, "enabled": True}]}
     assert profile_validation.validate_answer_with_profile("q", "本文", "t", profile)["passed"] is False
     profile = {"validation_rules": [rule]}  # no flag: enabled, as before

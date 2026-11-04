@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 CLOSED = "closed"
@@ -24,6 +25,7 @@ OPEN = "open"
 HALF_OPEN = "half_open"
 
 State = Dict[str, Any]
+_LEGACY = object()
 
 
 def default_state() -> State:
@@ -176,41 +178,80 @@ class CircuitBreaker:
 
     def allow(self) -> bool:
         """May a call be made now? In the half-open state only `probes` trial calls are let through."""
-        def step(current: State) -> Tuple[State, bool]:
+        return self.allow_with_probe()[0]
+
+    def allow_with_probe(self) -> Tuple[bool, Optional[str]]:
+        """Admit a call and return an opaque identifier for its eventual outcome."""
+        def step(current: State) -> Tuple[State, Tuple[bool, Optional[str]]]:
             old = current["state"]
             if old == CLOSED:
-                return current, True
+                return current, (True, "c:" + current.get("generation", ""))
             if old == OPEN:
                 if self._clock() - float(current["opened_at"]) < self.open_seconds:
-                    return current, False
-                current.update(state=HALF_OPEN, probes=0)
-            if current["probes"] >= self.probes:
-                return current, False
-            current["probes"] += 1
-            return current, True
+                    return current, (False, None)
+                current.update(state=HALF_OPEN, probes=0, probe_period=uuid.uuid4().hex, probe_leases={})
+            now = self._clock()
+            leases = {k: v for k, v in current.get("probe_leases", {}).items() if now < v}
+            current["probe_leases"] = leases
+            current["probes"] = len(leases)
+            if len(leases) >= self.probes:
+                return current, (False, None)
+            if not current.get("probe_period"):
+                current["probe_period"] = uuid.uuid4().hex
+            token = uuid.uuid4().hex
+            leases[token] = now + max(self.open_seconds, 1.0)
+            current["probes"] = len(leases)
+            return current, (True, token)
 
-        allowed, _old, _new = self._step(step)
-        return bool(allowed)
+        result, _old, _new = self._step(step)
+        return result
 
-    def record_success(self) -> None:
+    def release_probe(self, period: Optional[str]) -> None:
+        """Release only the matching inconclusive probe, at most once."""
+        if period is None or period.startswith("c:"):
+            return
+
+        def step(current: State) -> Tuple[State, None]:
+            if current["state"] == HALF_OPEN:
+                leases = dict(current.get("probe_leases", {}))
+                leases.pop(period, None)
+                current.update(probe_leases=leases, probes=len(leases))
+            return current, None
+
+        self._step(step)
+
+    def _valid_outcome(self, current: State, token: Any) -> bool:
+        if token is _LEGACY:
+            return True
+        if not isinstance(token, str):
+            return False
+        if token.startswith("c:"):
+            return current["state"] == CLOSED and token == "c:" + current.get("generation", "")
+        return (current["state"] == HALF_OPEN and
+                self._clock() < current.get("probe_leases", {}).get(token, 0))
+
+    def record_success(self, token: Any = _LEGACY) -> None:
         quiet = self._peek()
         if quiet["state"] == CLOSED and not quiet["failures"]:
             return  # the usual case: nothing to record (and no write to a shared store on every call)
 
         def step(current: State) -> Tuple[State, None]:
-            current.update(state=CLOSED, failures=0, opened_at=0.0, probes=0)
+            if self._valid_outcome(current, token):
+                current.update(state=CLOSED, failures=0, opened_at=0.0, probes=0, probe_leases={})
             return current, None
 
         self._step(step)
 
-    def record_failure(self) -> None:
+    def record_failure(self, token: Any = _LEGACY) -> None:
         def step(current: State) -> Tuple[State, None]:
+            if not self._valid_outcome(current, token):
+                return current, None
             if current["state"] in (HALF_OPEN, OPEN):
-                current.update(state=OPEN, opened_at=self._clock(), probes=0)
+                current.update(state=OPEN, opened_at=self._clock(), probes=0, probe_leases={}, generation=uuid.uuid4().hex)
             else:
                 current["failures"] += 1
                 if current["failures"] >= self.threshold:
-                    current.update(state=OPEN, opened_at=self._clock(), probes=0)
+                    current.update(state=OPEN, opened_at=self._clock(), probes=0, probe_leases={}, generation=uuid.uuid4().hex)
             return current, None
 
         self._step(step)

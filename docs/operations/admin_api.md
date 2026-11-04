@@ -26,11 +26,12 @@
 | | `GET/POST /admin/llm-assignments` | モデルのティアの割り当て（全員・テナント・役割・利用者）。変更は理由必須 | 読み取りは全員。変更は全体管理者 |
 | 監査 | `GET /admin/audit` | 監査ログ（`kind`＝admin / chat / feedback、フィルタ、新しい順） | 自分のテナントの分（テナントのないイベントは見えない） |
 | | `GET /admin/audit/verify` | ハッシュ連鎖の検証 | 全体 |
-| 変更管理 | `GET /admin/proposals`、`/{id}` | 提案の一覧・詳細（履歴つき） | 読み取りは全員 |
+| 変更管理 | `GET /admin/proposals`、`/{id}` | 提案の一覧・詳細（履歴つき） | 全体 |
 | | `POST /admin/proposals`、`/{id}/{move}` | 提案の作成と、classify・propose・attach-evaluation・approve・reject・advance・retire | 全体（実行する人の名前が必須。提案した人は承認できない） |
-| | `GET /admin/profiles`、`/{id}/versions`、`/{id}/diff` | プロファイルの版、差分 | 読み取りは全員 |
+| | `GET /admin/profiles`、`/{id}/versions`、`/{id}/diff` | プロファイルの版、差分 | 全体 |
 | | `POST /admin/profiles/{id}/activate`、`/rollback` | 版の有効化・巻き戻し（理由と名前が必須） | 全体 |
-| | `GET /admin/evaluations`、`/admin/knobs`、`/admin/monitoring` | 評価台帳（連鎖の検証つき）、評価が変えてよい設定、フィードバックと記録の推移 | 読み取りは全員（監視は自分のテナントの分） |
+| | `GET /admin/evaluations`、`/admin/knobs` | 評価台帳（連鎖の検証つき）、評価が変えてよい設定 | 全体 |
+| | `GET /admin/monitoring` | フィードバックと記録の推移 | 全員（テナント管理者は自分のテナントの分のみ、提案の一覧・詳細は含まない） |
 | 権限 | `GET /admin/access` | 認証設定の確認用の一覧（キー・トークン・グループ名は出さない） | 読み取りは全員 |
 
 ## 「名前」について
