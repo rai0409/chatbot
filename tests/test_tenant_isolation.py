@@ -187,6 +187,7 @@ def test_chat_threads_tenant_to_pipeline_and_cache(monkeypatch, tmp_path):
             "citations_count": 0,
             "latency_ms": 1,
             "after_rerank": [],
+            "profile_validation": {"passed": True, "matched_rule_id": "tenant-isolation-test"},
         }
         return ans, trace
 
