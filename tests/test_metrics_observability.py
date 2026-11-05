@@ -103,6 +103,8 @@ def _fake_pipeline(*, guard_reason=None, used_fallback=False, answer_mode=None):
             "latency_ms": 1,
             "after_rerank": [],
         }
+        if guard_reason is None and not used_fallback and answer_mode == "grounded":
+            trace["profile_validation"] = {"passed": True, "matched_rule_id": "metrics-test"}
         return ans, trace
 
     return fake

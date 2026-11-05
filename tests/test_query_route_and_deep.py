@@ -148,6 +148,7 @@ def api(monkeypatch, tmp_path):
         return {"request_id": "r1", "normalized_query": question, "intent": "faq", "final_guard_reason": None,
                 "final_used_fallback": False, "citations_count": 0, "latency_ms": 1, "after_rerank": [],
                 "answer_mode": "grounded",
+                "profile_validation": {"passed": True, "matched_rule_id": "deep-test"},
                 "interpretation": {"summary": "手順の質問として解釈しました", "deep": search_mode.is_deep()}}
 
     def chat(question, **kwargs):

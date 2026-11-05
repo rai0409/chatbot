@@ -7,6 +7,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: quota_test
+          POSTGRES_USER: quota_test
+          POSTGRES_PASSWORD: quota_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U quota_test -d quota_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -113,8 +127,14 @@ jobs:
           python -m pytest -q tests/test_stage10_additions.py libs/docextract/tests
           PYTHONPATH=libs/docextract/src python -m docextract check
 
+      - name: PostgreSQL quota store integration tests
+        env:
+          CHATBOT_QUOTA_TEST_ISOLATED: "1"
+          LLM_QUOTA_TEST_DSN: "host=127.0.0.1 port=5432 dbname=quota_test user=quota_test password=quota_test"
+        run: python -m pytest -q tests/test_llm_quota_store_pg.py
+
       - name: Run full test suite (with a coverage report; not a gate)
         run: |
           python -m pip install pytest-cov
-          python -m pytest -q --cov=rag_core --cov=webapi --cov=docextract --cov-report=term-missing:skip-covered
+          python -m pytest -q --ignore=tests/test_llm_quota_store_pg.py --cov=rag_core --cov=webapi --cov=docextract --cov-report=term-missing:skip-covered
         timeout-minutes: 10
