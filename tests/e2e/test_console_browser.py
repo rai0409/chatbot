@@ -34,6 +34,19 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _isolated_admin_login_limiter():
+    # Isolate login counters between browser test modules.
+    # Production rate limits remain unchanged.
+    from webapi.routers import admin_core
+
+    admin_core._ADMIN_LOGIN_LIMITER.reset()
+    try:
+        yield
+    finally:
+        admin_core._ADMIN_LOGIN_LIMITER.reset()
+
+
 @pytest.fixture(scope="module")
 def server(tmp_path_factory):
     uvicorn = pytest.importorskip("uvicorn")
