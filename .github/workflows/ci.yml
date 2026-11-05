@@ -13,7 +13,7 @@ jobs:
         env:
           POSTGRES_DB: quota_test
           POSTGRES_USER: quota_test
-          POSTGRES_PASSWORD: quota_test
+          POSTGRES_PASSWORD: quota_test  # pragma: allowlist secret
         ports:
           - 5432:5432
         options: >-
@@ -130,7 +130,7 @@ jobs:
       - name: PostgreSQL quota store integration tests
         env:
           CHATBOT_QUOTA_TEST_ISOLATED: "1"
-          LLM_QUOTA_TEST_DSN: "host=127.0.0.1 port=5432 dbname=quota_test user=quota_test password=quota_test"
+          LLM_QUOTA_TEST_DSN: "host=127.0.0.1 port=5432 dbname=quota_test user=quota_test password=quota_test"  # pragma: allowlist secret
         run: python -m pytest -q tests/test_llm_quota_store_pg.py
 
       - name: Run full test suite (with a coverage report; not a gate)
