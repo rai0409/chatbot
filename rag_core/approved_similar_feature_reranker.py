@@ -14,7 +14,9 @@ from rag_core.japanese_normalizer import (
 
 
 DEFAULT_PROFILE_PATH = Path(config.BASE_DIR) / "configs" / "approved_similar_feature_rerank_profile.json"
-_BASE_SCORE_KEYS = ("weighted_score", "final_score", "score", "similarity")
+# hybrid_score is what approved_similar candidates carry; without it every
+# real candidate had no base score and the reranker could not reorder.
+_BASE_SCORE_KEYS = ("weighted_score", "final_score", "score", "hybrid_score", "similarity")
 _MAX_REASONS = 8
 _MAX_TERMS = 20
 _SAFE_CANDIDATE_KEYS = {
@@ -40,6 +42,20 @@ _SAFE_CANDIDATE_KEYS = {
     "feedback_preview_negative_count",
     "feedback_preview_review_needed_count",
     "feedback_preview_adjusted_score",
+    # Conflict and provenance flags must survive reranking: the decision gate
+    # reads them after this step.
+    "numeric_conflict",
+    "negation_conflict",
+    "ambiguous",
+    "specific_matched_terms",
+    "generic_matched_terms",
+    "matched_fields",
+    "margin_score_basis",
+    "source_doc",
+    "source_pages",
+    "tenant_id",
+    "chunk_type",
+    "doc_type",
 }
 _DEFAULT_PROFILE = {
     "profile_name": "approved_similar_feature_preview",

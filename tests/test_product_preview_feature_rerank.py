@@ -5,10 +5,11 @@ from pathlib import Path
 
 from rag_core import feedback_rerank_profile
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 def _disable_exact(monkeypatch):
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *args, **kwargs: None)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *args, **kwargs: None)
 
 
 def _fake_decision(candidates):
@@ -24,7 +25,7 @@ def _fake_decision(candidates):
 
 def _patch_product_preview(monkeypatch, candidates, *, audit_capture: dict | None = None):
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "decide_approved_similar_candidate", _fake_decision)
     monkeypatch.setattr(
         main.approved_similar,
@@ -32,10 +33,10 @@ def _patch_product_preview(monkeypatch, candidates, *, audit_capture: dict | Non
         lambda *args, **kwargs: [dict(candidate) for candidate in candidates],
     )
     if audit_capture is None:
-        monkeypatch.setattr(main, "append_product_preview_chat_audit_event", lambda event: True)
+        monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", lambda event: True)
     else:
         monkeypatch.setattr(
-            main,
+            chat_router,
             "append_product_preview_chat_audit_event",
             lambda event: audit_capture.update(event) or True,
         )
@@ -295,7 +296,7 @@ def test_feedback_preview_and_feature_rerank_can_both_be_requested(monkeypatch, 
         encoding="utf-8",
     )
     monkeypatch.setattr(feedback_rerank_profile, "PROFILE_PATH", feedback_profile)
-    monkeypatch.setattr(main, "PROFILE_PATH", feedback_profile)
+    monkeypatch.setattr(chat_router, "PROFILE_PATH", feedback_profile)
     _patch_product_preview(
         monkeypatch,
         [{"qa_id": "qa-insurance", "question_text": "健康保険被保険者証の再発行", "score": 0.5}],

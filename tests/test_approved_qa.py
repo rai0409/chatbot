@@ -153,18 +153,19 @@ def test_pr2_and_pr20_remain_distinguishable(tmp_path):
 
 def test_approved_chat_lookup_does_not_call_llm(monkeypatch, tmp_path):
     from webapi import main
+    from webapi.routers import chat as chat_router
 
     path = tmp_path / "approved.jsonl"
     _write_jsonl(path, [_record()])
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
-    monkeypatch.setattr(main, "_approved_qa_index", None)
-    monkeypatch.setattr(main, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
 
     def _fail_client(*args, **kwargs):
         raise AssertionError("LLM client must not be created for approved exact match")
 
-    monkeypatch.setattr(main, "ensure_openai_client", _fail_client)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", _fail_client)
     response = main.chat(main.ChatRequest(question="パスワード再設定の方法は？"))
 
     assert response["answer_mode"] == "approved_exact_match"
@@ -173,10 +174,34 @@ def test_approved_chat_lookup_does_not_call_llm(monkeypatch, tmp_path):
 
 
 def test_approved_qa_runner_passes_sample_file(tmp_path):
+    # Invented QA only: create temporary JSONL, never restore removed source data.
+    cases = tmp_path / "synthetic_approved_cases.jsonl"
+    _write_jsonl(
+        cases,
+        [
+            _record(
+                qa_id="synthetic-reset",
+                question="合成アカウントのパスワードを再設定するには？",
+                approved_answer="合成設定画面から再設定します。",
+            ),
+            _record(
+                qa_id="synthetic-help",
+                question="合成アカウントのヘルプを開くには？",
+                approved_answer="合成ヘルプ画面を開きます。",
+            ),
+            _record(
+                qa_id="synthetic-draft",
+                question="合成アカウントの未承認情報は？",
+                approved_answer="未承認の合成回答です。",
+                status="draft",
+            ),
+        ],
+    )
     output = tmp_path / "approved_results.json"
-    payload = run_approved_qa_eval("eval/cases/approved_qa_sample.jsonl", output)
+    payload = run_approved_qa_eval(cases, output)
 
     assert output.exists()
-    assert payload["summary"]["total"] > 0
-    assert payload["summary"]["failed"] == 0
-    assert payload["summary"]["pass_rate"] == 1.0
+    assert payload["summary"] == {"passed": 2, "failed": 0, "total": 2, "pass_rate": 1.0}
+    assert {item["qa_id"] for item in payload["results"]} == {"synthetic-reset", "synthetic-help"}
+    assert all(item["answer_exact_match"] and item["passed"] for item in payload["results"])
+    assert json.loads(output.read_text(encoding="utf-8"))["summary"] == payload["summary"]

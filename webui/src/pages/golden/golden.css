@@ -1,0 +1,6 @@
+.golden-field { display: flex; flex-direction: column; margin: 10px 0; }
+.golden-field p { margin: 2px 0 0; font-size: 13px; }
+.golden-field input[type="checkbox"] { margin-right: 6px; }
+.golden-table td.q { overflow-wrap: anywhere; min-width: 14ch; }
+.golden-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.golden-actions button { padding: 4px 8px; }

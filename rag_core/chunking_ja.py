@@ -8,6 +8,10 @@ from typing import Any, Dict, Iterable, List, Sequence, Tuple
 import config
 
 
+# Bump when chunk boundaries or chunk text change; stored on every record
+# so an index built by an older chunker can be detected and rebuilt.
+CHUNKER_VERSION = "ja-chunker-v4"
+
 DOC_TYPE_FAQ = "faq_glossary"
 DOC_TYPE_PROCEDURE = "procedure_howto"
 DOC_TYPE_POLICY = "policy_spec"
@@ -48,10 +52,19 @@ _DEFAULT_TARGETS: Dict[str, Tuple[int, int]] = {
     ),
 }
 
+# "1." / "1)" must not be followed by a digit (3.5%, 2024.4.1 are not
+# headings) and "1-2" must be followed by whitespace (03-1234, 2024-04-01 are
+# not headings).
 _HEADING_RE = re.compile(
-    r"^(第[0-9一二三四五六七八九十]+[章節条]|[0-9]+[\.．\)]|[0-9]+\-[0-9]+|[■□◆◇●○▲△]+)\s*(.+)$"
+    r"^(第[0-9一二三四五六七八九十百]+[章節条]|[0-9]+[\.．\)](?![0-9])|[0-9]+\-[0-9]+(?=\s)|[■□◆◇●○▲△]+)\s*(.+)$"
 )
-_PROC_HEADING_RE = re.compile(r"^(第[0-9一二三四五六七八九十]+[章節条]|[■□◆◇●○▲△]+)\s*(.+)$")
+_PROC_HEADING_RE = re.compile(r"^(第[0-9一二三四五六七八九十百]+[章節条]|[■□◆◇●○▲△]+)\s*(.+)$")
+# "第1条（目的）この規程は..." on one line: heading "第1条（目的）", body after it.
+_ARTICLE_TITLE_RE = re.compile(r"^(第[0-9一二三四五六七八九十百]+条)\s*([（(][^）)]{1,30}[）)])\s*(\S.*)$")
+# "第1条 この規程は...。" (no title): the article number is the heading when the
+# rest is a sentence. "第1条 目的" (short, no 。) stays a heading as before.
+_ARTICLE_BODY_RE = re.compile(r"^(第[0-9一二三四五六七八九十百]+条)\s+(\S.*)$")
+_ARTICLE_BODY_MIN_CHARS = 30
 _STEP_RE = re.compile(r"^\s*([0-9]+[\.\)]|[①-⑳]|手順[0-9一二三四五六七八九十]+)\s*(.+)$")
 _TABLE_SPLIT_RE = re.compile(r"\s*\|\s*")
 _BLANK_LINE_RE = re.compile(r"\n{2,}")
@@ -74,7 +87,16 @@ def build_ja_chunk_records(
     chunk_type: str = "pdf",
     quality: str = "high",
     searchable: int = 1,
+    tenant_id: str = "default",
+    inherited_section_path: Sequence[str] | None = None,
 ) -> List[Dict[str, Any]]:
+    """Build parent/child chunk records for one text unit (usually a page).
+
+    tenant_id: ids of non-default tenants are prefixed with the tenant, so the
+      same file in two tenants never overwrites the other's rows.
+    inherited_section_path: section path still open at the end of the previous
+      page; text before the first heading of this page continues it.
+    """
     normalized_doc_type = normalize_doc_type(doc_type)
     norm_text = _normalize_text(text)
     if not norm_text:
@@ -85,6 +107,7 @@ def build_ja_chunk_records(
         norm_text,
         doc_type=normalized_doc_type,
         title=title,
+        inherited_section_path=inherited_section_path,
     )
     if not sections:
         sections = [
@@ -99,14 +122,18 @@ def build_ja_chunk_records(
 
     pages = [int(p) for p in (source_pages or []) if str(p).strip() != ""]
     page_scope = _page_scope_token(pages)
-    call_hash = hashlib.sha1(norm_text.encode("utf-8")).hexdigest()[:10]
-    call_scope = f"{page_scope}:b{int(base_chunk_index)}:h{call_hash}"
+    call_hash = hashlib.sha1(norm_text.encode("utf-8"), usedforsecurity=False).hexdigest()[:10]
+    # Stable id: page + content hash. The running chunk index is no longer part
+    # of the id, so editing page 1 does not renumber every later page.
+    tenant = str(tenant_id or "").strip() or "default"
+    id_prefix = "" if tenant == "default" else f"{tenant}:"
+    call_scope = f"{page_scope}:h{call_hash}"
     out: List[Dict[str, Any]] = []
     chunk_index = int(base_chunk_index)
 
     for sec_idx, section in enumerate(sections, start=1):
         section_path = [str(x).strip() for x in (section.get("section_path") or []) if str(x).strip()]
-        parent_id = f"{doc_id}:ja:{call_scope}:parent:{sec_idx}"
+        parent_id = f"{id_prefix}{doc_id}:ja:{call_scope}:parent:{sec_idx}"
         parent_display_text = str(section.get("display_text") or "").strip()
         parent_searchable_text = _join_non_empty(
             [title, " > ".join(section_path), str(section.get("searchable_text") or parent_display_text)]
@@ -151,12 +178,14 @@ def build_ja_chunk_records(
 
         for child_id, child_text in zip(child_ids, child_texts):
             child_display_text = child_text.strip()
+            # Title + section path + the child's own text. The whole section
+            # is no longer copied into every child (it made all children of a
+            # section look alike to BM25 and diluted their vectors).
             child_searchable_text = _join_non_empty(
                 [
                     title,
                     " > ".join(section_path),
                     str(section.get("faq_question") or ""),
-                    str(section.get("searchable_text") or ""),
                     child_display_text,
                 ]
             )
@@ -213,6 +242,7 @@ def _base_record(
         "searchable": int(searchable),
         "type": chunk_type,
         "quality": quality,
+        "chunker_version": CHUNKER_VERSION,
     }
 
 
@@ -235,19 +265,44 @@ def _join_non_empty(parts: Iterable[str]) -> str:
     return " ".join(str(p).strip() for p in parts if str(p).strip())
 
 
-def _build_sections(text: str, *, doc_type: str, title: str) -> List[Dict[str, Any]]:
+def _build_sections(
+    text: str,
+    *,
+    doc_type: str,
+    title: str,
+    inherited_section_path: Sequence[str] | None = None,
+) -> List[Dict[str, Any]]:
     if doc_type == DOC_TYPE_FAQ:
         return _build_faq_sections(text, title=title)
     if doc_type == DOC_TYPE_PROCEDURE:
-        return _build_procedure_sections(text, title=title)
+        return _build_procedure_sections(text, title=title, initial_path=inherited_section_path)
     if doc_type == DOC_TYPE_TABLE:
         return _build_table_sections(text, title=title)
-    return _build_policy_sections(text, title=title)
+    return _build_policy_sections(text, title=title, initial_path=inherited_section_path)
+
+
+_FAQ_QUESTION_START_RE = re.compile(r"^(Q[:：]|質問[:：])", flags=re.IGNORECASE)
+
+
+def _faq_blocks(text: str) -> List[str]:
+    # Blank lines separate entries, and so does every "Q:" / "質問:" line:
+    # PDFs often have no blank line between consecutive Q/A pairs.
+    blocks: List[str] = []
+    for blk in _BLANK_LINE_RE.split(text):
+        current: List[str] = []
+        for line in blk.splitlines():
+            if _FAQ_QUESTION_START_RE.match(line.strip()) and current:
+                blocks.append("\n".join(current).strip())
+                current = []
+            current.append(line)
+        if current:
+            blocks.append("\n".join(current).strip())
+    return [b for b in blocks if b]
 
 
 def _build_faq_sections(text: str, *, title: str) -> List[Dict[str, Any]]:
     sections: List[Dict[str, Any]] = []
-    blocks = [blk.strip() for blk in _BLANK_LINE_RE.split(text) if blk.strip()]
+    blocks = _faq_blocks(text)
     for block in blocks:
         lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
         if not lines:
@@ -257,13 +312,17 @@ def _build_faq_sections(text: str, *, title: str) -> List[Dict[str, Any]]:
         term_aliases: List[str] = []
         q_match = re.match(r"^(Q[:：]\s*|質問[:：]\s*)(.+)$", lines[0], flags=re.IGNORECASE)
         if q_match:
-            question = q_match.group(2).strip()
+            question_lines = [q_match.group(2).strip()]
             for line in lines[1:]:
                 a_match = re.match(r"^(A[:：]\s*|回答[:：]\s*)(.+)$", line, flags=re.IGNORECASE)
                 if a_match:
                     answer = a_match.group(2).strip()
                 elif answer:
                     answer = f"{answer} {line}".strip()
+                else:
+                    # A question wrapped onto several lines before "A:".
+                    question_lines.append(line)
+            question = " ".join(question_lines).strip()
         elif "：" in lines[0] or ":" in lines[0]:
             head, tail = re.split(r"[:：]", lines[0], maxsplit=1)
             if 1 <= len(head.strip()) <= 80:
@@ -290,11 +349,39 @@ def _build_faq_sections(text: str, *, title: str) -> List[Dict[str, Any]]:
     return sections
 
 
-def _split_headed_blocks(text: str, *, fallback_title: str) -> List[Tuple[List[str], str]]:
+def _expand_heading_lines(lines: Sequence[str]) -> List[str]:
+    out: List[str] = []
+    for line in lines:
+        stripped = line.strip()
+        match = _ARTICLE_TITLE_RE.match(stripped)
+        if match:
+            out.extend([f"{match.group(1)}{match.group(2)}", match.group(3)])
+            continue
+        match = _ARTICLE_BODY_RE.match(stripped)
+        if match and ("。" in match.group(2) or len(match.group(2)) >= _ARTICLE_BODY_MIN_CHARS):
+            out.extend([match.group(1), match.group(2)])
+            continue
+        out.append(line)
+    return out
+
+
+def _split_headed_blocks(
+    text: str,
+    *,
+    fallback_title: str,
+    initial_path: Sequence[str] | None = None,
+) -> List[Tuple[List[str], str]]:
+    # A heading followed directly by another heading has no body; it is kept
+    # as a block whose text is the heading itself (headings used to vanish,
+    # e.g. "第1条" "第2条" "第3条" on consecutive lines).
     blocks: List[Tuple[List[str], str]] = []
-    lines = [ln.rstrip() for ln in text.splitlines()]
-    current_path: List[str] = [fallback_title] if fallback_title else []
+    lines = _expand_heading_lines([ln.rstrip() for ln in text.splitlines()])
+    if initial_path:
+        current_path: List[str] = [str(p) for p in initial_path if str(p).strip()]
+    else:
+        current_path = [fallback_title] if fallback_title else []
     current_body: List[str] = []
+    open_heading = False
     for raw_line in lines:
         line = raw_line.strip()
         if not line:
@@ -303,24 +390,29 @@ def _split_headed_blocks(text: str, *, fallback_title: str) -> List[Tuple[List[s
             continue
         match = _HEADING_RE.match(line)
         if match:
-            if current_body:
-                body = "\n".join(current_body).strip()
-                if body:
-                    blocks.append((list(current_path), body))
+            body = "\n".join(current_body).strip()
+            if body:
+                blocks.append((list(current_path), body))
+            elif open_heading and current_path:
+                blocks.append((list(current_path), current_path[-1]))
             heading = _join_non_empty([match.group(1), match.group(2)])
             current_path = [heading]
             current_body = []
+            open_heading = True
             continue
         current_body.append(line)
-    if current_body:
-        body = "\n".join(current_body).strip()
-        if body:
-            blocks.append((list(current_path), body))
+    body = "\n".join(current_body).strip()
+    if body:
+        blocks.append((list(current_path), body))
+    elif open_heading and current_path:
+        blocks.append((list(current_path), current_path[-1]))
     return blocks
 
 
-def _build_procedure_sections(text: str, *, title: str) -> List[Dict[str, Any]]:
-    blocks = _split_procedure_blocks(text, fallback_title=title or "手順")
+def _build_procedure_sections(
+    text: str, *, title: str, initial_path: Sequence[str] | None = None
+) -> List[Dict[str, Any]]:
+    blocks = _split_procedure_blocks(text, fallback_title=title or "手順", initial_path=initial_path)
     if not blocks:
         blocks = [([title or "手順"], text)]
     sections: List[Dict[str, Any]] = []
@@ -367,11 +459,23 @@ def _build_procedure_sections(text: str, *, title: str) -> List[Dict[str, Any]]:
     return sections
 
 
-def _split_procedure_blocks(text: str, *, fallback_title: str) -> List[Tuple[List[str], str]]:
+def _split_procedure_blocks(
+    text: str,
+    *,
+    fallback_title: str,
+    initial_path: Sequence[str] | None = None,
+) -> List[Tuple[List[str], str]]:
+    # A heading followed directly by another heading has no body; it is kept
+    # as a block whose text is the heading itself (headings used to vanish,
+    # e.g. "第1条" "第2条" "第3条" on consecutive lines).
     blocks: List[Tuple[List[str], str]] = []
-    lines = [ln.rstrip() for ln in text.splitlines()]
-    current_path: List[str] = [fallback_title] if fallback_title else []
+    lines = _expand_heading_lines([ln.rstrip() for ln in text.splitlines()])
+    if initial_path:
+        current_path: List[str] = [str(p) for p in initial_path if str(p).strip()]
+    else:
+        current_path = [fallback_title] if fallback_title else []
     current_body: List[str] = []
+    open_heading = False
     for raw_line in lines:
         line = raw_line.strip()
         if not line:
@@ -380,24 +484,29 @@ def _split_procedure_blocks(text: str, *, fallback_title: str) -> List[Tuple[Lis
             continue
         match = _PROC_HEADING_RE.match(line)
         if match:
-            if current_body:
-                body = "\n".join(current_body).strip()
-                if body:
-                    blocks.append((list(current_path), body))
+            body = "\n".join(current_body).strip()
+            if body:
+                blocks.append((list(current_path), body))
+            elif open_heading and current_path:
+                blocks.append((list(current_path), current_path[-1]))
             heading = _join_non_empty([match.group(1), match.group(2)])
             current_path = [heading]
             current_body = []
+            open_heading = True
             continue
         current_body.append(line)
-    if current_body:
-        body = "\n".join(current_body).strip()
-        if body:
-            blocks.append((list(current_path), body))
+    body = "\n".join(current_body).strip()
+    if body:
+        blocks.append((list(current_path), body))
+    elif open_heading and current_path:
+        blocks.append((list(current_path), current_path[-1]))
     return blocks
 
 
-def _build_policy_sections(text: str, *, title: str) -> List[Dict[str, Any]]:
-    blocks = _split_headed_blocks(text, fallback_title=title or "本文")
+def _build_policy_sections(
+    text: str, *, title: str, initial_path: Sequence[str] | None = None
+) -> List[Dict[str, Any]]:
+    blocks = _split_headed_blocks(text, fallback_title=title or "本文", initial_path=initial_path)
     if not blocks:
         blocks = [([title or "本文"], text)]
     sections: List[Dict[str, Any]] = []
@@ -427,8 +536,12 @@ def _build_table_sections(text: str, *, title: str) -> List[Dict[str, Any]]:
             if not rows and not header:
                 table_title = line
             continue
-        cols = [c.strip() for c in _TABLE_SPLIT_RE.split(line.strip("| ")) if c.strip()]
-        if not cols:
+        # Empty cells are kept so later columns stay under their headers.
+        inner = line.strip()
+        inner = inner[1:] if inner.startswith("|") else inner
+        inner = inner[:-1] if inner.endswith("|") else inner
+        cols = [c.strip() for c in _TABLE_SPLIT_RE.split(inner)]
+        if not any(cols):
             continue
         if not header:
             header = cols
@@ -451,7 +564,9 @@ def _build_table_sections(text: str, *, title: str) -> List[Dict[str, Any]]:
     for idx, row in enumerate(rows, start=1):
         pairs: List[str] = []
         for col_idx, val in enumerate(row):
-            key = header[col_idx] if col_idx < len(header) else f"列{col_idx + 1}"
+            if not val:
+                continue
+            key = header[col_idx] if col_idx < len(header) and header[col_idx] else f"列{col_idx + 1}"
             pairs.append(f"{key}={val}")
         flat = f"{table_title} / " + " / ".join(pairs)
         sections.append(
@@ -506,7 +621,7 @@ def _split_by_target(text: str, *, target_min: int, target_max: int) -> List[str
 
 
 def _split_by_sentence_then_window(text: str, *, target_min: int, target_max: int) -> List[str]:
-    sentences = [s.strip() for s in re.split(r"(?<=[。！？])\s*", text) if s.strip()]
+    sentences = [s.strip() for s in re.split(r"(?<=[。！？!?])\s*", text) if s.strip()]
     if len(sentences) <= 1:
         fallback_overlap = int(getattr(config, "JA_CHUNK_FALLBACK_OVERLAP_CHARS", 80))
         return _split_fixed(text, size=target_max, overlap=fallback_overlap)

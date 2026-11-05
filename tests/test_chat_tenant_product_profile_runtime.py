@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import config
 from rag_core import answer_cache
 from webapi import main, metrics_registry
+from webapi.routers import chat as chat_router
 
 
 # production_safe profile's max_candidates_internal (see
@@ -69,11 +70,11 @@ def _setup(monkeypatch, tmp_path, *, flag=False, auth=False):
     pipeline = _Recorder(result=_fake_answer())
     stream_pipeline = _Recorder(result=iter(()))
     audit = []
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
-    monkeypatch.setattr(main, "answer_query_with_trace", pipeline)
-    monkeypatch.setattr(main, "answer_query_stream", stream_pipeline)
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *a, **k: None)
-    monkeypatch.setattr(main, "append_audit_event", lambda kind, event: audit.append((kind, event)))
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", pipeline)
+    monkeypatch.setattr(chat_router, "answer_query_stream", stream_pipeline)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: None)
+    monkeypatch.setattr(chat_router, "append_audit_event", lambda kind, event: audit.append((kind, event)))
     return SimpleNamespace(pipeline=pipeline, stream_pipeline=stream_pipeline, audit=audit)
 
 
@@ -111,7 +112,7 @@ def test_resolver_unknown_tenant_falls_back_to_safe(monkeypatch):
 def test_resolver_invalid_profile_fails_closed_to_safe(monkeypatch):
     monkeypatch.setattr(config, "CHAT_USE_TENANT_PROFILE", True)
     monkeypatch.setattr(
-        main,
+        chat_router,
         "resolve_tenant_product_profile",
         lambda *a, **k: {"resolved_profile": "definitely_not_a_real_profile", "decision": "resolved"},
     )
@@ -126,7 +127,7 @@ def test_resolver_resolution_exception_fails_closed_to_safe(monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("mapping unavailable")
 
-    monkeypatch.setattr(main, "resolve_tenant_product_profile", _boom)
+    monkeypatch.setattr(chat_router, "resolve_tenant_product_profile", _boom)
     rp = main.resolve_chat_runtime_profile("default")
     assert rp["profile_name"] == "production_safe"
     # resolution failed, but the safe profile still loads with its limit
@@ -216,7 +217,7 @@ def test_chat_flag_on_unknown_tenant_uses_safe_profile(monkeypatch, tmp_path):
 def test_chat_flag_on_invalid_profile_fails_closed(monkeypatch, tmp_path):
     fakes = _setup(monkeypatch, tmp_path, flag=True)
     monkeypatch.setattr(
-        main,
+        chat_router,
         "resolve_tenant_product_profile",
         lambda *a, **k: {"resolved_profile": "definitely_not_a_real_profile", "decision": "resolved"},
     )

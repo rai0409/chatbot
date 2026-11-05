@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -9,7 +11,7 @@ from typing import Any, Dict, List, Sequence
 
 import config
 from rag_core import embedder, store
-from rag_core.ja_text import extract_salient_terms_ja, normalize_japanese_text
+from rag_core.ja_text import extract_salient_terms_ja, normalize_for_index
 
 
 _MAX_TERMS = 16
@@ -55,7 +57,8 @@ _DECISION_BOOL_KEYS = {
     "require_specific_terms_for_high_confidence",
     "allow_high_confidence_when_margin_missing",
 }
-_NEGATION_TERMS = ("ない", "不要", "不可", "できない", "しない", "含まない", "含まれない", "含まれません", "対象外")
+# Polite negation ("ません": できません, 含まれません, ございません) included.
+_NEGATION_TERMS = ("ない", "ません", "不要", "不可", "できない", "しない", "含まない", "含まれない", "対象外")
 _GENERIC_MATCH_TERMS = {
     "含む",
     "含まれる",
@@ -167,7 +170,8 @@ class ApprovedSimilarCandidate:
 
 
 def _norm(text: Any) -> str:
-    return normalize_japanese_text(str(text or "")).lower()
+    # Same normalization as the keyword index (N4).
+    return normalize_for_index(str(text or ""))
 
 
 _SYNONYMS = _build_synonym_map()
@@ -209,7 +213,39 @@ def _field_text(value: Any) -> str:
     return _norm(value)
 
 
+# Request-scoped profile overrides (product preview). ContextVar values are
+# per thread / per task, so one request's profile never leaks into another.
+_KEYWORD_PROFILE_OVERRIDE: ContextVar[str | None] = ContextVar(
+    "approved_similar_keyword_profile_override", default=None
+)
+_DECISION_THRESHOLDS_OVERRIDE: ContextVar[str | None] = ContextVar(
+    "approved_similar_decision_thresholds_override", default=None
+)
+
+
+@contextmanager
+def profile_overrides(
+    *,
+    keyword_profile_path: str | None = None,
+    decision_thresholds_path: str | None = None,
+):
+    keyword_token = _KEYWORD_PROFILE_OVERRIDE.set(keyword_profile_path) if keyword_profile_path else None
+    thresholds_token = (
+        _DECISION_THRESHOLDS_OVERRIDE.set(decision_thresholds_path) if decision_thresholds_path else None
+    )
+    try:
+        yield
+    finally:
+        if thresholds_token is not None:
+            _DECISION_THRESHOLDS_OVERRIDE.reset(thresholds_token)
+        if keyword_token is not None:
+            _KEYWORD_PROFILE_OVERRIDE.reset(keyword_token)
+
+
 def _configured_keyword_profile_path() -> str | None:
+    override = _KEYWORD_PROFILE_OVERRIDE.get()
+    if override:
+        return override
     raw = config.getenv_first("APPROVED_SIMILAR_KEYWORD_WEIGHTS", default=None)
     if raw is None or str(raw).strip() == "":
         return None
@@ -256,6 +292,9 @@ def _keyword_weight_profile() -> Dict[str, Any] | None:
 
 
 def _configured_decision_thresholds_path() -> str | None:
+    override = _DECISION_THRESHOLDS_OVERRIDE.get()
+    if override:
+        return override
     raw = config.getenv_first("APPROVED_SIMILAR_DECISION_THRESHOLDS", default=None)
     if raw is None or str(raw).strip() == "":
         return None
@@ -543,6 +582,29 @@ def _numbers(text: str) -> set[str]:
     return set(re.findall(r"\d+(?:\.\d+)?", _norm(text)))
 
 
+def _question_numbers_conflict(query: str, candidate_question: str) -> bool:
+    """Numbers of the two questions disagree (answers naturally carry others).
+
+    Quantities of the same kind (money, count, date, ...) are compared by their
+    canonical value, so 1万5千円 equals 15,000円; plain digits are compared when
+    no quantity is found.
+    """
+    try:
+        from rag_core.quantities import extract_quantities
+
+        q_items = [(q.kind, q.canonical) for q in extract_quantities(query) if q.valid]
+        c_items = [(q.kind, q.canonical) for q in extract_quantities(candidate_question) if q.valid]
+    except Exception:  # noqa: BLE001
+        q_items, c_items = [], []
+    if q_items and c_items:
+        for kind in {k for k, _ in q_items} & {k for k, _ in c_items}:
+            if not ({v for k, v in q_items if k == kind} & {v for k, v in c_items if k == kind}):
+                return True
+        return False
+    q_nums, c_nums = _numbers(query), _numbers(candidate_question)
+    return bool(q_nums and c_nums and not (q_nums & c_nums))
+
+
 def _has_negation(text: str) -> bool:
     norm = _norm(text)
     return any(term in norm for term in _NEGATION_TERMS)
@@ -644,7 +706,7 @@ def score_approved_candidate_keyword(query: str, metadata: dict, text: str = "")
     q_nums = _numbers(query)
     candidate_nums = _numbers(" ".join(fields.values()))
     numeric_overlap = bool(q_nums and q_nums & candidate_nums)
-    numeric_conflict = bool(q_nums and candidate_nums and not (q_nums & candidate_nums))
+    numeric_conflict = _question_numbers_conflict(query, fields.get("question_text", ""))
     if numeric_overlap:
         score += 0.08
         for num in sorted(q_nums & candidate_nums):
@@ -903,38 +965,39 @@ def decide_approved_similar_candidate(
     }
 
 
-def _qa_pair_where() -> Dict[str, Any]:
+def _normalize_tenant(value: Any) -> str:
+    return str(value or "").strip() or "default"
+
+
+def _qa_pair_where(tenant_id: str = "default") -> Dict[str, Any]:
+    # Approved QA rows always carry tenant_id (the canonical converter writes
+    # "default" when missing) and only status=approved records are converted,
+    # so the tenant clause is applied for every tenant, including default.
     return {
         "$and": [
             {"doc_type": "approved_qa_pair"},
             {"chunk_type": "qa_pair"},
             {"searchable": 1},
+            {"tenant_id": _normalize_tenant(tenant_id)},
         ]
     }
 
 
-def _query_collection(collection: Any, embedding: List[float], n_results: int) -> Dict[str, Any]:
-    try:
-        return collection.query(
-            query_embeddings=[embedding],
-            n_results=n_results,
-            where=_qa_pair_where(),
-            include=["documents", "metadatas", "distances"],
-        )
-    except Exception:
-        try:
-            return collection.query(
-                query_embeddings=[embedding],
-                n_results=n_results,
-                where={"doc_type": "approved_qa_pair"},
-                include=["documents", "metadatas", "distances"],
-            )
-        except Exception:
-            return collection.query(
-                query_embeddings=[embedding],
-                n_results=n_results,
-                include=["documents", "metadatas", "distances"],
-            )
+def _query_collection(
+    collection: Any,
+    embedding: List[float],
+    n_results: int,
+    *,
+    tenant_id: str = "default",
+) -> Dict[str, Any]:
+    # No retry without the filter: a failing filtered query is an error, never
+    # a reason to search across tenants or unapproved rows.
+    return collection.query(
+        query_embeddings=[embedding],
+        n_results=n_results,
+        where=_qa_pair_where(tenant_id),
+        include=["documents", "metadatas", "distances"],
+    )
 
 
 def _margin(candidates: Sequence[ApprovedSimilarCandidate]) -> tuple[float | None, str | None]:
@@ -996,14 +1059,20 @@ def search_approved_similar_candidates(
     query: str,
     *,
     client: Any = None,
+    collection: Any = None,
     collection_name: str | None = None,
+    tenant_id: str = "default",
     top_k: int = 5,
     oversample: int = 4,
 ) -> List[Dict[str, Any]]:
-    collection = client or store.get_vectorstore(collection_name=collection_name)
+    # client is the embedding client (OpenAI-compatible or None for local);
+    # collection is the vector store. They used to share one argument, which
+    # broke as soon as an embedding client was passed.
+    tenant = _normalize_tenant(tenant_id)
+    target = collection if collection is not None else store.get_vectorstore(collection_name=collection_name)
     embedding = embedder.embed_queries([query], client=client)[0]
     n_results = max(top_k, top_k * max(1, oversample))
-    result = _query_collection(collection, embedding, n_results)
+    result = _query_collection(target, embedding, n_results, tenant_id=tenant)
     docs = (result.get("documents") or [[]])[0]
     metas = (result.get("metadatas") or [[]])[0]
     distances = (result.get("distances") or [[]])[0]
@@ -1012,6 +1081,8 @@ def search_approved_similar_candidates(
     for text, meta, distance in zip(docs, metas, distances):
         m = dict(meta or {})
         if m.get("doc_type") != "approved_qa_pair" or m.get("chunk_type") != "qa_pair":
+            continue
+        if _normalize_tenant(m.get("tenant_id")) != tenant:
             continue
         qa_id = str(m.get("qa_id") or m.get("id") or "")
         if qa_id in seen:

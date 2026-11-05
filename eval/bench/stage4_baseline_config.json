@@ -1,0 +1,33 @@
+{
+  "name": "stage4-baseline-production-like",
+  "eval_set": "eval/bench_data/eval_set.jsonl",
+  "split": "dev",
+  "match_mode": "evidence",
+  "corpus": {
+    "chunks_jsonl": "index/chunks.canonical.bytype.dedup.jsonl",
+    "documents_jsonl": null
+  },
+  "ks": [1, 3, 5, 10, 20, 50, 100],
+  "ci_metrics": ["recall@10", "ndcg@10", "mrr@10", "hit@10", "recall@100"],
+  "candidates": {"dense_top": 100, "lexical_top": 100, "fused_top": 100},
+  "chunking": [{"mode": "as_is"}],
+  "embedding": [{"model": "cl-nagoya/ruri-v3-130m", "prefix": "auto"}],
+  "dimension": ["none"],
+  "quantization": [{"type": "float32"}],
+  "dense_backend": [{"type": "exact"}],
+  "lexical": [
+    {"tokenizer": "heuristic", "k1": 1.5, "b": 0.75},
+    {"tokenizer": "sudachi", "split_mode": "A", "k1": 1.5, "b": 0.75, "numeric_tokens": true}
+  ],
+  "fusion": [
+    {"method": "dense_only"},
+    {"method": "lexical_only"},
+    {"method": "weighted_rrf", "k": 60}
+  ],
+  "rerank": [
+    {"model": "cl-nagoya/ruri-v3-reranker-310m", "max_length": 512, "depths": [30]}
+  ],
+  "bootstrap": {"resamples": 2000, "seed": 0},
+  "query_latency_sample": 50,
+  "max_evaluations": 50
+}

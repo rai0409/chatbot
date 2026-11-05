@@ -1,0 +1,16 @@
+.ch-scroll { overflow-x: auto; }
+.ch-form label, .ch-actor label { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; font-size: 14px; }
+.ch-form textarea, .ch-actor input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+.ch-form textarea { width: 100%; box-sizing: border-box; }
+.ch-dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
+.ch-dl dt { color: var(--muted); }
+.ch-dl dd { margin: 0; overflow-wrap: anywhere; }
+.ch-link { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; text-align: left; }
+.ch-knob-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin: 8px 0; }
+.ch-bar-row { display: flex; align-items: center; gap: 6px; min-width: 90px; }
+.ch-bar { display: inline-block; height: 10px; min-width: 2px; border-radius: 3px; background: var(--accent); }
+.ch-bar-bad { background: var(--err); }
+.ch-bar-good { background: var(--ok); }
+.ch-bar-neutral { background: var(--muted); }
+.ch-bar-human_review_requested { background: var(--warn); }
+@media (max-width: 640px) { .ch-dl { grid-template-columns: 1fr; } }

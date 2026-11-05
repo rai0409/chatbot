@@ -83,13 +83,50 @@ def build_review_action_event(
     }
 
 
+def _locked(f) -> None:
+    # Advisory lock so concurrent workers do not interleave lines (POSIX).
+    try:
+        import fcntl
+
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+    except (ImportError, OSError):
+        pass
+
+
 def append_review_action_event(event: Dict[str, Any]) -> bool:
     try:
         path = Path(config.RUNS_DIR) / "review" / "review_actions.jsonl"
         payload = dict(event or {})
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
+            _locked(f)
             f.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
         return True
     except Exception:
         return False
+
+
+def latest_review_statuses(path: Path) -> Dict[tuple, str]:
+    """(tenant_id, review_id) -> status_after of the newest action."""
+    statuses: Dict[tuple, tuple] = {}
+    try:
+        f = Path(path).open("r", encoding="utf-8")
+    except OSError:
+        return {}
+    with f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            status = event.get("status_after") if isinstance(event, dict) else None
+            if not status:
+                continue
+            key = (str(event.get("tenant_id") or "default"), str(event.get("review_id") or ""))
+            stamp = str(event.get("created_at") or "")
+            if key not in statuses or stamp >= statuses[key][0]:
+                statuses[key] = (stamp, str(status))
+    return {key: value[1] for key, value in statuses.items()}

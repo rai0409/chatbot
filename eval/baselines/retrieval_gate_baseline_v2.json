@@ -1,0 +1,16 @@
+{
+  "bm25_only": {
+    "mean_mrr_at_k": 1.0,
+    "mean_ndcg_at_k": 1.0,
+    "gold_chunk_hits": 20,
+    "gold_doc_hits": 20,
+    "abstain_passes": 20
+  },
+  "hybrid_rerank": {
+    "mean_mrr_at_k": 1.0,
+    "mean_ndcg_at_k": 1.0,
+    "gold_chunk_hits": 20,
+    "gold_doc_hits": 20,
+    "abstain_passes": 20
+  }
+}

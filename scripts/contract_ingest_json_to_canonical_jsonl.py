@@ -13,7 +13,7 @@ import json
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Iterable, List, Tuple
 
 
 TEXT_KEYS = ("text", "content", "body", "paragraph", "clause_text", "value")

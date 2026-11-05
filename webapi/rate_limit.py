@@ -6,7 +6,9 @@ import time
 from threading import Lock
 from typing import Callable, Dict, Tuple
 
-from fastapi import Depends, HTTPException
+import hashlib
+
+from fastapi import Depends, HTTPException, Request
 
 from webapi import metrics_registry
 from webapi.api_auth import ApiAuthContext, require_api_auth
@@ -59,6 +61,10 @@ class FixedWindowRateLimiter:
         now = self._clock()
         window_index = int(now // window_seconds)
         with self._lock:
+            # Drop finished windows so the table does not grow with every
+            # client ever seen (per-IP buckets).
+            if len(self._windows) > 1024:
+                self._windows = {k: v for k, v in self._windows.items() if v[0] >= window_index}
             current_index, count = self._windows.get(bucket, (window_index, 0))
             if current_index != window_index:
                 count = 0
@@ -81,21 +87,76 @@ class FixedWindowRateLimiter:
 _limiter = FixedWindowRateLimiter()
 
 
+class RedisRateLimiter:
+    """Fixed window shared by every API node (RATE_LIMIT_BACKEND=redis)."""
+
+    def __init__(self, clock: Callable[[], float] = time.time):
+        self._clock = clock
+
+    def check(self, bucket: str, limit: int, window_seconds: float = _WINDOW_SECONDS) -> Tuple[bool, float]:
+        from webapi import state_backend
+
+        try:
+            return self._check(bucket, limit, window_seconds)
+        except state_backend.redis_errors() as exc:
+            # Redis down: keep limiting with this node's own window instead
+            # of failing every request (stage 10).
+            state_backend.warn_degraded("redis_rate_limit", exc)
+            return _limiter.check(bucket, limit, window_seconds)
+
+    def _check(self, bucket: str, limit: int, window_seconds: float) -> Tuple[bool, float]:
+        from webapi import state_backend
+
+        now = self._clock()
+        window_index = int(now // window_seconds)
+        key = f"rl:{bucket}:{window_index}"
+        client = state_backend.redis_client()
+        pipe = client.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, int(window_seconds * 2))
+        count = int(pipe.execute()[0])
+        if count > int(limit):
+            return False, max((window_index + 1) * window_seconds - now, 0.0)
+        return True, 0.0
+
+
+def _active_limiter():
+    from webapi import state_backend
+
+    if state_backend.backend("RATE_LIMIT_BACKEND") == "redis":
+        return RedisRateLimiter()
+    return _limiter
+
+
 def reset_limiter() -> None:
     _limiter.reset()
 
 
-def _bucket_for(auth) -> str:
+def anonymous_by_ip() -> bool:
+    # RATE_LIMIT_ANONYMOUS_BY_IP=true: unauthenticated callers get one bucket
+    # per client address (behind a proxy, run uvicorn with --proxy-headers
+    # and --forwarded-allow-ips so the address is the real client).
+    return str(os.getenv("RATE_LIMIT_ANONYMOUS_BY_IP", "")).strip().lower() in _ENABLED_VALUES
+
+
+def _bucket_for(auth, client_host: str | None = None) -> str:
     if isinstance(auth, ApiAuthContext) and auth.key_fingerprint:
         return auth.key_fingerprint
+    if client_host and anonymous_by_ip():
+        return "ip:" + hashlib.sha256(client_host.encode("utf-8")).hexdigest()[:12]
     return _ANONYMOUS_BUCKET
 
 
-def enforce_rate_limit(auth, limiter: FixedWindowRateLimiter | None = None) -> None:
+def enforce_rate_limit(
+    auth,
+    limiter: FixedWindowRateLimiter | None = None,
+    *,
+    client_host: str | None = None,
+) -> None:
     if not rate_limit_enabled():
         return
-    active = limiter if limiter is not None else _limiter
-    allowed, retry_after = active.check(_bucket_for(auth), rate_limit_requests_per_minute())
+    active = limiter if limiter is not None else _active_limiter()
+    allowed, retry_after = active.check(_bucket_for(auth, client_host), rate_limit_requests_per_minute())
     if not allowed:
         # Observability only: label by auth-state, never the fingerprint or key.
         bucketed = "authenticated" if (
@@ -110,10 +171,12 @@ def enforce_rate_limit(auth, limiter: FixedWindowRateLimiter | None = None) -> N
 
 
 def require_api_auth_rate_limited(
+    request: Request,
     api_auth: ApiAuthContext = Depends(require_api_auth),
 ) -> ApiAuthContext:
     # Sub-dependency ordering guarantees enforcement AFTER authentication:
     # require_api_auth raises 401/403 before this body runs, so rejected
     # requests never consume rate-limit budget.
-    enforce_rate_limit(api_auth)
+    client_host = request.client.host if request.client else None
+    enforce_rate_limit(api_auth, client_host=client_host)
     return api_auth

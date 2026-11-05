@@ -1,0 +1,8 @@
+# Document extraction backends (libs/docextract, stage 10).
+# Light, license-safe set (pdfplumber text/tables, pypdfium2 rendering, Tesseract OCR):
+-e ./libs/docextract[light]
+# Product recommendation: Docling tables + PaddleOCR PP-OCRv6 (paddleocr >= 3.7). Large: PyTorch, PaddlePaddle.
+# Uncomment after testing on your own documents:
+# -e ./libs/docextract[light,docling,paddle]
+# OS packages: tesseract-ocr tesseract-ocr-jpn tesseract-ocr-jpn-vert (+ libreoffice for EMF/WMF)
+# Check: python -m docextract check

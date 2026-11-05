@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import errno
 import importlib.util
 import json
@@ -14,7 +13,7 @@ import pytest
 from scripts import generate_real_vector_quality_baseline as baseline
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_PATH = ROOT / "config/evaluation/real_vector_quality_baseline.contract.json"
+CONTRACT_PATH = ROOT / "config/evaluation/real_vector_quality_baseline_v2.contract.json"
 
 
 def contract(): return baseline.load(CONTRACT_PATH)
@@ -34,8 +33,18 @@ def summary(collection="isolated", count=27):
 
 
 def test_current_contract_and_report_validate():
-    baseline.validate_contract(contract())
-    baseline.validate_report(baseline.load(ROOT / "reports/current_real_vector_quality_baseline.json"))
+    current_contract = contract()
+    baseline.validate_contract(current_contract)
+    if (
+        current_contract["profile"]["ordinary_ci_required"] is False
+        and os.environ.get("CHATBOT_REAL_VECTOR_RELEASE_GATE") != "1"
+    ):
+        pytest.skip(
+            "Real-vector evidence is a release gate, not an ordinary CI gate"
+        )
+    baseline.validate_report(
+        baseline.load(ROOT / "reports/current_real_vector_quality_baseline.json")
+    )
 
 
 @pytest.mark.parametrize(("path", "value"), [
@@ -181,3 +190,17 @@ def test_committed_report_has_no_machine_paths_or_secret_keys():
 
 def test_deterministic_baseline_is_separate_and_unchanged():
     assert baseline.sha(ROOT / "reports/current_retrieval_baseline.json") == "24d160979b05f2383db11033f1d830ca5e943bb75629a341fe9832ce2fc5672d"
+
+
+def test_stale_implementation_hash_is_rejected():
+    report = baseline.load(
+        ROOT / "reports/current_real_vector_quality_baseline.json"
+    )
+    report["implementation_sources"][0]["sha256"] = "0" * 64
+    report["contract_sha256"] = baseline.sha(CONTRACT_PATH)
+
+    with pytest.raises(
+        baseline.QualityViolationError,
+        match="implementation source fingerprint mismatch",
+    ):
+        baseline.validate_report(report, CONTRACT_PATH)

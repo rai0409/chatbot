@@ -5,20 +5,31 @@ from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
 from webapi import main
+from webapi.routers import admin_core as admin_core_router
 from webapi.admin_auth import require_admin_auth, require_admin_auth_headers
 
 
-def test_auth_disabled_by_default_allows_admin_helper(monkeypatch):
+def test_auth_not_enabled_refuses_admin_by_default(monkeypatch):
     monkeypatch.delenv("ADMIN_AUTH_ENABLED", raising=False)
     monkeypatch.delenv("ADMIN_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ADMIN_AUTH_ALLOW_INSECURE_DEV", raising=False)
 
-    require_admin_auth_headers({})
+    with pytest.raises(HTTPException) as exc_info:
+        require_admin_auth_headers({})
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "admin auth is not configured"
 
 
-def test_admin_auth_enabled_false_allows_access(monkeypatch):
+def test_admin_auth_disabled_allows_access_only_with_dev_override(monkeypatch):
     monkeypatch.setenv("ADMIN_AUTH_ENABLED", "false")
     monkeypatch.delenv("ADMIN_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ADMIN_AUTH_ALLOW_INSECURE_DEV", raising=False)
 
+    with pytest.raises(HTTPException):
+        require_admin_auth_headers({})
+
+    monkeypatch.setenv("ADMIN_AUTH_ALLOW_INSECURE_DEV", "true")
     require_admin_auth_headers({})
 
 
@@ -91,7 +102,7 @@ def test_expected_token_is_not_in_error_response(monkeypatch):
 
 
 def _route(path: str, method: str) -> APIRoute:
-    for route in main.app.routes:
+    for route in [*main.app.routes, *admin_core_router.router.routes]:
         if isinstance(route, APIRoute) and route.path == path and method in route.methods:
             return route
     raise AssertionError(f"route not found: {method} {path}")

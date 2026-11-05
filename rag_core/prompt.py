@@ -5,7 +5,7 @@ from jinja2 import Environment, FileSystemLoader, TemplateNotFound
 from config import BASE_DIR
 
 
-_env = Environment(loader=FileSystemLoader(str(BASE_DIR / "prompts")))
+_env = Environment(loader=FileSystemLoader(str(BASE_DIR / "prompts")))  # LLM prompt text, not HTML  # nosec B701
 
 
 def render_prompt(question: str, context: str, template_name: str = "chat_prompt.jinja") -> str:

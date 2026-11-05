@@ -1,0 +1,13 @@
+{"case_id":"rerank_movement_01","category":"rerank","expected_top_chunk_id":"mA","query":"\"QX12\" の手順"}
+{"case_id":"guard_trigger_02","category":"abstain","expected_guard_reason":"too_general","query":"これは？"}
+{"case_id":"synthetic_smoke_03","category":"abstain","expected_used_fallback":true,"query":"それって？"}
+{"case_id":"synthetic_smoke_04","category":"abstain","expected_used_fallback":true,"query":"これは？"}
+{"case_id":"synthetic_smoke_05","category":"abstain","expected_used_fallback":true,"query":"これって？"}
+{"case_id":"synthetic_smoke_06","category":"abstain","expected_used_fallback":true,"query":"それは？"}
+{"case_id":"synthetic_smoke_07","category":"abstain","expected_used_fallback":true,"query":"あれは？"}
+{"case_id":"synthetic_smoke_08","category":"abstain","expected_used_fallback":true,"query":"これは何？"}
+{"case_id":"synthetic_smoke_09","category":"abstain","expected_used_fallback":true,"query":"何のこと？"}
+{"case_id":"synthetic_smoke_10","category":"abstain","expected_used_fallback":true,"query":"こちらは？"}
+{"case_id":"synthetic_smoke_11","category":"abstain","expected_used_fallback":true,"query":"そこは？"}
+{"case_id":"synthetic_smoke_12","category":"abstain","expected_used_fallback":true,"query":"あちらは？"}
+{"case_id":"synthetic_smoke_13","category":"abstain","expected_used_fallback":true,"query":"これは？"}

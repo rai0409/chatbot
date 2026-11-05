@@ -1,0 +1,5 @@
+{"case_id":"template_answerable","category":"answerable","expected_used_fallback":false,"query":"TEMPLATE <架空の申請方法>"}
+{"case_id":"template_citation","category":"citation","expected_used_fallback":false,"query":"TEMPLATE <架空の出典>"}
+{"case_id":"template_approved","category":"approved-QA","expected_used_fallback":false,"query":"TEMPLATE <架空の承認済QA>"}
+{"case_id":"template_abstain","category":"abstain","expected_used_fallback":true,"query":"TEMPLATE <曖昧な質問>"}
+{"case_id":"template_out_of_corpus","category":"out-of-corpus","expected_used_fallback":true,"query":"TEMPLATE <根拠がない質問>"}

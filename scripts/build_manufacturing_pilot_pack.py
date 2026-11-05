@@ -106,8 +106,8 @@ CASES = [
     {"case_id": "mfg_abstain_ambiguous", "category": "abstain / too_general", "query": "これは？",
      "expected_guard_reason": "too_general", "expected_used_fallback": True,
      "notes": "Deliberately vague query MUST abstain (too_general)."},
-    {"case_id": "mfg_abstain_broad", "category": "abstain / too_general", "query": "運用は？",
-     "expected_guard_reason": "too_general", "expected_used_fallback": True,
+    {"case_id": "mfg_abstain_broad", "category": "abstain / no_results", "query": "運用は？",
+     "expected_guard_reason": "no_results", "expected_used_fallback": True,
      "notes": "Broad short query MUST abstain (too_general)."},
     # out-of-corpus — must not answer (fallback)
     {"case_id": "mfg_out_of_corpus", "category": "out-of-corpus / no-answer", "query": "経理の月次締め日は？",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import List, Sequence
@@ -89,6 +90,24 @@ def _extract_short_lookup_terms(question: str) -> List[str]:
     return [core]
 
 
+_DEFAULT_EXCLUDED_TERMS = frozenset({"方法", "手順", "場合", "内容", "対応", "必要", "可能", "以下", "以上", "関係", "確認"})
+
+
+def _excluded_terms() -> frozenset:
+    raw = str(os.getenv("RERANK_EXCLUDED_TERMS", "") or getattr(config, "RERANK_EXCLUDED_TERMS", "") or "")
+    extra = {t.strip() for t in raw.split(",") if t.strip()}
+    return _DEFAULT_EXCLUDED_TERMS | frozenset(extra)
+
+
+def _heuristic_enabled() -> bool:
+    # RERANK_HEURISTIC_ENABLED=false skips the integer rank shifts entirely
+    # (ablation for 5-17: keep only if the bench shows a gain).
+    raw = str(os.getenv("RERANK_HEURISTIC_ENABLED", "")).strip().lower()
+    if raw:
+        return raw in {"1", "true", "yes", "on"}
+    return bool(getattr(config, "RERANK_HEURISTIC_ENABLED", True))
+
+
 def _build_query_signals(question: str) -> _QuerySignals:
     quoted_terms = _extract_quoted_terms(question)
     quoted_code_terms = [t for t in quoted_terms if _is_code_like_term(t)]
@@ -101,7 +120,13 @@ def _build_query_signals(question: str) -> _QuerySignals:
         for t in salient
         if len(t) >= 3 and re.fullmatch(r"[ァ-ヴー]{2,}(?:[一-龥々〆〤]{1,})?", t)
     ]
-    kanji_terms = [t for t in salient if len(t) >= 3 and re.fullmatch(r"[一-龥々〆〤]{2,}", t)]
+    # Two-character kanji words (契約, 退職, 保険) are real terms; only
+    # generic ones are excluded (RERANK_EXCLUDED_TERMS adds tenant words).
+    kanji_terms = [
+        t
+        for t in salient
+        if len(t) >= 2 and re.fullmatch(r"[一-龥々〆〤]{2,}", t) and t not in _excluded_terms()
+    ]
     return _QuerySignals(
         quoted_code_terms=_unique_preserve(quoted_code_terms),
         quoted_text_terms=_unique_preserve(quoted_text_terms),
@@ -149,7 +174,7 @@ def rerank_chunks(
     intent: str | None = None,
 ) -> List[RetrievedChunk]:
     items = list(chunks)
-    if len(items) <= 1:
+    if len(items) <= 1 or not _heuristic_enabled():
         return items
 
     q = _build_query_signals(question)

@@ -1,0 +1,13 @@
+.ex-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .ex-layout { grid-template-columns: minmax(0, 1fr); } }
+.ex-scroll { overflow-x: auto; }
+.ex-field { display: flex; flex-direction: column; gap: 4px; }
+.ex-field textarea { width: 100%; box-sizing: border-box; font: inherit; }
+.ex-low { font-weight: 600; }
+.ex-stage { position: relative; display: inline-block; max-width: 100%; border: 1px solid var(--line); }
+.ex-stage img { display: block; max-width: 100%; height: auto; }
+.ex-box { position: absolute; box-sizing: border-box; border: 1px solid #3b5bdb; pointer-events: none; }
+.ex-box.weak { border-color: #d6336c; background: rgba(214, 51, 108, 0.12); }
+.ex-box.sel { border: 3px solid #e8590c; }
+tr.ex-current { outline: 2px solid #e8590c; outline-offset: -2px; }
+.ex-link { background: none; border: none; padding: 0; text-align: left; text-decoration: underline; cursor: pointer; font: inherit; color: inherit; }

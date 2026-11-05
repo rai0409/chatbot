@@ -41,6 +41,12 @@ DEFAULT_THRESHOLDS: Dict[str, Any] = {
     # below this many chat requests, rate-based signals report OK with a note
     # (a tiny window is statistically meaningless).
     "min_requests_for_rate": 20,
+    # LLM gateway (rag_core/llm_gateway.py): share of calls that reached an endpoint and failed; calls skipped because a breaker
+    # is open (the answers are extractive meanwhile); calls refused by a daily limit. Evaluated only when the counters exist.
+    "llm_error_rate": {"warn": 0.10, "critical": 0.50},
+    "llm_min_calls": 10,
+    "llm_breaker_open": {"warn": 1, "critical": 100},
+    "llm_quota_exceeded": {"warn": 1, "critical": 100},
 }
 
 # Answer modes that count as a successful (served) answer.
@@ -157,6 +163,15 @@ def evaluate_alerts(
         "value": auth_rejections, "warn": ar["warn"], "critical": ar["critical"],
     })
 
+    # Audit records that could not be written (disk full, permissions): any is
+    # CRITICAL. The counter is in the snapshot only when it is above zero.
+    audit_failures = _sum(_counter(payload, "audit_write_failures_total"))
+    if audit_failures > 0:
+        signals.append({
+            "name": "audit_write_failures", "status": CRITICAL, "value": audit_failures,
+            "detail": f"audit_write_failures={audit_failures}",
+        })
+
     # Feedback human-review spike — only when feedback metrics are present.
     if feedback_total > 0:
         cfg = t["human_review_rate"]
@@ -167,6 +182,23 @@ def evaluate_alerts(
             "value": round(rate, 4), "warn": cfg["warn"], "critical": cfg["critical"],
             "detail": f"{human_review}/{feedback_total}",
         })
+
+    # The LLM: failures, a stopped endpoint (a breaker is open: the answers are extractive), a daily limit that was reached.
+    llm_calls = _counter(payload, "llm_calls_total")
+    if llm_calls:
+        reached = sum(v for k, v in llm_calls.items() if k.endswith(":ok") or k.endswith(":error"))
+        failed = sum(v for k, v in llm_calls.items() if k.endswith(":error"))
+        cfg = t["llm_error_rate"]
+        if reached >= int(t.get("llm_min_calls", 0) or 0):
+            rate = failed / reached
+            signals.append({"name": "llm_error_rate", "status": _rate_status(rate, cfg["warn"], cfg["critical"]),
+                            "value": round(rate, 4), "warn": cfg["warn"], "critical": cfg["critical"], "detail": f"{failed}/{reached}"})
+    for counter, key in (("llm_breaker_open_total", "llm_breaker_open"), ("llm_quota_exceeded_total", "llm_quota_exceeded")):
+        count = _sum(_counter(payload, counter))
+        if count > 0:
+            cfg = t[key]
+            signals.append({"name": key, "status": _count_status(count, cfg["warn"], cfg["critical"]), "value": count,
+                            "warn": cfg["warn"], "critical": cfg["critical"]})
 
     # Optional latency p95 — only when explicitly provided in the snapshot.
     p95 = payload.get("latency_p95_ms") if isinstance(payload, dict) else None

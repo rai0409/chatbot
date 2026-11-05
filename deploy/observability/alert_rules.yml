@@ -68,6 +68,13 @@ groups:
           severity: critical
         annotations:
           summary: "auth-rejection burst (>= 50 / 15m)"
+      - alert: KuradenAuditWriteFailures
+        expr: sum(increase(audit_write_failures_total[15m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "audit records could not be written (disk full or permissions)"
       - alert: KuradenTargetDown
         expr: up{service="kuraden"} == 0
         for: 2m

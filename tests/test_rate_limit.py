@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 import config
 from rag_core import answer_cache
 from webapi import main, metrics_registry, rate_limit
+from webapi.routers import chat as chat_router
+from webapi.routers import infra as infra_router
 from webapi.api_auth import ApiAuthContext
 from webapi.rate_limit import (
     FixedWindowRateLimiter,
@@ -210,9 +212,9 @@ def _setup_endpoint_env(monkeypatch, tmp_path, *, limit="2", clock=None):
     answer_cache.clear()
     metrics_registry.reset()
 
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
-    monkeypatch.setattr(main, "answer_query_with_trace", lambda *a, **k: _fake_answer())
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *a, **k: None)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", lambda *a, **k: _fake_answer())
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: None)
 
 
 def _post_chat(client, key="key-a"):
@@ -280,7 +282,7 @@ def test_rate_limit_runs_after_auth(monkeypatch, tmp_path):
 
 def test_chat_stream_429_before_streaming(monkeypatch, tmp_path):
     _setup_endpoint_env(monkeypatch, tmp_path, limit="1")
-    monkeypatch.setattr(main, "answer_query_stream", lambda *a, **k: iter(()))
+    monkeypatch.setattr(chat_router, "answer_query_stream", lambda *a, **k: iter(()))
     client = TestClient(main.app)
 
     first = client.post(
@@ -331,7 +333,7 @@ def _route_dependencies(route):
 
 
 def test_route_coverage():
-    routes = {route.path: route for route in main.app.routes if hasattr(route, "dependant")}
+    routes = {route.path: route for route in [*main.app.routes, *infra_router.router.routes, *chat_router.router.routes] if hasattr(route, "dependant")}
 
     for path in _LIMITED_PATHS:
         assert path in routes, path

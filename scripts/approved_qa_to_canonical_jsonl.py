@@ -69,7 +69,11 @@ def _first_citation(record: dict) -> dict:
 def _stable_id(record: dict, normalized_question: str, answer: str) -> str:
     qa_id = _compact(record.get("qa_id"))
     if qa_id:
-        return f"approved_qa_pair:{qa_id}"
+        tenant = _compact(record.get("tenant_id")) or "default"
+        # Non-default tenants are prefixed like every other chunk id (stable_chunk_id), so two
+        # tenants can hold the same qa_id; the default tenant keeps the historical id.
+        prefix = "" if tenant == "default" else f"{tenant}:"
+        return f"{prefix}approved_qa_pair:{qa_id}"
     payload = "\n".join(
         [
             _compact(record.get("tenant_id")) or "default",

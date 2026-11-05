@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 import config
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 def _feedback_path(tmp_path):
@@ -106,7 +107,7 @@ def test_chat_feedback_blank_feedback_token_is_rejected():
 
 
 def test_chat_feedback_logging_failure_returns_safe_response(monkeypatch):
-    monkeypatch.setattr(main, "append_feedback_audit_event", lambda event: False)
+    monkeypatch.setattr(chat_router, "append_feedback_audit_event", lambda event: False)
 
     payload = main.chat_feedback(
         main.ProductFeedbackRequest(

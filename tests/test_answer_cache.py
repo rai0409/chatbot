@@ -7,6 +7,7 @@ import config
 from rag_core import answer_cache
 from schemas import AnswerResult
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 def _fake_pipeline(calls, *, guard_reason=None, used_fallback=False):
@@ -32,6 +33,7 @@ def _fake_pipeline(calls, *, guard_reason=None, used_fallback=False):
             "citations_count": 0,
             "latency_ms": 1,
             "after_rerank": [],
+            "profile_validation": {"passed": True, "matched_rule_id": "test-rule"},
         }
         return ans, trace
 
@@ -45,11 +47,11 @@ def _setup_chat(monkeypatch, tmp_path, *, enabled, guard_reason=None, used_fallb
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", False)
     monkeypatch.setattr(config, "ANSWER_CACHE_ENABLED", enabled)
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
     answer_cache.clear()
     calls = []
     monkeypatch.setattr(
-        main,
+        chat_router,
         "answer_query_with_trace",
         _fake_pipeline(calls, guard_reason=guard_reason, used_fallback=used_fallback),
     )
@@ -166,15 +168,15 @@ def test_approved_exact_match_precedes_and_is_uncached(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(approved_path))
     monkeypatch.setattr(config, "ANSWER_CACHE_ENABLED", True)
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "_approved_qa_index", None)
-    monkeypatch.setattr(main, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
     answer_cache.clear()
 
     def forbidden(*args, **kwargs):
         raise AssertionError("pipeline must not run for approved exact match")
 
-    monkeypatch.setattr(main, "answer_query_with_trace", forbidden)
-    monkeypatch.setattr(main, "ensure_openai_client", forbidden)
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", forbidden)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", forbidden)
 
     first = main.chat(main.ChatRequest(question="営業時間を教えてください"))
     second = main.chat(main.ChatRequest(question="営業時間を教えてください"))
@@ -198,3 +200,29 @@ def test_approved_exact_match_precedes_and_is_uncached(monkeypatch, tmp_path):
     assert second["request_id"] != first["request_id"]
     assert second["trace_id"] != first["trace_id"]
     assert answer_cache.size() == 0
+
+
+def test_unverified_legacy_cache_is_not_republished(monkeypatch, tmp_path):
+    calls, _ = _setup_chat(monkeypatch, tmp_path, enabled=True)
+    key = answer_cache.build_key("質問です", top_k=config.TOP_K, max_context_chars=config.MAX_CONTEXT_CHARS,
+                                 tenant_id="default", rag_profile_id="default")
+    answer_cache.put(key, {"answer_text": "古い未検証本文", "profile_validation": {"passed": True, "skipped": True}})
+    first = main.chat(main.ChatRequest(question="質問です"))
+    second = main.chat(main.ChatRequest(question="質問です"))
+    assert len(calls) == 1 and first == second
+    assert "古い未検証本文" not in first["answer_text"]
+
+
+def test_missing_validation_trace_is_skipped_and_not_cached(monkeypatch, tmp_path):
+    calls, _ = _setup_chat(monkeypatch, tmp_path, enabled=True)
+    fake = _fake_pipeline(calls)
+    def without_validation(*args, **kwargs):
+        answer, trace = fake(*args, **kwargs)
+        del trace["profile_validation"]
+        return answer, trace
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", without_validation)
+    first = main.chat(main.ChatRequest(question="質問です"))
+    main.chat(main.ChatRequest(question="質問です"))
+    assert first["profile_validation"]["passed"] is False
+    assert first["profile_validation"]["skipped"] is True
+    assert len(calls) == 2 and answer_cache.size() == 0

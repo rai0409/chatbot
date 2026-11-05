@@ -1,17 +1,37 @@
 services:
   api:
     build: .
+    # Listen on loopback only; a TLS reverse proxy on the same host publishes
+    # the service (see docs/operations/production_hardening.md).
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     # Copy .env.example to .env and fill in real values before `docker compose up`.
     # The .env file is read at runtime only; it is never baked into the image.
     env_file:
       - .env
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 8g
+    # Stage 14: time for the shutdown handler (jobs stop, workers close) before SIGKILL.
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    cpus: "4"
+    pids_limit: 512
     volumes:
       - ./vectorstore:/app/vectorstore
       - ./index:/app/index
       - ./data:/app/data
       - ./runs:/app/runs
+      - ./models_cache:/app/models_cache
     healthcheck:
       test:
         [
@@ -23,4 +43,5 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      # Stage 14: models and the keyword index load at start (minutes for 50k documents).
+      start_period: 300s

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docextract"
+version = "1.1.0"
+description = "Table extraction and Japanese OCR behind one interface (all backends optional)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# License-safe light set: pdfplumber tables, pypdfium2 rendering, Tesseract OCR.
+light = ["pdfplumber>=0.11.4", "pypdfium2>=4.30", "pytesseract>=0.3.10", "Pillow>=10.0", "numpy>=1.24"]
+# Best table structure (TableFormer). Pulls PyTorch.
+docling = ["docling>=2.0", "pypdfium2>=4.30", "Pillow>=10.0", "numpy>=1.24"]
+# Best permissive Japanese OCR (PP-OCRv6, needs paddleocr >= 3.7) and PP-StructureV3 tables.
+paddle = ["paddleocr>=3.7", "paddlepaddle>=3.0", "pypdfium2>=4.30", "Pillow>=10.0", "numpy>=1.24"]
+
+[project.scripts]
+docextract = "docextract.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

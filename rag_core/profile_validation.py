@@ -35,12 +35,24 @@ def _base_result(question_type: str) -> dict[str, Any]:
 
 
 def _rule_applies(question: str, question_type: str, rule: dict[str, Any]) -> bool:
+    if rule.get("enabled") is False:
+        return False
     if rule.get("applies_to_question_type") != question_type:
         return False
     question_terms = _as_list(rule.get("when_question_contains_any"))
     if not question_terms:
         return True
     return bool(_contains_any(question, question_terms))
+
+
+def resolve_validation_rule(question: str, question_type: str, profile: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return the first enabled rule applicable to this question."""
+    rules = profile.get("validation_rules") if isinstance(profile, dict) else []
+    if isinstance(rules, list):
+        for rule in rules:
+            if isinstance(rule, dict) and _rule_applies(question or "", question_type or "other", rule):
+                return rule
+    return None
 
 
 def validate_answer_with_profile(
@@ -55,17 +67,9 @@ def validate_answer_with_profile(
     safe_question_type = question_type or "other"
     result = _base_result(safe_question_type)
 
-    rules = profile.get("validation_rules") if isinstance(profile, dict) else []
-    if not isinstance(rules, list):
-        return result
-
-    matched_rule = None
-    for rule in rules:
-        if isinstance(rule, dict) and _rule_applies(safe_question, safe_question_type, rule):
-            matched_rule = rule
-            break
-
+    matched_rule = resolve_validation_rule(safe_question, safe_question_type, profile)
     if matched_rule is None:
+        result.update(passed=False, skipped=True, reason="no applicable validation rule")
         return result
 
     result["matched_rule_id"] = str(matched_rule.get("rule_id") or "")

@@ -1,0 +1,17 @@
+.contracts-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+@media (min-width: 1000px) { .contracts-layout { grid-template-columns: minmax(300px, 1fr) minmax(360px, 1.4fr); } }
+.contracts-scroll { overflow-x: auto; }
+.contracts-state { font-weight: 600; white-space: nowrap; }
+.contracts-state.st-extracted { color: var(--err); border-bottom: 2px dotted var(--err); }
+.contracts-state.st-confirmed { color: var(--ok); }
+.contracts-state.st-corrected { color: #1c5fb8; }
+.contracts-state.st-missing { color: var(--muted); font-weight: 400; }
+.contracts-attn { color: var(--err); font-weight: 600; }
+.contracts-ok { color: var(--ok); }
+.contracts-evidence { color: var(--muted); font-size: 13px; }
+.contracts-json { width: 100%; min-height: 8em; font-family: monospace; box-sizing: border-box; }
+.contracts-form label { display: flex; flex-direction: column; margin: 8px 0; font-size: 13px; color: var(--muted); }
+.contracts-form input { max-width: 100%; }
+.contracts-field-input { width: 100%; min-width: 9em; box-sizing: border-box; }
+.contracts-off { border-left: 4px solid var(--warn); }
+.contracts-unconfirmed-banner { border-left: 4px solid var(--err); }

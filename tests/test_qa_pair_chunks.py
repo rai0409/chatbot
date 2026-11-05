@@ -54,7 +54,7 @@ def test_pair_chunk_contains_question_and_answer_with_expected_metadata(tmp_path
     assert "支払い方法には何がありますか？" in row["text"]
     assert "銀行振込とクレジットカード決済が利用できます。" in row["text"]
     assert row["searchable_text"] == row["text"]
-    assert row["id"] == "approved_qa_pair:qa_pay_01"
+    assert row["id"] == "tenant_a:approved_qa_pair:qa_pay_01"
     assert row["doc_type"] == "approved_qa_pair"
     assert row["chunk_type"] == "qa_pair"
     assert row["approved_qa_id"] == "qa_pay_01"
@@ -146,7 +146,7 @@ def test_pair_chunks_for_tenant_a_are_invisible_to_other_tenants(monkeypatch, tm
     visible_b = retrieval.keyword_retrieve("支払い方法", top_k=5, tenant_id="tenant_b")
     visible_default = retrieval.keyword_retrieve("支払い方法", top_k=5)
 
-    assert {h.metadata["id"] for h in visible_a} == {"approved_qa_pair:qa_pay_01"}
+    assert {h.metadata["id"] for h in visible_a} == {"tenant_a:approved_qa_pair:qa_pay_01"}
     assert visible_b == []
     assert visible_default == []
 

@@ -5,10 +5,11 @@ from pathlib import Path
 
 from rag_core import feedback_rerank_profile
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 def _disable_exact(monkeypatch):
-    monkeypatch.setattr(main, "_approved_qa_lookup", lambda *args, **kwargs: None)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *args, **kwargs: None)
 
 
 def _fake_decision(candidates):
@@ -29,7 +30,7 @@ def _patch_product_preview(
     audit_capture: dict | None = None,
 ):
     _disable_exact(monkeypatch)
-    monkeypatch.setattr(main, "_embedding_client", lambda: None)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda: None)
     monkeypatch.setattr(main.approved_similar, "decide_approved_similar_candidate", _fake_decision)
     monkeypatch.setattr(
         main.approved_similar,
@@ -37,10 +38,10 @@ def _patch_product_preview(
         lambda *args, **kwargs: [dict(candidate) for candidate in candidates],
     )
     if audit_capture is None:
-        monkeypatch.setattr(main, "append_product_preview_chat_audit_event", lambda event: True)
+        monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", lambda event: True)
     else:
         monkeypatch.setattr(
-            main,
+            chat_router,
             "append_product_preview_chat_audit_event",
             lambda event: audit_capture.update(event) or True,
         )
@@ -48,7 +49,7 @@ def _patch_product_preview(
 
 def _set_profile_path(monkeypatch, path: Path):
     monkeypatch.setattr(feedback_rerank_profile, "PROFILE_PATH", path)
-    monkeypatch.setattr(main, "PROFILE_PATH", path)
+    monkeypatch.setattr(chat_router, "PROFILE_PATH", path)
 
 
 def _valid_profile(adjustments):

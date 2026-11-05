@@ -9,8 +9,7 @@ from __future__ import annotations
 # group names or identity. No secrets are read or logged here.
 
 import os
-from collections.abc import Mapping
-from typing import FrozenSet, List, Optional, Sequence, Tuple
+from typing import FrozenSet, List, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -100,11 +99,25 @@ def role_at_least(role: Optional[str], required: str) -> bool:
     return have >= need
 
 
+def effective_role(auth: ApiAuthContext) -> str:
+    # API-key callers assert no role (None); they are treated as plain users,
+    # never as operators or admins.
+    return str(auth.role or "") or _DEFAULT_ROLE
+
+
+def caller_has_role(auth: Optional[ApiAuthContext], required: str) -> bool:
+    # Non-ApiAuthContext (direct call / Depends sentinel) passes, mirroring
+    # enforce_tenant_authorization; real requests always carry a context.
+    if not isinstance(auth, ApiAuthContext):
+        return True
+    return role_at_least(effective_role(auth), required)
+
+
 def enforce_role(auth: Optional[ApiAuthContext], required: str) -> None:
     # Backend role gate. A non-ApiAuthContext (direct call / Depends sentinel)
     # is a no-op, mirroring enforce_tenant_authorization.
     if not isinstance(auth, ApiAuthContext):
         return
-    if not role_at_least(auth.role, required):
+    if not role_at_least(effective_role(auth), required):
         _record_auth_rejection("role_forbidden")
         raise HTTPException(status_code=403, detail="insufficient role for this action")

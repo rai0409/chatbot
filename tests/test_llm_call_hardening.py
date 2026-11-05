@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 import config
 from rag_core import qa
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 class _FakeStatusError(Exception):
@@ -115,12 +116,12 @@ def test_retries_are_bounded_with_doubling_backoff(monkeypatch):
 def _chat_with_failing_pipeline(monkeypatch, tmp_path, exc):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", False)
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "ensure_openai_client", lambda base_url=None: object())
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda base_url=None: object())
 
     def failing(*args, **kwargs):
         raise exc
 
-    monkeypatch.setattr(main, "answer_query_with_trace", failing)
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", failing)
     return main.chat(main.ChatRequest(question="質問です"))
 
 

@@ -86,6 +86,11 @@ def append_turn(
 ) -> Dict[str, Any]:
     # Persist one Q/A turn scoped to (tenant, identity). Only the caller's own
     # text is stored; no keys/secrets. Returns the stored record.
+    if _pg():
+        return _pg_append_turn(
+            tenant_id, identity, thread_id, question=question, answer_text=answer_text,
+            answer_mode=answer_mode, abstained=abstained, citations_count=citations_count,
+        )
     path = _thread_path(tenant_id, identity, thread_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {
@@ -106,6 +111,8 @@ def append_turn(
 def get_thread(tenant_id: str, identity: str, thread_id: str) -> List[Dict[str, Any]]:
     # Reads are scoped to (tenant, identity) by path construction; another
     # tenant/identity can never reach this owner's directory.
+    if _pg():
+        return _pg_get_thread(tenant_id, identity, thread_id)
     path = _thread_path(tenant_id, identity, thread_id)
     if not path.exists():
         return []
@@ -122,6 +129,8 @@ def get_thread(tenant_id: str, identity: str, thread_id: str) -> List[Dict[str, 
 
 
 def list_threads(tenant_id: str, identity: str) -> List[Dict[str, Any]]:
+    if _pg():
+        return _pg_list_threads(tenant_id, identity)
     owner = _owner_dir(tenant_id, identity)
     if not owner.exists():
         return []
@@ -156,11 +165,15 @@ def list_threads(tenant_id: str, identity: str) -> List[Dict[str, Any]]:
 
 
 def delete_thread(tenant_id: str, identity: str, thread_id: str) -> bool:
+    if _pg():
+        return _pg_delete_thread(tenant_id, identity, thread_id)
     path = _thread_path(tenant_id, identity, thread_id)
-    if path.exists():
+    try:
         path.unlink()
-        return True
-    return False
+    except FileNotFoundError:
+        # Concurrent delete or purge already removed it.
+        return False
+    return True
 
 
 def purge(
@@ -172,6 +185,8 @@ def purge(
 ) -> int:
     # Retention: drop threads older than max_age_days, then keep only the most
     # recent max_threads. Returns the number of threads removed.
+    if _pg():
+        return _pg_purge(tenant_id, identity, max_threads=max_threads, max_age_days=max_age_days)
     owner = _owner_dir(tenant_id, identity)
     if not owner.exists():
         return 0
@@ -179,19 +194,142 @@ def purge(
     age_days = max_age_days if max_age_days is not None else _max_age_days()
     cutoff = _clock() - age_days * 86400
     removed = 0
-    paths = sorted(owner.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-    kept: List[Path] = []
-    for path in paths:
+    def _mtime(p: Path) -> float:
         try:
-            mtime = path.stat().st_mtime
+            return p.stat().st_mtime
         except OSError:
-            continue
+            return -1.0
+
+    def _remove(p: Path) -> int:
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            return 0
+        return 1
+
+    # Files can disappear between listing and removal (concurrent delete);
+    # that is not an error.
+    stamped = [(p, _mtime(p)) for p in owner.glob("*.jsonl")]
+    stamped = sorted((item for item in stamped if item[1] >= 0), key=lambda item: item[1], reverse=True)
+    kept: List[Path] = []
+    for path, mtime in stamped:
         if mtime < cutoff:
-            path.unlink()
-            removed += 1
+            removed += _remove(path)
         else:
             kept.append(path)
     for path in kept[cap:]:
-        path.unlink()
-        removed += 1
+        removed += _remove(path)
     return removed
+
+
+# --- Postgres backend (CONVERSATION_STORE_BACKEND=postgres, several nodes) -----
+
+_PG_READY = {"done": False}
+
+
+def _pg() -> bool:
+    return str(os.getenv("CONVERSATION_STORE_BACKEND", "local")).strip().lower() == "postgres"
+
+
+def _pg_conn():
+    from webapi import state_backend
+
+    return state_backend.postgres()
+
+
+def _pg_ensure(conn) -> None:
+    if _PG_READY["done"]:
+        return
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS conversation_turns ("
+        " id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL, identity TEXT NOT NULL,"
+        " thread_id TEXT NOT NULL, ts DOUBLE PRECISION NOT NULL, record JSONB NOT NULL)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS conversation_turns_owner ON conversation_turns (tenant_id, identity, thread_id, ts)"
+    )
+    _PG_READY["done"] = True
+
+
+def _owner_key(tenant_id: str, identity: str) -> tuple:
+    return _safe_segment(tenant_id, fallback="default"), _safe_segment(identity, fallback="anonymous")
+
+
+def _pg_append_turn(tenant_id, identity, thread_id, *, question, answer_text, answer_mode, abstained, citations_count):
+    tenant, owner = _owner_key(tenant_id, identity)
+    record = {
+        "ts": _clock(),
+        "thread_id": _safe_segment(thread_id, fallback="thread"),
+        "question": str(question or "")[:_MAX_TEXT_CHARS],
+        "answer_text": str(answer_text or "")[:_MAX_TEXT_CHARS],
+        "answer_mode": str(answer_mode) if answer_mode else None,
+        "abstained": bool(abstained),
+        "citations_count": int(citations_count or 0),
+    }
+    with _pg_conn() as conn:
+        _pg_ensure(conn)
+        conn.execute(
+            "INSERT INTO conversation_turns (tenant_id, identity, thread_id, ts, record) VALUES (%s, %s, %s, %s, %s)",
+            (tenant, owner, record["thread_id"], record["ts"], json.dumps(record, ensure_ascii=False)),
+        )
+    _pg_purge(tenant_id, identity)
+    return record
+
+
+def _pg_get_thread(tenant_id, identity, thread_id):
+    tenant, owner = _owner_key(tenant_id, identity)
+    with _pg_conn() as conn:
+        _pg_ensure(conn)
+        rows = conn.execute(
+            "SELECT record FROM conversation_turns WHERE tenant_id = %s AND identity = %s AND thread_id = %s"
+            " ORDER BY ts DESC LIMIT %s",
+            (tenant, owner, _safe_segment(thread_id, fallback="thread"), _MAX_TURNS_PER_THREAD),
+        ).fetchall()
+    return [row[0] if isinstance(row[0], dict) else json.loads(row[0]) for row in reversed(rows)]
+
+
+def _pg_list_threads(tenant_id, identity):
+    tenant, owner = _owner_key(tenant_id, identity)
+    with _pg_conn() as conn:
+        _pg_ensure(conn)
+        rows = conn.execute(
+            "SELECT thread_id, MAX(ts), COUNT(*), (ARRAY_AGG(record->>'question' ORDER BY ts))[1]"
+            " FROM conversation_turns WHERE tenant_id = %s AND identity = %s GROUP BY thread_id ORDER BY MAX(ts) DESC",
+            (tenant, owner),
+        ).fetchall()
+    return [
+        {"thread_id": r[0], "updated_at": float(r[1]), "turns": int(r[2]), "title": str(r[3] or "")[:120]} for r in rows
+    ]
+
+
+def _pg_delete_thread(tenant_id, identity, thread_id):
+    tenant, owner = _owner_key(tenant_id, identity)
+    with _pg_conn() as conn:
+        _pg_ensure(conn)
+        cur = conn.execute(
+            "DELETE FROM conversation_turns WHERE tenant_id = %s AND identity = %s AND thread_id = %s",
+            (tenant, owner, _safe_segment(thread_id, fallback="thread")),
+        )
+    return bool(cur.rowcount)
+
+
+def _pg_purge(tenant_id, identity, *, max_threads=None, max_age_days=None):
+    tenant, owner = _owner_key(tenant_id, identity)
+    cap = max_threads if max_threads is not None else _max_threads()
+    age_days = max_age_days if max_age_days is not None else _max_age_days()
+    cutoff = _clock() - age_days * 86400
+    with _pg_conn() as conn:
+        _pg_ensure(conn)
+        old = conn.execute(
+            "DELETE FROM conversation_turns WHERE tenant_id = %s AND identity = %s AND thread_id IN ("
+            " SELECT thread_id FROM conversation_turns WHERE tenant_id = %s AND identity = %s"
+            " GROUP BY thread_id HAVING MAX(ts) < %s)",
+            (tenant, owner, tenant, owner, cutoff),
+        ).rowcount
+        extra = conn.execute(
+            "DELETE FROM conversation_turns WHERE tenant_id = %s AND identity = %s AND thread_id IN ("
+            " SELECT thread_id FROM conversation_turns WHERE tenant_id = %s AND identity = %s"
+            " GROUP BY thread_id ORDER BY MAX(ts) DESC OFFSET %s)",
+            (tenant, owner, tenant, owner, cap),
+        ).rowcount
+    return int(old or 0) + int(extra or 0)

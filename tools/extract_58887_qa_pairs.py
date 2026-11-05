@@ -95,7 +95,7 @@ def normalize_number_boundaries(text: str) -> str:
         # 番号の前後が数字でない場合だけ分離
         t = re.sub(
             rf"(?<!\d)\s+({n})(?!\d)\s+",
-            rf"\n\1\n",
+            r"\n\1\n",
             t,
         )
 

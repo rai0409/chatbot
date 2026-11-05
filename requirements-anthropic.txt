@@ -1,0 +1,2 @@
+# Claude through its own API (a profile with "provider": "anthropic", rag_core/anthropic_client.py): the official SDK only.
+anthropic>=2.3,<3

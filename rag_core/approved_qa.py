@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 from dataclasses import replace
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Tuple
 
 from rag_core.question_normalization import normalize_question_for_exact_match
 from rag_core.source_metadata import normalize_citation, normalize_source_pages
@@ -47,6 +49,10 @@ class ApprovedQAIndex:
     records: Tuple[ApprovedAnswer, ...]
     by_tenant_question: Dict[Tuple[str, str], ApprovedAnswer]
     by_tenant_alias: Dict[Tuple[str, str], Tuple[ApprovedAnswer, str]] = field(default_factory=dict)
+    # Lenient loading diagnostics (counts only, never record content).
+    skipped_lines: int = 0
+    skipped_records: int = 0
+    replaced_duplicates: int = 0
 
 
 MAX_APPROVED_ALIASES = 20
@@ -252,11 +258,91 @@ def _read_jsonl(path: Path) -> List[dict]:
     return records
 
 
+_LINE_ERROR_RE = re.compile(r"^line (\d+):")
+logger = logging.getLogger(__name__)
+
+
+def _strict_loading() -> bool:
+    return str(os.getenv("APPROVED_QA_STRICT", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _read_jsonl_lenient(path: Path) -> Tuple[List[dict], int]:
+    records: List[dict] = []
+    bad = 0
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError:
+                bad += 1
+                continue
+            if isinstance(obj, dict):
+                records.append(obj)
+            else:
+                bad += 1
+    return records, bad
+
+
+def _record_time(record: dict) -> str:
+    return _as_str(record.get("updated_at") or record.get("approved_at") or record.get("created_at"))
+
+
+def _latest_per_question(records: List[dict]) -> Tuple[List[dict], int]:
+    # Several versions of one question: the newest (updated_at, then file
+    # order) wins instead of failing the whole file.
+    latest: Dict[str, Tuple[str, int, dict]] = {}
+    replaced = 0
+    for pos, record in enumerate(records):
+        key = _record_normalized_question(record)
+        stamp = _record_time(record)
+        previous = latest.get(key)
+        if previous is not None:
+            replaced += 1
+            if (stamp, pos) < (previous[0], previous[1]):
+                continue
+        latest[key] = (stamp, pos, record)
+    kept = [item[2] for item in sorted(latest.values(), key=lambda item: item[1])]
+    return kept, replaced
+
+
+def _load_tenant_records_lenient(path: Path, tenant_id: str) -> Tuple[List[dict], int, int, int]:
+    records, bad_lines = _read_jsonl_lenient(path)
+    tenant_records = [
+        r for r in records
+        if (_as_str(r.get("tenant_id")) or "default") == tenant_id and _as_str(r.get("status")) == "approved"
+    ]
+    kept, replaced = _latest_per_question(tenant_records)
+    errors = validate_approved_qa_records(kept)
+    bad_positions = {int(m.group(1)) for e in errors if (m := _LINE_ERROR_RE.match(e))}
+    valid = [r for pos, r in enumerate(kept, start=1) if pos not in bad_positions]
+    skipped = len(kept) - len(valid)
+    if bad_lines or skipped:
+        logger.warning(
+            "approved_qa_records_skipped tenant=%s bad_lines=%d invalid_records=%d replaced_duplicates=%d",
+            tenant_id, bad_lines, skipped, replaced,
+        )
+    return valid, bad_lines, skipped, replaced
+
+
 def load_approved_qa(path: str | Path, tenant_id: str = "default") -> ApprovedQAIndex:
-    records = _read_jsonl(Path(path))
-    errors = validate_approved_qa_records(records)
-    if errors:
-        raise ValueError("invalid approved QA records: " + "; ".join(errors))
+    """Load approved answers of one tenant.
+
+    Default (lenient): broken lines and invalid records are skipped and
+    counted, only this tenant's approved records are validated, and the newest
+    version of a duplicated question wins. APPROVED_QA_STRICT=true restores the
+    historical behaviour (any error in the file raises).
+    """
+    skipped_lines = skipped_records = replaced = 0
+    if _strict_loading():
+        records = _read_jsonl(Path(path))
+        errors = validate_approved_qa_records(records)
+        if errors:
+            raise ValueError("invalid approved QA records: " + "; ".join(errors))
+    else:
+        records, skipped_lines, skipped_records, replaced = _load_tenant_records_lenient(Path(path), tenant_id)
 
     answers: List[ApprovedAnswer] = []
     by_key: Dict[Tuple[str, str], ApprovedAnswer] = {}
@@ -272,7 +358,14 @@ def load_approved_qa(path: str | Path, tenant_id: str = "default") -> ApprovedQA
             for alias in answer.approved_aliases:
                 alias_key = (answer.tenant_id, normalize_question_for_exact_match(alias))
                 by_alias[alias_key] = (answer, alias)
-    return ApprovedQAIndex(records=tuple(answers), by_tenant_question=by_key, by_tenant_alias=by_alias)
+    return ApprovedQAIndex(
+        records=tuple(answers),
+        by_tenant_question=by_key,
+        by_tenant_alias=by_alias,
+        skipped_lines=skipped_lines,
+        skipped_records=skipped_records,
+        replaced_duplicates=replaced,
+    )
 
 
 def lookup_approved_answer(

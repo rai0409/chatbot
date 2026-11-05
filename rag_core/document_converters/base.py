@@ -10,6 +10,7 @@ matching the qa_pair chunk decision from Prompt015.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import unicodedata
 from typing import Any, Dict, List, Sequence
@@ -47,9 +48,55 @@ def detect_qa_columns(headers: Sequence[str]) -> tuple[int, int] | None:
     return q_idx, a_idx
 
 
-def stable_chunk_id(source_type: str, source_doc: str, location: str, text: str) -> str:
+_MAX_QUANTITIES = 50
+
+
+def stable_chunk_id(source_type: str, source_doc: str, location: str, text: str, tenant_id: str = "default") -> str:
+    # Non-default tenants are prefixed so equal file names in two tenants do
+    # not share ids (default keeps the historical id form).
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:10]
-    return f"{source_type}:{source_doc}:{location}:h{digest}"
+    tenant = compact(tenant_id) or "default"
+    prefix = "" if tenant == "default" else f"{tenant}:"
+    return f"{prefix}{source_type}:{source_doc}:{location}:h{digest}"
+
+
+def _quantities(text: str) -> List[Dict[str, Any]]:
+    from rag_core.quantities import extract_quantities
+
+    return [q.to_dict() for q in extract_quantities(text)[:_MAX_QUANTITIES]]
+
+
+# --- image OCR for Office documents (off by default) -------------------------
+# Engines, EMF/WMF conversion and confidence come from libs/docextract (stage 10).
+
+
+def office_ocr_enabled() -> bool:
+    # OFFICE_OCR_IMAGES=true: text inside DOCX/PPTX images is extracted
+    # (PaddleOCR or Tesseract; python -m docextract check shows what is installed).
+    return str(os.getenv("OFFICE_OCR_IMAGES", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _office_min_confidence() -> float:
+    try:
+        return float(os.getenv("OFFICE_OCR_MIN_CONFIDENCE", "") or 50)
+    except ValueError:
+        return 50.0
+
+
+def ocr_image_bytes(data: bytes, name: str = "") -> str:
+    """OCR text of one embedded image ("" when no engine, unreadable, or unsure)."""
+    try:
+        from rag_core import extraction
+
+        lang = str(os.getenv("OCR_LANG", "") or "").strip()
+        result = extraction.load().ocr_image(bytes(data), name=name, tesseract_lang=None if lang in ("", "jpn") else lang)
+    except Exception:  # noqa: BLE001 - OCR problems never stop a conversion
+        return ""
+    if not result.ok:
+        return ""
+    if result.confidence is not None and result.confidence < _office_min_confidence():
+        return ""
+    return result.text
 
 
 def build_chunk(
@@ -70,7 +117,7 @@ def build_chunk(
 ) -> Dict[str, Any]:
     text = text.strip()
     row: Dict[str, Any] = {
-        "id": stable_chunk_id(source_type, source_doc, location, text),
+        "id": stable_chunk_id(source_type, source_doc, location, text, tenant_id=tenant_id),
         "text": text,
         "source_doc": source_doc,
         "source_pages": [-1],
@@ -94,6 +141,8 @@ def build_chunk(
         "language": "ja",
         "tenant_id": compact(tenant_id) or "default",
     }
+    # Amounts, dates, percentages etc. as structured metadata (P1-B).
+    row["quantities"] = _quantities(row["searchable_text"])
     if extra:
         row.update(extra)
     return row

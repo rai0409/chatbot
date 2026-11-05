@@ -91,7 +91,10 @@ def build_cases(
         if _compact(record.get("status")) != "approved":
             _skip(f"status={_compact(record.get('status')) or 'missing'}")
             continue
-        pair_chunk_id = PAIR_CHUNK_ID_PREFIX + qa_id
+        tenant = _compact(record.get("tenant_id")) or "default"
+        tenant_prefix = "" if tenant == "default" else f"{tenant}:"
+        case_key = qa_id if tenant == "default" else f"{tenant}_{qa_id}"
+        pair_chunk_id = tenant_prefix + PAIR_CHUNK_ID_PREFIX + qa_id
         pair_row = pair_by_id.get(pair_chunk_id)
         if pair_row is None:
             _skip("missing_pair_chunk")
@@ -100,7 +103,7 @@ def build_cases(
 
         cases.append(
             {
-                "case_id": f"real_q_{qa_id}",
+                "case_id": f"real_q_{case_key}",
                 "category": "real approved stored question",
                 "query": question,
                 "gold_chunk_ids": [pair_chunk_id],
@@ -130,7 +133,7 @@ def build_cases(
         )
         cases.append(
             {
-                "case_id": f"real_a_{qa_id}",
+                "case_id": f"real_a_{case_key}",
                 "category": "real approved answer-only term",
                 "query": f"{term} について",
                 "gold_chunk_ids": gold_ids,

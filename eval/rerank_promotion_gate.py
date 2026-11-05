@@ -102,6 +102,23 @@ def _profile_info(profile: Dict[str, Any] | None, error: str | None) -> Dict[str
     return info
 
 
+# --strict: the production gate. Enough cases, a significant improvement
+# (exact McNemar on improved vs regressed cases) and no regression at all.
+STRICT_THRESHOLDS = {
+    "min_evaluated_cases": 50,
+    "min_top1_delta": 1,
+    "max_allowed_regressions": 0,
+    "max_missing_expected_count": 0,
+}
+STRICT_ALPHA = 0.05
+
+
+def _mcnemar_p(improved: int, regressed: int) -> float:
+    from eval.bench.stats import mcnemar_exact
+
+    return float(mcnemar_exact(regressed, improved))
+
+
 def _decision(metrics: Dict[str, int], profile_info: Dict[str, Any], thresholds: Dict[str, int], *, comparison_missing: bool, profile_missing: bool) -> Tuple[str, bool, list[str]]:
     reasons: list[str] = []
     if comparison_missing:
@@ -144,7 +161,13 @@ def evaluate_rerank_promotion_gate(
     min_top1_delta: int = DEFAULT_THRESHOLDS["min_top1_delta"],
     max_allowed_regressions: int = DEFAULT_THRESHOLDS["max_allowed_regressions"],
     max_missing_expected_count: int = DEFAULT_THRESHOLDS["max_missing_expected_count"],
+    strict: bool = False,
 ) -> Dict[str, Any]:
+    if strict:
+        min_evaluated_cases = max(int(min_evaluated_cases), STRICT_THRESHOLDS["min_evaluated_cases"])
+        min_top1_delta = max(int(min_top1_delta), STRICT_THRESHOLDS["min_top1_delta"])
+        max_allowed_regressions = STRICT_THRESHOLDS["max_allowed_regressions"]
+        max_missing_expected_count = STRICT_THRESHOLDS["max_missing_expected_count"]
     thresholds = {
         "min_evaluated_cases": int(min_evaluated_cases),
         "min_top1_delta": int(min_top1_delta),
@@ -174,6 +197,12 @@ def evaluate_rerank_promotion_gate(
         comparison_missing=comparison_error == "missing",
         profile_missing=profile_error == "missing",
     )
+    significance = None
+    if strict and decision == "promote_candidate":
+        significance = _mcnemar_p(metrics["improvement_count"], metrics["regression_count"])
+        if significance >= STRICT_ALPHA:
+            decision, safe_to_promote = "blocked", False
+            reasons = [f"improvement_not_significant:p={significance:.4f}"]
     if comparison_error and comparison_error != "missing":
         reasons.append(f"comparison_invalid:{comparison_error}")
     if profile_error and profile_error != "missing":
@@ -185,6 +214,8 @@ def evaluate_rerank_promotion_gate(
         "safe_to_promote": safe_to_promote,
         "reasons": reasons,
         "thresholds": thresholds,
+        "strict": bool(strict),
+        "mcnemar_p": significance,
         "metrics": metrics,
         "profile_info": profile_summary,
         "input_paths": {
@@ -217,6 +248,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--min-top1-delta", type=int, default=DEFAULT_THRESHOLDS["min_top1_delta"])
     parser.add_argument("--max-allowed-regressions", type=int, default=DEFAULT_THRESHOLDS["max_allowed_regressions"])
     parser.add_argument("--max-missing-expected-count", type=int, default=DEFAULT_THRESHOLDS["max_missing_expected_count"])
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="production gate: >= 50 cases, no regression, significant improvement; exit 1 unless promotable",
+    )
     args = parser.parse_args(argv)
 
     report = evaluate_rerank_promotion_gate(
@@ -227,6 +263,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         min_top1_delta=args.min_top1_delta,
         max_allowed_regressions=args.max_allowed_regressions,
         max_missing_expected_count=args.max_missing_expected_count,
+        strict=args.strict,
     )
     print(
         json.dumps(
@@ -240,6 +277,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             indent=2,
         )
     )
+    if args.strict and not report["safe_to_promote"]:
+        return 1
     return 0
 
 

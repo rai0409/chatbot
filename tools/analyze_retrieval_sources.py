@@ -65,7 +65,13 @@ def main() -> int:
     api_errors = 0
     for case in cases:
         question = case.get("question", "")
-        exact_hits = lookup_approved_qa_exact(question, limit=5)
+        exact_hits = lookup_approved_qa_exact(
+            question,
+            tenant_id="default",
+            limit=5,
+            index_path=Path("artifacts/fixed_qa_eval/exact_index/approved_qa_exact_index.json"),
+            allow_near_match=True,
+        )
         if exact_hits:
             top_source = (exact_hits[0].get("metadata") or {}).get("retrieval_source") or ""
             source_counts[str(top_source)] += 1

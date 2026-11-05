@@ -18,7 +18,7 @@ FALLBACK_RULES = (
     },
     {
         "type_id": "list_items",
-        "question_contains_any": ["必要なもの", "持っていく", "持参", "携行品", "装備", "一覧"],
+        "question_contains_any": ["必要なもの", "持っていく", "持参", "一覧"],
         "priority": 90,
     },
     {

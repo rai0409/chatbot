@@ -144,17 +144,18 @@ def test_review_requires_explicit_alias_approval_and_export_strips_candidate_met
 
 def test_alias_chat_mode_audit_and_no_llm_or_retrieval(monkeypatch, tmp_path):
     from webapi import main
+    from webapi.routers import chat as chat_router
 
     path = tmp_path / "approved.jsonl"
     _write(path, [_record(aliases=["承認alias？"])])
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
-    monkeypatch.setattr(main, "_approved_qa_index", None)
-    monkeypatch.setattr(main, "_approved_qa_index_path", None)
-    monkeypatch.setattr(main, "ensure_openai_client", lambda *a, **k: (_ for _ in ()).throw(AssertionError("LLM used")))
-    monkeypatch.setattr(main, "answer_query_with_trace", lambda *a, **k: (_ for _ in ()).throw(AssertionError("retrieval used")))
+    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda *a, **k: (_ for _ in ()).throw(AssertionError("LLM used")))
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", lambda *a, **k: (_ for _ in ()).throw(AssertionError("retrieval used")))
     events = []
-    monkeypatch.setattr(main, "append_audit_event", lambda kind, event: events.append((kind, event)))
+    monkeypatch.setattr(chat_router, "append_audit_event", lambda kind, event: events.append((kind, event)))
 
     response = main.chat(main.ChatRequest(question=" 承認alias? ", trace_id="trace-alias"))
     assert response["answer_mode"] == "approved_alias_match"

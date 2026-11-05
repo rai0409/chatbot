@@ -1,17 +1,31 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
+import pickle
 import re
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Sequence, Tuple
 
 import config
 from rank_bm25 import BM25Okapi
-from rag_core import embedder, store
-from rag_core.ja_text import extract_salient_terms_ja, normalize_japanese_text
+from rag_core import embedder, index_generation, ja_terms, ja_tokenizer, quantities, store
+from rag_core.bm25_index import InvertedBM25
+from rag_core.ja_text import (
+    active_normalization_version,
+    extract_salient_terms_ja,
+    normalize_for_index,
+    normalize_japanese_text,
+)
 
 
 @dataclass
@@ -20,7 +34,7 @@ class RetrievedChunk:
     # Lower is better. This is not guaranteed to be a raw backend score:
     # - vector hit: vector distance
     # - keyword hit: rank-derived pseudo distance (raw BM25 is in metadata["bm25_score"])
-    # - hybrid hit: fusion-rank-derived pseudo distance (RRF is in metadata["rrf_score"])
+    # - hybrid hit: fusion-rank-derived pseudo distance (fused score is in metadata["rrf_score"])
     # This unified score is used by downstream guard/order logic.
     text: str
     metadata: Dict
@@ -29,17 +43,58 @@ class RetrievedChunk:
 
 @dataclass
 class _KeywordIndex:
-    tokenized_corpus: List[List[str]]
-    searchable_docs: List[str]
-    display_docs: List[str]
+    # Stage 14: one copy of each row. The token lists, the searchable and
+    # display texts and a second full copy of every row (rows_by_id) used to
+    # be kept too, about five times the corpus text per worker.
+    texts: List[str]
     norm_docs: List[str]
-    metas: List[Dict]
-    rows_by_id: Dict[str, Dict[str, Any]]
-    bm25: BM25Okapi
+    metas: List[Dict]  # the row without "text"
+    id_to_index: Dict[str, int]
+    tenant_ids: List[str]  # normalized, for the keyword lane's tenant filter
+    vocabulary: FrozenSet[str]  # tokens of the corpus (typo correction)
+    # Exactly one of bm25 (rank_bm25, scans every document per query term)
+    # and inverted (postings only) is built, per KEYWORD_INDEX_ENGINE.
+    bm25: Optional[BM25Okapi]
+    # Tokenizer that built the index; queries must be tokenized the same way.
+    tokenizer: str = "heuristic"
+    inverted: Optional[InvertedBM25] = None
+    # N5 reading lane (READING_LANE_ENABLED): BM25 over katakana readings.
+    reading: Optional[InvertedBM25] = None
+
+    def __len__(self) -> int:
+        return len(self.texts)
+
+    def display_text(self, idx: int) -> str:
+        return str(self.metas[idx].get("display_text") or self.texts[idx] or "")
+
+    def tenant_mask(self, tenant: str):
+        """numpy bool array: rows of this (normalized) tenant; built once per tenant."""
+        import numpy as np
+
+        masks = self.__dict__.setdefault("_tenant_masks", {})
+        mask = masks.get(tenant)
+        if mask is None:
+            mask = masks[tenant] = np.fromiter((t == tenant for t in self.tenant_ids), dtype=bool,
+                                               count=len(self.tenant_ids))
+        return mask
+
+    def row(self, chunk_id: str) -> Optional[Dict[str, Any]]:
+        """The stored row of one chunk (a new dict), or None."""
+        idx = self.id_to_index.get(str(chunk_id or "").strip())
+        if idx is None:
+            return None
+        row = dict(self.metas[idx])
+        row["text"] = self.texts[idx]
+        return row
 
 
-_INDEX_CACHE: Dict[str, object] = {"path": None, "mtime": None, "index": None}
+_INDEX_CACHE: Dict[str, object] = {"path": None, "mtime": None, "tokenizer": None, "settings": None, "index": None}
+# Guards the cache dicts only (short); builds take a per-corpus lock, so a
+# staging rebuild never blocks production queries (stage 14).
 _INDEX_LOCK = Lock()
+_BUILD_LOCKS: Dict[str, Lock] = {}
+_REFRESHING: set = set()
+_KEYWORD_ENGINES = ("rank_bm25", "inverted")
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +124,24 @@ def _warn_degraded_keyword_index(path: str, records: int, reason: str) -> None:
 
 def keyword_index_status() -> Dict[str, Any]:
     index = _load_keyword_index()
-    records = len(index.searchable_docs)
+    records = len(index)
     return {
         "keyword_index_loaded": records > 0,
         "keyword_index_records": records,
-        "keyword_index_path": str(config.CHUNKS_JSONL_PATH),
+        "keyword_index_path": index_generation.served_keyword_path(),
     }
+
+
+def _keyword_settings() -> Tuple[str, bool, float, float]:
+    engine = str(getattr(config, "KEYWORD_INDEX_ENGINE", "rank_bm25") or "rank_bm25").strip().lower()
+    if engine not in _KEYWORD_ENGINES:
+        raise ValueError(f"Unknown KEYWORD_INDEX_ENGINE '{engine}' (supported: {', '.join(_KEYWORD_ENGINES)})")
+    return (
+        engine,
+        bool(getattr(config, "KEYWORD_NUMERIC_TOKENS", False)),
+        float(getattr(config, "BM25_K1", 1.5)),
+        float(getattr(config, "BM25_B", 0.75)),
+    )
 
 
 DEFAULT_TENANT_ID = "default"
@@ -100,11 +167,15 @@ def _build_base_where(allowed_types=None, allowed_qualities=None, tenant_id: str
         where["quality"] = {"$in": list(allowed_qualities)}
     if not config.IGNORE_SEARCHABLE:
         where["searchable"] = 1
-    # Chroma's where syntax cannot express "missing or equal", so the default
-    # tenant relies on the authoritative post-query _tenant_matches filter;
-    # non-default tenants additionally get a strict equality clause.
+    # Chroma's where syntax cannot express "missing or equal", so by default
+    # the default tenant relies on the authoritative post-query
+    # _tenant_matches filter; non-default tenants additionally get a strict
+    # equality clause. TENANT_FILTER_STRICT pushes the default tenant into the
+    # DB filter too, so other tenants can no longer crowd it out of the
+    # oversampled candidates. It requires every record to carry tenant_id
+    # (run scripts/backfill_tenant_id.py first).
     tenant = normalize_tenant_id(tenant_id)
-    if tenant != DEFAULT_TENANT_ID:
+    if tenant != DEFAULT_TENANT_ID or bool(getattr(config, "TENANT_FILTER_STRICT", False)):
         where["tenant_id"] = tenant
     if config.LOG_WHERE:
         print("where:", json.dumps(where, ensure_ascii=False))
@@ -179,7 +250,8 @@ def _extract_searchable_text(*, text: str, obj: Dict) -> str:
 
 
 def _normalize(text: str) -> str:
-    return normalize_japanese_text(text).lower()
+    # Same function as the keyword tokenizer and approved-QA matching (N4).
+    return normalize_for_index(text)
 
 
 def _extract_quoted_terms(text: str) -> List[str]:
@@ -230,67 +302,457 @@ def _query_match_terms(question: str) -> Tuple[List[str], List[str], List[str]]:
     return exact_terms, quoted_terms, _unique_preserve(id_terms)
 
 
-def _load_keyword_index() -> _KeywordIndex:
-    path = config.CHUNKS_JSONL_PATH
-    mtime = os.path.getmtime(path) if os.path.exists(path) else None
+def _numeric_tokens(text: str) -> List[str]:
+    # KEYWORD_NUMERIC_TOKENS: 1万5千円 and 15,000円 both yield
+    # q:money:15000JPY, so equal quantities match whatever their notation.
+    if not bool(getattr(config, "KEYWORD_NUMERIC_TOKENS", False)):
+        return []
+    return quantities.quantity_tokens(text)
+
+
+def _document_tokens(text: str, tokenizer_name: str) -> List[str]:
+    # "heuristic" is the legacy character-bigram tokenizer (hiragana-only
+    # bigrams dropped); "sudachi" lemmatizes and keeps term frequency.
+    if tokenizer_name == "sudachi":
+        return ja_tokenizer.sudachi_tokens(text) + _numeric_tokens(text)
+    return _heuristic_tokenize(text) + _numeric_tokens(text)
+
+
+def _query_tokens(question: str, tokenizer_name: str) -> List[str]:
+    if tokenizer_name == "sudachi":
+        return _unique_preserve(ja_tokenizer.sudachi_tokens(question) + _numeric_tokens(question))
+    tokens = _heuristic_tokenize(question)
+    if not tokens:
+        tokens = _heuristic_tokenize(_normalize(question))
+    return _unique_preserve(tokens + _numeric_tokens(question))
+
+
+_NEIGHBOR_BATCH = 50
+
+# Keyword indexes of non-served collections (staging), keyed by path.
+_COLLECTION_INDEX_CACHE: Dict[str, Dict[str, object]] = {}
+_COLLECTION_INDEX_CACHE_MAX = 8
+
+
+def collection_corpus_path(name: str) -> str:
+    """INDEX_DIR/collections/<name>.jsonl: the keyword corpus of a collection that is not the served one."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+    if safe != name:
+        # Stage 15: a name changed by sanitizing gets a hash suffix, so "a b"
+        # and "a_b" (both "a_b") no longer share one corpus file.
+        safe = f"{safe}-{hashlib.sha256(name.encode('utf-8')).hexdigest()[:10]}"
+    return os.path.join(str(config.INDEX_DIR), "collections", f"{safe}.jsonl")
+
+
+def keyword_index_path_for_collection(collection_name: Optional[str]) -> str:
+    """Keyword corpus that belongs to a vector collection.
+
+    The served collection uses CHUNKS_JSONL_PATH (or, while a generation is
+    active, the corpus of that generation). Every other collection has its own
+    corpus under INDEX_DIR/collections/, so a staging query never scores
+    production documents (and the reverse).
+    """
+    name = str(collection_name or "").strip()
+    pointed = index_generation.active_collection()
+    if pointed:
+        served = {pointed, "default"}
+    else:
+        served = {
+            str(getattr(config, "VECTORSTORE_COLLECTION_NAME", "") or "").strip(),
+            str(config.getenv_first("CHROMA_COLLECTION") or "").strip(),
+            "default",
+        }
+    if not name or name in served:
+        return index_generation.served_keyword_path()
+    return collection_corpus_path(name)
+
+
+def _index_for_collection(collection_name: Optional[str]) -> _KeywordIndex:
+    # Called without arguments for the served corpus so tests that replace
+    # _load_keyword_index with a zero-argument stub keep working.
+    path = keyword_index_path_for_collection(collection_name)
+    if path == index_generation.served_keyword_path():
+        return _load_keyword_index()
+    return _load_keyword_index(path)
+
+
+def _refresh_mode() -> str:
+    """KEYWORD_INDEX_REFRESH: "sync" rebuilds a changed corpus inside the
+    request that notices it; "background" keeps serving the previous index
+    while a thread rebuilds it (a 50k-document rebuild takes minutes). The
+    default is background in production (APP_ENV=production), sync otherwise."""
+    raw = str(os.getenv("KEYWORD_INDEX_REFRESH", "")).strip().lower()
+    if raw in {"sync", "background"}:
+        return raw
+    return "background" if str(os.getenv("APP_ENV", "")).strip().lower() == "production" else "sync"
+
+
+def _build_lock(path: str) -> Lock:
     with _INDEX_LOCK:
-        if (
-            _INDEX_CACHE["index"] is not None
-            and _INDEX_CACHE["path"] == path
-            and _INDEX_CACHE["mtime"] == mtime
-        ):
-            return _INDEX_CACHE["index"]  # type: ignore[return-value]
-        searchable_docs: List[str] = []
-        display_docs: List[str] = []
-        norm_docs: List[str] = []
-        metas: List[Dict] = []
-        rows_by_id: Dict[str, Dict[str, Any]] = {}
-        tokenized_corpus: List[List[str]] = []
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    raw = line.strip()
-                    if not raw:
-                        continue
-                    try:
-                        obj = json.loads(raw)
-                    except Exception:
-                        continue
-                    text = str(obj.get("text") or "")
-                    if not text:
-                        continue
-                    meta = {k: v for k, v in obj.items() if k != "text"}
-                    searchable_text = _extract_searchable_text(text=text, obj=obj)
-                    display_text = str(obj.get("display_text") or text)
-                    tokens = _heuristic_tokenize(searchable_text)
-                    if not tokens:
-                        tokens = [str(meta.get("id") or "")]
-                    searchable_docs.append(searchable_text)
-                    display_docs.append(display_text)
-                    norm_docs.append(_normalize(searchable_text))
-                    metas.append(meta)
-                    tokenized_corpus.append(tokens)
-                    chunk_id = str(meta.get("id") or "").strip()
-                    if chunk_id:
-                        rows_by_id[chunk_id] = dict(obj)
-        if not os.path.exists(path):
-            _warn_degraded_keyword_index(path, len(searchable_docs), "missing_file")
-        elif not searchable_docs:
-            _warn_degraded_keyword_index(path, len(searchable_docs), "empty_corpus")
-        bm25 = BM25Okapi(tokenized_corpus or [[""]])
-        index = _KeywordIndex(
-            tokenized_corpus=tokenized_corpus,
-            searchable_docs=searchable_docs,
-            display_docs=display_docs,
-            norm_docs=norm_docs,
-            metas=metas,
-            rows_by_id=rows_by_id,
-            bm25=bm25,
-        )
-        _INDEX_CACHE["path"] = path
-        _INDEX_CACHE["mtime"] = mtime
-        _INDEX_CACHE["index"] = index
+        return _BUILD_LOCKS.setdefault(path, Lock())
+
+
+def _refresh_in_background(path: str, build, store) -> None:
+    with _INDEX_LOCK:
+        if path in _REFRESHING:
+            return
+        _REFRESHING.add(path)
+
+    def run() -> None:
+        try:
+            with _build_lock(path):
+                index = build()
+            with _INDEX_LOCK:
+                store(index)
+        except Exception:  # noqa: BLE001 - the previous index keeps serving
+            logger.exception("keyword index background rebuild failed: %s", path)
+        finally:
+            with _INDEX_LOCK:
+                _REFRESHING.discard(path)
+
+    threading.Thread(target=run, name="keyword-index-refresh", daemon=True).start()
+
+
+def _cached_or_build(path: str, read_slot, write_slot) -> _KeywordIndex:
+    """Shared by the served and the staging indexes.
+
+    read_slot() -> cached dict or None, write_slot(entry) stores one; both are
+    called with _INDEX_LOCK held."""
+    mtime = os.path.getmtime(path) if os.path.exists(path) else None
+    tokenizer_name = ja_tokenizer.active_tokenizer_name()
+    settings = (*_keyword_settings(), active_normalization_version(), _reading_lane_enabled())
+    engine, _numeric, k1, b, _normalization, reading = settings
+
+    def entry(index: _KeywordIndex) -> Dict[str, object]:
+        return {"path": path, "mtime": mtime, "tokenizer": tokenizer_name, "settings": settings, "index": index}
+
+    def lookup() -> Tuple[Optional[_KeywordIndex], Optional[_KeywordIndex]]:
+        cached = read_slot()
+        if not cached or cached.get("index") is None or cached.get("path") != path:
+            return None, None
+        same_build = cached.get("tokenizer") == tokenizer_name and cached.get("settings") == settings
+        if same_build and cached.get("mtime") == mtime:
+            return cached["index"], None  # type: ignore[return-value]
+        return None, (cached["index"] if same_build else None)  # type: ignore[return-value]
+
+    with _INDEX_LOCK:
+        fresh, stale = lookup()
+    if fresh is not None:
+        return fresh
+
+    def build() -> _KeywordIndex:
+        return _build_keyword_index(path, tokenizer_name, engine, k1, b, reading)
+
+    if stale is not None and _refresh_mode() == "background":
+        _refresh_in_background(path, build, lambda index: write_slot(entry(index)))
+        return stale
+    with _build_lock(path):
+        with _INDEX_LOCK:
+            fresh, _ = lookup()  # another request may have built it meanwhile
+        if fresh is not None:
+            return fresh
+        index = build()
+        with _INDEX_LOCK:
+            write_slot(entry(index))
         return index
+
+
+def _load_keyword_index(path: Optional[str] = None) -> _KeywordIndex:
+    served = index_generation.served_keyword_path()
+    if path is not None and path != served:
+        return _load_collection_keyword_index(path)
+    return _cached_or_build(served, lambda: _INDEX_CACHE, _INDEX_CACHE.update)
+
+
+def _reading_lane_enabled() -> bool:
+    raw = str(os.getenv("READING_LANE_ENABLED", "")).strip().lower()
+    return raw in {"1", "true", "yes", "on"} and ja_terms.morph_available()
+
+
+def _reading_lane_min_bm25() -> float:
+    try:
+        return float(str(os.getenv("READING_LANE_MIN_BM25", "")).strip() or 2.0)
+    except ValueError:
+        return 2.0
+
+
+# KEYWORD_INDEX_PERSIST=true (stage 9): the built keyword index is pickled
+# under INDEX_DIR/.keyword_cache and reused by the next process when the
+# corpus file, tokenizer, keyword settings, normalization and the retrieval
+# code are unchanged (50k chunks: restart without re-tokenizing).
+# Stage 10: every cache file is signed (HMAC-SHA256, key from
+# KEYWORD_INDEX_CACHE_KEY or a random key file created next to the cache with
+# mode 0600) and only a file with a valid signature is unpickled; several
+# workers starting together build the index once (file lock).
+_KEYWORD_CACHE_FORMAT = "kwcache-v2"
+_KEYWORD_CACHE_MAGIC = b"KWC2"
+_KEYWORD_CACHE_KEEP = 8
+
+
+def _keyword_persist_enabled() -> bool:
+    return str(os.getenv("KEYWORD_INDEX_PERSIST", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _code_fingerprint() -> List[Any]:
+    out: List[Any] = []
+    for name in (__name__, ja_tokenizer.__name__, ja_terms.__name__, InvertedBM25.__module__, normalize_for_index.__module__):
+        module_file = getattr(sys.modules.get(name), "__file__", None)
+        try:
+            st = os.stat(module_file) if module_file else None
+        except OSError:
+            st = None
+        out.append([name, st.st_mtime_ns if st else None, st.st_size if st else None])
+    return out
+
+
+def _keyword_cache_file(path: str, tokenizer_name: str, engine: str, k1: float, b: float, reading: bool) -> Optional[str]:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = json.dumps(
+        [
+            _KEYWORD_CACHE_FORMAT, os.path.abspath(path), st.st_mtime_ns, st.st_size, tokenizer_name, engine,
+            k1, b, reading, list(_keyword_settings()), active_normalization_version(), _code_fingerprint(),
+        ],
+        default=str,
+    )
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
+    return os.path.join(str(config.INDEX_DIR), ".keyword_cache", f"{digest}.pkl")
+
+
+def _prune_keyword_cache(directory: str) -> None:
+    try:
+        files = sorted(
+            (os.path.join(directory, n) for n in os.listdir(directory) if n.endswith(".pkl")),
+            key=os.path.getmtime,
+            reverse=True,
+        )
+        for old in files[_KEYWORD_CACHE_KEEP:]:
+            os.remove(old)
+            if os.path.exists(old + ".lock"):
+                os.remove(old + ".lock")
+    except OSError:
+        pass
+
+
+def _keyword_cache_key(directory: str) -> bytes:
+    configured = str(os.getenv("KEYWORD_INDEX_CACHE_KEY", "")).strip()
+    if configured:
+        return configured.encode("utf-8")
+    os.makedirs(directory, exist_ok=True)
+    key_file = os.path.join(directory, ".key")
+    try:
+        with open(key_file, "rb") as f:
+            key = f.read()
+        if len(key) >= 32:
+            return key
+    except FileNotFoundError:
+        pass
+    key = os.urandom(32)
+    fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, key)
+    finally:
+        os.close(fd)
+    return key
+
+
+def _read_signed_cache(cache_file: str, key: bytes) -> Optional[_KeywordIndex]:
+    with open(cache_file, "rb") as f:
+        blob = f.read()
+    magic, signature, payload = blob[:4], blob[4:36], blob[36:]
+    if magic != _KEYWORD_CACHE_MAGIC or not hmac.compare_digest(signature, hmac.new(key, payload, hashlib.sha256).digest()):
+        logger.warning("keyword index cache signature mismatch; rebuilding: %s", cache_file)
+        return None
+    cached = pickle.loads(payload)  # payload is HMAC-verified above  # nosec B301
+    return cached if isinstance(cached, _KeywordIndex) else None
+
+
+def _write_signed_cache(cache_file: str, key: bytes, index: _KeywordIndex) -> None:
+    payload = pickle.dumps(index, protocol=pickle.HIGHEST_PROTOCOL)
+    tmp = f"{cache_file}.tmp-{os.getpid()}"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(_KEYWORD_CACHE_MAGIC + hmac.new(key, payload, hashlib.sha256).digest() + payload)
+        os.replace(tmp, cache_file)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+class _CacheLock:
+    """Exclusive file lock (POSIX flock); a no-op where flock is missing."""
+
+    def __init__(self, path: str):
+        self.path = path
+        self._fd: Optional[int] = None
+
+    def __enter__(self):
+        try:
+            import fcntl
+
+            self._fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(self._fd, fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            self._fd = None
+        return self
+
+    def __exit__(self, *exc):
+        if self._fd is not None:
+            import fcntl
+
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            os.close(self._fd)
+        return False
+
+
+def _build_keyword_index(
+    path: str, tokenizer_name: str, engine: str, k1: float, b: float, reading: bool = False
+) -> _KeywordIndex:
+    if not _keyword_persist_enabled():
+        return _build_keyword_index_fresh(path, tokenizer_name, engine, k1, b, reading)
+    cache_file = _keyword_cache_file(path, tokenizer_name, engine, k1, b, reading)
+    if not cache_file:
+        return _build_keyword_index_fresh(path, tokenizer_name, engine, k1, b, reading)
+    directory = os.path.dirname(cache_file)
+    try:
+        key = _keyword_cache_key(directory)
+    except OSError:
+        logger.warning("keyword index cache key unavailable; building in memory only")
+        return _build_keyword_index_fresh(path, tokenizer_name, engine, k1, b, reading)
+    with _CacheLock(cache_file + ".lock"):
+        if os.path.exists(cache_file):
+            try:
+                cached = _read_signed_cache(cache_file, key)
+                if cached is not None:
+                    return cached
+            except Exception:  # noqa: BLE001
+                logger.warning("keyword index cache unreadable; rebuilding: %s", cache_file)
+        index = _build_keyword_index_fresh(path, tokenizer_name, engine, k1, b, reading)
+        if index.metas:
+            try:
+                _write_signed_cache(cache_file, key, index)
+                _prune_keyword_cache(directory)
+            except Exception:  # noqa: BLE001 - e.g. an engine object that cannot be pickled
+                logger.warning("keyword index cache not written: %s", cache_file)
+        return index
+
+
+def _build_keyword_index_fresh(
+    path: str, tokenizer_name: str, engine: str, k1: float, b: float, reading: bool = False
+) -> _KeywordIndex:
+    texts: List[str] = []
+    norm_docs: List[str] = []
+    metas: List[Dict] = []
+    tenant_ids: List[str] = []
+    id_to_index: Dict[str, int] = {}
+    vocabulary: set = set()
+    # Stage 14: the inverted engine (and the reading lane) index each row as it
+    # is read; holding every token list until the end made the build peak
+    # about six times the finished index, and the process keeps that peak.
+    inverted = InvertedBM25(k1=k1, b=b) if engine == "inverted" else None
+    reading_index = InvertedBM25(k1=k1, b=b) if reading else None
+    tokenized_corpus: List[List[str]] = []  # rank_bm25 only
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except Exception:
+                    continue
+                text = str(obj.get("text") or "")
+                if not text:
+                    continue
+                # Short values repeat on every row (type, tenant, document name):
+                # one shared string each instead of one copy per row (stage 14).
+                meta = {
+                    sys.intern(k): (sys.intern(v) if isinstance(v, str) and len(v) <= 80 else v)
+                    for k, v in obj.items() if k != "text"
+                }
+                searchable_text = _extract_searchable_text(text=text, obj=obj)
+                tokens = _document_tokens(searchable_text, tokenizer_name)
+                if not tokens:
+                    tokens = [str(meta.get("id") or "")]
+                texts.append(text)
+                norm_docs.append(_normalize(searchable_text))
+                metas.append(meta)
+                tenant_ids.append(normalize_tenant_id(meta.get("tenant_id")))
+                if inverted is not None:
+                    inverted.add(tokens)
+                else:
+                    tokenized_corpus.append(tokens)
+                vocabulary.update(tokens)
+                if reading_index is not None:
+                    reading_index.add(ja_terms.reading_tokens(searchable_text))
+                chunk_id = str(meta.get("id") or "").strip()
+                if chunk_id:
+                    id_to_index[chunk_id] = len(texts) - 1
+    if not os.path.exists(path):
+        _warn_degraded_keyword_index(path, len(texts), "missing_file")
+    elif not texts:
+        _warn_degraded_keyword_index(path, len(texts), "empty_corpus")
+    if inverted is not None:
+        bm25 = None
+        inverted.finish()
+    else:
+        bm25 = BM25Okapi(tokenized_corpus or [[""]], k1=k1, b=b)
+    if reading_index is not None:
+        reading_index.finish()
+    return _KeywordIndex(
+        texts=texts,
+        norm_docs=norm_docs,
+        metas=metas,
+        id_to_index=id_to_index,
+        tenant_ids=tenant_ids,
+        vocabulary=frozenset(vocabulary),
+        bm25=bm25,
+        tokenizer=tokenizer_name,
+        inverted=inverted,
+        reading=reading_index,
+    )
+
+
+def chunk_row(chunk_id: str, collection_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """The stored row of one chunk (citation excerpts): the served corpus, or
+    the keyword corpus of a staging collection."""
+    return _index_for_collection(collection_name).row(chunk_id)
+
+
+def _load_collection_keyword_index(path: str) -> _KeywordIndex:
+    def write(entry: Dict[str, object]) -> None:
+        if path not in _COLLECTION_INDEX_CACHE and len(_COLLECTION_INDEX_CACHE) >= _COLLECTION_INDEX_CACHE_MAX:
+            _COLLECTION_INDEX_CACHE.pop(next(iter(_COLLECTION_INDEX_CACHE)))
+        _COLLECTION_INDEX_CACHE[path] = entry
+
+    return _cached_or_build(path, lambda: _COLLECTION_INDEX_CACHE.get(path), write)
+
+
+def keyword_index_versions(collection_name: Optional[str] = None) -> Dict[str, Dict[str, int]]:
+    """Row counts per chunker_version and normalization_version (v2_02 P0-3).
+
+    Rows written before versions were recorded count under "".
+    """
+    index = _index_for_collection(collection_name)
+    out: Dict[str, Dict[str, int]] = {"chunker_version": {}, "normalization_version": {}}
+    for meta in index.metas:
+        for key in out:
+            value = str((meta or {}).get(key) or "")
+            out[key][value] = out[key].get(value, 0) + 1
+    return out
+
+
+def keyword_index_generations(collection_name: Optional[str] = None) -> Dict[str, int]:
+    """Row count per index_generation in a collection's keyword corpus."""
+    index = _index_for_collection(collection_name)
+    counts: Dict[str, int] = {}
+    for meta in index.metas:
+        generation = str((meta or {}).get("index_generation") or "")
+        counts[generation] = counts.get(generation, 0) + 1
+    return counts
 
 
 class QueryEmbeddingBatch:
@@ -346,9 +808,25 @@ def vector_retrieve(
     res = collection.query(
         query_embeddings=[embedding], n_results=n_results, where=_to_chroma_where(where)
     )
-    docs = res.get("documents", [[]])[0]
-    metas = res.get("metadatas", [[]])[0]
-    dists = res.get("distances", [[]])[0]
+    docs = list(res.get("documents", [[]])[0])
+    metas = list(res.get("metadatas", [[]])[0])
+    dists = list(res.get("distances", [[]])[0])
+    if "tenant_id" not in where and len(docs) >= n_results:
+        # Stage 14: the default tenant has no DB filter (legacy rows without
+        # tenant_id), so other tenants' rows can fill the oversampled window.
+        # When fewer than top_k survive the tenant check, ask once more with
+        # tenant_id = default and merge (legacy rows stay in the first pass).
+        kept = sum(1 for meta in metas if _tenant_matches(dict(meta or {}), tenant_id))
+        if kept < top_k:
+            strict = dict(where, tenant_id=normalize_tenant_id(tenant_id))
+            more = collection.query(query_embeddings=[embedding], n_results=n_results, where=_to_chroma_where(strict))
+            seen = {str((meta or {}).get("id") or "") for meta in metas}
+            for text, meta, dist in zip(more.get("documents", [[]])[0], more.get("metadatas", [[]])[0],
+                                        more.get("distances", [[]])[0]):
+                if str((meta or {}).get("id") or "") not in seen:
+                    docs.append(text)
+                    metas.append(meta)
+                    dists.append(dist)
     out: List[RetrievedChunk] = []
     for text, meta, dist in zip(docs, metas, dists):
         m = dict(meta or {})
@@ -375,54 +853,117 @@ def keyword_retrieve(
     allowed_types=None,
     allowed_qualities=None,
     tenant_id: str = DEFAULT_TENANT_ID,
+    collection_name: Optional[str] = None,
 ) -> List[RetrievedChunk]:
-    index = _load_keyword_index()
-    if not index.searchable_docs:
+    index = _index_for_collection(collection_name)
+    if not len(index):
         return []
     where = _build_base_where(allowed_types, allowed_qualities, tenant_id=tenant_id)
-    where.pop("tenant_id", None)  # tenant is checked via _tenant_matches below
-    query_tokens = _heuristic_tokenize(question)
-    if not query_tokens:
-        query_tokens = _heuristic_tokenize(_normalize(question))
+    where.pop("tenant_id", None)  # tenant is checked against index.tenant_ids below
+    query_tokens = _query_tokens(question, index.tokenizer)
     if not query_tokens:
         return []
-    bm25_scores = index.bm25.get_scores(query_tokens)
+    tenant = normalize_tenant_id(tenant_id)
+    tenant_ids = index.tenant_ids
+    # The inverted engine only visits documents sharing a query term, so
+    # documents with zero BM25 are no longer padded into the result list.
+    # Stage 14: scores and the tenant filter are numpy operations; only the
+    # strongest candidates become Python tuples (_bm25_pool).
+    if index.inverted is not None:
+        matched, scores = index.inverted.score_arrays(query_tokens)
+    else:
+        import numpy as np
+
+        scores = np.asarray(index.bm25.get_scores(query_tokens), dtype=np.float64)
+        matched = np.arange(len(scores))
     exact_terms, quoted_terms, id_terms = _query_match_terms(question)
-    ranked = []
-    for idx, bm25_score in enumerate(bm25_scores):
-        meta = index.metas[idx]
-        if not _tenant_matches(meta, tenant_id):
-            continue
-        if not _meta_matches_where(meta, where):
-            continue
-        norm_text = index.norm_docs[idx]
-        quoted_hits = sum(1 for t in quoted_terms if t and t in norm_text)
-        id_hits = sum(1 for t in id_terms if t and t in norm_text)
-        exact_hits = sum(1 for t in exact_terms if t and t in norm_text)
-        rank_key = (
-            1 if _is_child_chunk(meta) else 0,
-            1 if quoted_hits > 0 else 0,
-            1 if id_hits > 0 else 0,
-            exact_hits,
-            float(bm25_score),
-        )
-        ranked.append((rank_key, idx, float(bm25_score)))
-    ranked.sort(key=lambda x: x[0], reverse=True)
+
+    def precise(candidates) -> List[Tuple]:
+        out_ranked = []
+        for idx, bm25_score in candidates:
+            meta = index.metas[idx]
+            if not _meta_matches_where(meta, where):
+                continue
+            norm_text = index.norm_docs[idx]
+            quoted_hits = sum(1 for t in quoted_terms if t and t in norm_text)
+            id_hits = sum(1 for t in id_terms if t and t in norm_text)
+            exact_hits = sum(1 for t in exact_terms if t and t in norm_text)
+            rank_key = (
+                1 if _is_child_chunk(meta) else 0,
+                1 if quoted_hits > 0 else 0,
+                1 if id_hits > 0 else 0,
+                exact_hits,
+                float(bm25_score),
+            )
+            out_ranked.append((rank_key, idx, float(bm25_score), quoted_hits, id_hits, exact_hits))
+        out_ranked.sort(key=lambda x: x[0], reverse=True)
+        return out_ranked
+
+    # Stage 14: the precise ordering (child chunks, quoted / id / exact hits)
+    # used to run over every candidate, which with 200,000 chunks and common
+    # bigrams is most of the corpus, twice per request. It now runs over the
+    # strongest BM25 candidates only, widened while too few survive the filters.
+    in_tenant = index.tenant_mask(tenant)
+    keep = in_tenant[matched]
+    matched, scores = matched[keep], scores[keep]
+    limit = max(top_k * 20, 200)
+    while True:
+        ranked = precise(_bm25_pool(matched, scores, limit))
+        if len(ranked) >= top_k or limit >= len(matched):
+            break
+        limit *= 4
     out = []
-    for rank, (_, idx, bm25_score) in enumerate(ranked[:top_k], start=1):
+    for rank, (_, idx, bm25_score, quoted_hits, id_hits, exact_hits) in enumerate(ranked[:top_k], start=1):
         m = dict(index.metas[idx] or {})
         m["retrieval_source"] = "keyword"
         m["bm25_score"] = bm25_score
+        # Exact-match evidence feeds the separate exact lane in hybrid fusion.
+        m["exact_quoted_hits"] = quoted_hits
+        m["exact_id_hits"] = id_hits
+        m["exact_term_hits"] = exact_hits
         # Common lower-is-better scale for downstream guard/order.
         pseudo_distance = min(0.25 + (rank - 1) * 0.02, 0.95)
         out.append(
             RetrievedChunk(
-                text=index.display_docs[idx] or "",
+                text=index.display_text(idx),
                 metadata=m,
                 score=pseudo_distance,
             )
         )
+    # Reading lane, only when the surface match is weak (v2_03): too few hits
+    # or a low top BM25. It fills the remaining slots, after the surface hits.
+    weak = len(ranked) < top_k or (ranked and ranked[0][2] < _reading_lane_min_bm25())
+    if index.reading is not None and weak and len(out) < top_k:
+        present = {idx for _, idx, *_rest in ranked[:top_k]}
+        reading_scores = index.reading.score(ja_terms.reading_tokens(question))
+        for idx, score in sorted(reading_scores.items(), key=lambda item: -item[1]):
+            if len(out) >= top_k:
+                break
+            meta = index.metas[idx]
+            if idx in present or tenant_ids[idx] != tenant or not _meta_matches_where(meta, where):
+                continue
+            m = dict(meta or {})
+            m["retrieval_source"] = "keyword_reading"
+            m["bm25_score"] = float(score)
+            out.append(
+                RetrievedChunk(
+                    text=index.display_text(idx),
+                    metadata=m,
+                    score=min(0.25 + len(out) * 0.02, 0.95),
+                )
+            )
     return out
+
+
+def _bm25_pool(matched, scores, limit: int) -> List[Tuple[int, float]]:
+    """The `limit` highest (doc index, BM25) pairs, ties by lower index."""
+    import numpy as np
+
+    if len(matched) > limit:
+        part = np.argpartition(-scores, limit - 1)[:limit]
+        matched, scores = matched[part], scores[part]
+    order = np.lexsort((matched, -scores))
+    return [(int(matched[i]), float(scores[i])) for i in order]
 
 
 def _chunk_key(ch: RetrievedChunk) -> str:
@@ -447,105 +988,126 @@ def _bucket_child_priority(bucket: Dict[str, Any]) -> int:
     return 1 if _is_child_chunk(base.metadata) else 0
 
 
-def _hybrid_bucket_rank_adjustment(question: str, bucket: Dict[str, Any]) -> Dict[str, float]:
-    base = _bucket_base_chunk(bucket)
-    if base is None:
-        return {
-            "keyword_score": 0.0,
-            "keyword_evidence_boost": 0.0,
-            "vector_without_keyword_penalty": 0.0,
-            "hybrid_rank_score": float(bucket.get("rrf") or 0.0),
-        }
+# Hybrid fusion replaces the former hand-tuned score boosts (up to +0.024 on
+# top of RRF scores whose rank-1 value is only 1/61 ~= 0.0164 at k=60), which
+# let lexical heuristics override the dense signal entirely. Weights and k are
+# meant to be tuned on the evaluation set, not by hand.
+_FUSION_METHODS = ("weighted_rrf", "dbsf")
+_FUSION_LANES = (
+    ("dense_rank", "dense_weight"),
+    ("keyword_rank", "keyword_weight"),
+    ("exact_rank", "exact_weight"),
+)
 
-    # Local import avoids a module import cycle: keyword_scorer imports
-    # RetrievedChunk from this module for its public boost helper.
-    from rag_core.keyword_scorer import classify_query_type, score_keyword_match
 
-    meta = dict(base.metadata or {})
-    keyword_hit = bucket.get("keyword")
-    if isinstance(keyword_hit, RetrievedChunk):
-        meta.update(keyword_hit.metadata or {})
+# Multipliers for the lane weights of the fusion, for the retrievals made inside fusion_scale() (query routing).
+_FUSION_SCALE: ContextVar[Optional[Dict[str, float]]] = ContextVar("fusion_scale", default=None)
 
-    details = score_keyword_match(
-        question,
-        str(meta.get("searchable_text") or base.text or ""),
-        meta,
-        query_type=classify_query_type(question),
-    )
-    keyword_score = float(details.get("keyword_score") or 0.0)
-    bm25_score = float(meta.get("bm25_score") or 0.0)
-    has_keyword_evidence = bool(bucket.get("keyword") is not None or bm25_score > 0.0 or keyword_score > 0.0)
 
-    # RRF deltas around rank 1-5 are tiny (~0.00025 with k=60). Keep this
-    # adjustment lightweight but large enough to break vector/keyword ties by
-    # observed lexical evidence instead of insertion order.
-    keyword_evidence_boost = 0.0
-    if has_keyword_evidence:
-        keyword_evidence_boost += min(0.006, keyword_score * 0.006)
-        if bm25_score > 0.0:
-            keyword_evidence_boost += min(0.006, bm25_score / 10000.0)
-            keyword_evidence_boost += 0.002
+@contextmanager
+def fusion_scale(scale: Optional[Dict[str, float]]) -> Iterator[None]:
+    """Multiply the dense / keyword / exact weights of the fusion by scale["dense" | "keyword" | "exact"]."""
+    token = _FUSION_SCALE.set(dict(scale) if scale else None)
+    try:
+        yield
+    finally:
+        _FUSION_SCALE.reset(token)
 
-    vector_without_keyword_penalty = 0.0
-    if bucket.get("vector") is not None and bucket.get("keyword") is None and keyword_score <= 0.0:
-        vector_without_keyword_penalty = 0.002
 
-    rrf_score = float(bucket.get("rrf") or 0.0)
+def _fusion_settings() -> Dict[str, Any]:
+    method = str(getattr(config, "HYBRID_FUSION", "weighted_rrf") or "weighted_rrf").strip().lower()
+    if method not in _FUSION_METHODS:
+        raise ValueError(
+            f"Unknown HYBRID_FUSION '{method}' (supported: {', '.join(_FUSION_METHODS)})"
+        )
+    scale = _FUSION_SCALE.get() or {}
     return {
-        "keyword_score": keyword_score,
-        "keyword_evidence_boost": round(keyword_evidence_boost, 8),
-        "vector_without_keyword_penalty": round(vector_without_keyword_penalty, 8),
-        "hybrid_rank_score": rrf_score + keyword_evidence_boost - vector_without_keyword_penalty,
+        "method": method,
+        "dense_weight": float(getattr(config, "HYBRID_DENSE_WEIGHT", 1.0)) * float(scale.get("dense", 1.0)),
+        "keyword_weight": float(getattr(config, "HYBRID_KEYWORD_WEIGHT", 1.0)) * float(scale.get("keyword", 1.0)),
+        "exact_weight": float(getattr(config, "HYBRID_EXACT_WEIGHT", 1.0)) * float(scale.get("exact", 1.0)),
     }
 
 
-def _apply_page_sensitive_adjustments(items: Sequence[Dict[str, Any]]) -> None:
-    keyword_items = [item for item in items if isinstance(item.get("keyword"), RetrievedChunk)]
-    max_bm25 = max(
-        (float((item["keyword"].metadata or {}).get("bm25_score") or 0.0) for item in keyword_items),
-        default=0.0,
+def _has_exact_hit(chunk: RetrievedChunk) -> bool:
+    meta = chunk.metadata or {}
+    return int(meta.get("exact_quoted_hits") or 0) > 0 or int(meta.get("exact_id_hits") or 0) > 0
+
+
+def _dbsf_normalize(scores: Dict[str, float]) -> Dict[str, float]:
+    """Distribution-based score fusion normalization.
+
+    Maps one retriever's scores onto [mean - 3σ, mean + 3σ] (not clipped).
+    One score, or scores without spread, normalize to 0.5, matching Qdrant's
+    documented DBSF behaviour.
+    """
+    if not scores:
+        return {}
+    values = list(scores.values())
+    if len(values) == 1:
+        return {key: 0.5 for key in scores}
+    mean = sum(values) / len(values)
+    std = (sum((value - mean) ** 2 for value in values) / len(values)) ** 0.5
+    if std == 0.0:
+        return {key: 0.5 for key in scores}
+    low = mean - 3.0 * std
+    return {key: (value - low) / (6.0 * std) for key, value in scores.items()}
+
+
+def _rank_buckets(merged: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Final order of the fused candidates: child chunks first, then the fused score, then lexical presence.
+
+    Ties are broken by chunk key (ascending), never by the order in which the dense and lexical lanes
+    returned their hits, so the same candidates always give the same ranking."""
+    by_key = sorted(merged.items(), key=lambda item: item[0])
+    ranked = sorted(
+        by_key,
+        key=lambda item: (
+            _bucket_child_priority(item[1]),
+            float(item[1]["fused"]),
+            1 if item[1].get("keyword") is not None else 0,
+        ),
+        reverse=True,  # sorted() keeps the order of equal keys, so ties stay in chunk-key order
     )
-    max_keyword_score = max(
-        (float((item.get("rank_adjustment") or {}).get("keyword_score") or 0.0) for item in keyword_items),
-        default=0.0,
-    )
-    anchor_bm25_scores = [
-        float((item["keyword"].metadata or {}).get("bm25_score") or 0.0)
-        for item in keyword_items
-        if max_keyword_score > 0.0
-        and float((item.get("rank_adjustment") or {}).get("keyword_score") or 0.0) >= max_keyword_score * 0.98
-    ]
-    anchor_max_bm25 = max(anchor_bm25_scores, default=max_bm25)
+    return [bucket for _key, bucket in ranked]
 
-    for item in items:
-        adj = item.get("rank_adjustment") or {}
-        before = float(adj.get("hybrid_rank_score") or item.get("rrf") or 0.0)
-        page_anchor_boost = 0.0
-        page_evidence_boost = 0.0
-        page_cluster_boost = 0.0
-        keyword_hit = item.get("keyword")
-        keyword_score = float(adj.get("keyword_score") or 0.0)
-        bm25_score = 0.0
-        if isinstance(keyword_hit, RetrievedChunk):
-            bm25_score = float((keyword_hit.metadata or {}).get("bm25_score") or 0.0)
 
-        # If BM25 has a near-best page-level lexical anchor, keep that chunk
-        # competitive against vector-fused near-page hits. The threshold is
-        # intentionally conservative: it only affects chunks already found by
-        # BM25 with meaningful keyword evidence.
-        if anchor_max_bm25 > 0.0 and bm25_score >= anchor_max_bm25 * 0.95 and keyword_score >= 0.5:
-            page_anchor_boost = 0.006
-        if max_keyword_score > 0.0 and keyword_score >= max_keyword_score * 0.98 and keyword_score >= 0.8:
-            page_evidence_boost = 0.004
+def _fuse_hybrid_buckets(merged: Dict[str, Dict[str, Any]], *, k_rrf: int, settings: Dict[str, Any]) -> None:
+    """Set bucket["fused"] (higher is better) for every merged candidate.
 
-        after = before + page_anchor_boost + page_evidence_boost + page_cluster_boost
-        adj["page_anchor_boost"] = round(page_anchor_boost, 8)
-        adj["page_evidence_boost"] = round(page_evidence_boost, 8)
-        adj["page_cluster_boost"] = round(page_cluster_boost, 8)
-        adj["score_before_page_adjust"] = before
-        adj["score_after_page_adjust"] = after
-        adj["hybrid_rank_score"] = after
-        item["rank_adjustment"] = adj
+    weighted_rrf: sum over lanes of weight / (k + rank).
+    dbsf: per-lane mean±3σ normalized scores (dense similarity = 1 - cosine
+    distance, keyword = BM25), weighted and summed; an exact-match hit adds
+    the exact weight.
+    """
+    if settings["method"] == "weighted_rrf":
+        for item in merged.values():
+            fused = 0.0
+            for rank_key, weight_key in _FUSION_LANES:
+                rank = item.get(rank_key)
+                if rank is not None:
+                    fused += float(settings[weight_key]) / (k_rrf + int(rank))
+            item["fused"] = fused
+        return
+
+    dense: Dict[str, float] = {}
+    keyword: Dict[str, float] = {}
+    for key, item in merged.items():
+        vec = item.get("vector")
+        if isinstance(vec, RetrievedChunk):
+            distance = (vec.metadata or {}).get("vector_distance", vec.score)
+            dense[key] = 1.0 - float(distance)
+        kw = item.get("keyword")
+        if isinstance(kw, RetrievedChunk):
+            keyword[key] = float((kw.metadata or {}).get("bm25_score") or 0.0)
+    dense_norm = _dbsf_normalize(dense)
+    keyword_norm = _dbsf_normalize(keyword)
+    for key, item in merged.items():
+        fused = float(settings["dense_weight"]) * dense_norm.get(key, 0.0)
+        fused += float(settings["keyword_weight"]) * keyword_norm.get(key, 0.0)
+        if item.get("exact_rank") is not None:
+            fused += float(settings["exact_weight"])
+        item["fused"] = fused
 
 
 def hybrid_retrieve(
@@ -578,51 +1140,70 @@ def hybrid_retrieve(
     v_top_k = vector_top_k or config.VECTOR_TOP_K or top_k
     k_top_k = bm25_top_k or config.BM25_TOP_K or top_k
     k_rrf = rrf_k or config.HYBRID_RRF_K
-    vector_hits = vector_retrieve(
-        question,
-        client,
-        top_k=v_top_k,
-        allowed_types=allowed_types,
-        allowed_qualities=allowed_qualities,
-        query_embedding=query_embedding,
-        tenant_id=tenant_id,
-        collection_name=collection_name,
-        create_collection_if_missing=create_collection_if_missing,
-    )
-    keyword_hits = keyword_retrieve(
-        question,
-        top_k=k_top_k,
-        allowed_types=allowed_types,
-        allowed_qualities=allowed_qualities,
-        tenant_id=tenant_id,
-    )
+    settings = _fusion_settings()
 
-    merged: Dict[str, Dict] = {}
+    def _vector() -> List[RetrievedChunk]:
+        return vector_retrieve(
+            question,
+            client,
+            top_k=v_top_k,
+            allowed_types=allowed_types,
+            allowed_qualities=allowed_qualities,
+            query_embedding=query_embedding,
+            tenant_id=tenant_id,
+            collection_name=collection_name,
+            create_collection_if_missing=create_collection_if_missing,
+        )
+
+    def _keyword() -> List[RetrievedChunk]:
+        return keyword_retrieve(
+            question,
+            top_k=k_top_k,
+            allowed_types=allowed_types,
+            allowed_qualities=allowed_qualities,
+            tenant_id=tenant_id,
+            collection_name=collection_name,
+        )
+
+    if bool(getattr(config, "HYBRID_PARALLEL", False)):
+        # Dense (embedding + ANN) and lexical lanes are independent; running
+        # them together makes latency the slower lane instead of the sum.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            vector_future = pool.submit(_vector)
+            keyword_future = pool.submit(_keyword)
+            vector_hits, keyword_hits = vector_future.result(), keyword_future.result()
+    else:
+        vector_hits, keyword_hits = _vector(), _keyword()
+
+    merged: Dict[str, Dict[str, Any]] = {}
+
+    def _bucket(ch: RetrievedChunk) -> Dict[str, Any]:
+        return merged.setdefault(
+            _chunk_key(ch),
+            {
+                "vector": None,
+                "keyword": None,
+                "dense_rank": None,
+                "keyword_rank": None,
+                "exact_rank": None,
+                "fused": 0.0,
+            },
+        )
+
     for rank, ch in enumerate(vector_hits, start=1):
-        key = _chunk_key(ch)
-        bucket = merged.setdefault(key, {"vector": None, "keyword": None, "rrf": 0.0})
+        bucket = _bucket(ch)
         bucket["vector"] = ch
-        bucket["rrf"] += 1.0 / (k_rrf + rank)
+        bucket["dense_rank"] = rank
     for rank, ch in enumerate(keyword_hits, start=1):
-        key = _chunk_key(ch)
-        bucket = merged.setdefault(key, {"vector": None, "keyword": None, "rrf": 0.0})
+        bucket = _bucket(ch)
         bucket["keyword"] = ch
-        bucket["rrf"] += 1.0 / (k_rrf + rank)
+        bucket["keyword_rank"] = rank
+    for rank, ch in enumerate((ch for ch in keyword_hits if _has_exact_hit(ch)), start=1):
+        _bucket(ch)["exact_rank"] = rank
 
-    for item in merged.values():
-        item["rank_adjustment"] = _hybrid_bucket_rank_adjustment(question, item)
-    _apply_page_sensitive_adjustments(list(merged.values()))
+    _fuse_hybrid_buckets(merged, k_rrf=k_rrf, settings=settings)
 
-    ranked_items = sorted(
-        merged.values(),
-        key=lambda x: (
-            _bucket_child_priority(x),
-            float(x["rank_adjustment"]["hybrid_rank_score"]),
-            float(x["rrf"]),
-            1 if x.get("keyword") is not None else 0,
-        ),
-        reverse=True,
-    )
+    ranked_items = _rank_buckets(merged)
     selected_items = ranked_items[:top_k]
     if top_k > 1 and vector_hits and not any(item.get("vector") is not None for item in selected_items):
         best_vector_item = next((item for item in ranked_items if item.get("vector") is not None), None)
@@ -643,25 +1224,22 @@ def hybrid_retrieve(
             m["retrieval_source"] = "vector"
         else:
             m["retrieval_source"] = "keyword"
-        m["rrf_score"] = float(item["rrf"])
-        if k is not None and k.metadata.get("bm25_score") is not None:
-            m["bm25_score"] = k.metadata.get("bm25_score")
-        rank_adjustment = item.get("rank_adjustment") or {}
-        keyword_score = float(rank_adjustment.get("keyword_score") or 0.0)
-        if keyword_score > 0.0:
-            m["keyword_score"] = round(keyword_score, 4)
-        m["hybrid_rank_score"] = float(rank_adjustment.get("hybrid_rank_score") or item["rrf"])
-        m["keyword_evidence_boost"] = float(rank_adjustment.get("keyword_evidence_boost") or 0.0)
-        m["vector_without_keyword_penalty"] = float(
-            rank_adjustment.get("vector_without_keyword_penalty") or 0.0
-        )
-        m["page_evidence_boost"] = float(rank_adjustment.get("page_evidence_boost") or 0.0)
-        m["page_anchor_boost"] = float(rank_adjustment.get("page_anchor_boost") or 0.0)
-        m["page_cluster_boost"] = float(rank_adjustment.get("page_cluster_boost") or 0.0)
-        m["score_before_page_adjust"] = float(rank_adjustment.get("score_before_page_adjust") or item["rrf"])
-        m["score_after_page_adjust"] = float(rank_adjustment.get("score_after_page_adjust") or m["hybrid_rank_score"])
-        m["score_before_hybrid_rank_adjust"] = float(item["rrf"])
-        m["score_after_hybrid_rank_adjust"] = float(m["hybrid_rank_score"])
+        fused = float(item["fused"])
+        # rrf_score keeps its historical name because qa score_details reads
+        # it; it now holds the configured fusion score (weighted RRF default).
+        m["rrf_score"] = fused
+        m["hybrid_rank_score"] = fused
+        m["fusion_method"] = settings["method"]
+        for rank_key, _ in _FUSION_LANES:
+            if item.get(rank_key) is not None:
+                m[f"fusion_{rank_key}"] = int(item[rank_key])
+        if k is not None:
+            k_meta = k.metadata or {}
+            if k_meta.get("bm25_score") is not None:
+                m["bm25_score"] = k_meta.get("bm25_score")
+            for key in ("exact_quoted_hits", "exact_id_hits", "exact_term_hits"):
+                if key in k_meta:
+                    m[key] = k_meta[key]
         # Common lower-is-better scale for downstream guard/order.
         pseudo_distance = min(0.25 + (rank - 1) * 0.02, 0.95)
         if v is not None:
@@ -684,13 +1262,14 @@ def expand_parent_chunks(
     max_parent_chunks: Optional[int] = None,
     max_parent_context_chars: Optional[int] = None,
     tenant_id: str = DEFAULT_TENANT_ID,
+    collection_name: Optional[str] = None,
 ) -> List[RetrievedChunk]:
     if not getattr(config, "ENABLE_PARENT_EXPANSION", True):
         return list(chunks)
     if not chunks:
         return []
-    index = _load_keyword_index()
-    if not index.rows_by_id:
+    index = _index_for_collection(collection_name)
+    if not index.id_to_index:
         return list(chunks)
 
     parent_limit = max_parent_chunks or int(getattr(config, "MAX_PARENT_EXPANDED_CHUNKS", len(chunks)))
@@ -708,7 +1287,7 @@ def expand_parent_chunks(
             out.append(ch)
             continue
 
-        parent_row = index.rows_by_id.get(parent_id)
+        parent_row = index.row(parent_id)
         if not parent_row or not _tenant_matches(parent_row, tenant_id):
             out.append(ch)
             continue
@@ -779,35 +1358,63 @@ def add_neighbor_chunks(
     collection_name: Optional[str] = None,
     create_collection_if_missing: bool = True,
 ) -> List[RetrievedChunk]:
-    collection = store.get_vectorstore(
-        collection_name=collection_name,
-        create_if_missing=create_collection_if_missing,
-    )
+    """Add the chunks before/after each seed (same doc_id, chunk_index +-window).
+
+    One vector-store request per batch of positions instead of one per seed
+    and offset; failures are logged (they used to be swallowed silently).
+    """
     out = list(seeds)
+    wanted: Dict[Tuple[str, int], float] = {}
     for seed in seeds:
         doc_id = seed.metadata.get("doc_id")
         idx = seed.metadata.get("chunk_index")
         if doc_id is None or idx is None:
             continue
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            continue
         for delta in range(-window, window + 1):
             if delta == 0:
                 continue
-            try:
-                res = collection.get(
-                    where=_to_chroma_where({"doc_id": doc_id, "chunk_index": idx + delta})
-                )
-                for text, meta in zip(res.get("documents", []), res.get("metadatas", [])):
-                    m = dict(meta or {})
-                    if not _tenant_matches(m, tenant_id):
-                        continue
-                    m["retrieval_source"] = "vector"
-                    out.append(
-                        RetrievedChunk(
-                            text=_extract_display_text(text=text or "", meta=m),
-                            metadata=m,
-                            score=seed.score + 0.01,
-                        )
-                    )
-            except Exception:
+            key = (str(doc_id), idx + delta)
+            wanted[key] = min(wanted.get(key, float("inf")), float(seed.score) + 0.01)
+    if not wanted:
+        return out
+    try:
+        collection = store.get_vectorstore(
+            collection_name=collection_name,
+            create_if_missing=create_collection_if_missing,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("neighbor_chunks_unavailable %s", type(exc).__name__)
+        return out
+    keys = list(wanted)
+    for start in range(0, len(keys), _NEIGHBOR_BATCH):
+        batch = keys[start : start + _NEIGHBOR_BATCH]
+        clauses = [{"$and": [{"doc_id": doc_id}, {"chunk_index": index}]} for doc_id, index in batch]
+        where = clauses[0] if len(clauses) == 1 else {"$or": clauses}
+        try:
+            res = collection.get(where=where)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("neighbor_chunks_lookup_failed %s", type(exc).__name__)
+            continue
+        for text, meta in zip(res.get("documents", []), res.get("metadatas", [])):
+            m = dict(meta or {})
+            if not _tenant_matches(m, tenant_id):
                 continue
+            try:
+                key = (str(m.get("doc_id")), int(m.get("chunk_index")))
+            except (TypeError, ValueError):
+                continue
+            if key not in wanted:
+                continue
+            m["retrieval_source"] = "vector"
+            out.append(
+                RetrievedChunk(
+                    text=_extract_display_text(text=text or "", meta=m),
+                    metadata=m,
+                    score=wanted[key],
+                )
+            )
     return out

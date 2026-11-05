@@ -7,6 +7,7 @@ import config
 from rag_core import qa
 from rag_core.retrieval import RetrievedChunk
 from webapi import main
+from webapi.routers import chat as chat_router
 
 
 def _mk_chunk(label: str, text: str, score: float = 0.25, page: int = 1) -> RetrievedChunk:
@@ -125,8 +126,8 @@ def test_approved_exact_match_citations_preserved(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(main, "_approved_qa_index", None)
-    monkeypatch.setattr(main, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
 
     payload = main.chat(main.ChatRequest(question="営業時間を教えてください"))
 
