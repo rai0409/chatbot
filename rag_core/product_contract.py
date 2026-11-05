@@ -90,8 +90,8 @@ def _token_signature(secret: bytes, nonce: str, expires: int, tenant_id: str) ->
 
 
 def generate_feedback_token(tenant_id: str | None = None, *, now: float | None = None) -> str:
-    """With FEEDBACK_TOKEN_SECRET: "v1.<nonce>.<expiry>.<HMAC>", bound to the tenant and expiring
-    (FEEDBACK_TOKEN_TTL_SECONDS, default one day). Without it: an opaque random token (development)."""
+    """Return an expiring, tenant-bound HMAC token when signing is configured.
+    Without signing, return an opaque random token for development. Default TTL: one day."""
     secret = _token_secret()
     if secret is None:
         return secrets.token_urlsafe(18)

@@ -6,7 +6,7 @@ from fastapi import HTTPException
 
 from rag_core import product_contract as pc
 
-SECRET = "feedback-secret-not-a-real-one-0123456789"
+SECRET = "feedback-secret-not-a-real-one-0123456789"  # pragma: allowlist secret
 T0 = 1_800_000_000.0
 
 
