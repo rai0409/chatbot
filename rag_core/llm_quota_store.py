@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from fractions import Fraction
-from typing import Mapping, Optional
+from typing import Mapping
 
 from rag_core.llm_quota import LIMITS, QuotaExceeded
 
