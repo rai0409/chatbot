@@ -24,10 +24,13 @@ _admin_page_html = admin_common.admin_page_html
 class ExtractionLineRequest(BaseModel):
     tenant_id: str = Field("default", max_length=64)
     source_doc: str = Field(..., max_length=512)
-    page: int = Field(..., ge=1)
+    page: int = Field(..., ge=1, le=100000)
     line_id: str = Field(..., max_length=32)
     text: Optional[str] = Field(None, max_length=2000)
     note: Optional[str] = Field(None, max_length=500)
+    # The name of the person at the keyboard (kept in the record). With a single sign-on session their
+    # identifier is added, which is what makes "a different person" checkable.
+    actor: Optional[str] = Field(None, max_length=64)
 
 
 class ExtractionDocRequest(BaseModel):
@@ -36,10 +39,10 @@ class ExtractionDocRequest(BaseModel):
 
 
 def _extraction_http_error(exc: Exception) -> HTTPException:
-    text = str(exc)
-    if "no extraction record" in text or "no such line" in text or "not available" in text:
-        return HTTPException(status_code=404, detail=text)
-    return HTTPException(status_code=400, detail=text)
+    # By type, not by message wording: a reworded message cannot change the status.
+    if isinstance(exc, extraction_store.ExtractionNotFound):
+        return HTTPException(status_code=404, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
 
 
 def _extraction_scope(request, tenant_id: str):
@@ -84,34 +87,42 @@ def extraction_items(
 
 @router.get("/admin/extraction/page")
 def extraction_page_data(
-    source_doc: str = Query(..., max_length=512), page: int = Query(..., ge=1), tenant_id: str = Query("default", max_length=64),
+    source_doc: str = Query(..., max_length=512), page: int = Query(..., ge=1, le=100000), tenant_id: str = Query("default", max_length=64),
     request: Request = None, _admin_auth: None = Depends(require_admin_auth),
 ):
     _extraction_scope(request, tenant_id)
     try:
         record = extraction_store.load_record(tenant_id, source_doc)
-        entry = None if record is None else next((p for p in record["pages"] if p["page"] == page), None)
-        if entry is None:
-            raise extraction_store.ExtractionError("no extraction record for this page")
-        decided = extraction_review._states(tenant_id, source_doc)
+        entry_page = None if record is None else next((p for p in record["pages"] if p["page"] == page), None)
+        if entry_page is None:
+            raise extraction_store.ExtractionNotFound("no extraction record for this page")
+        entries = extraction_review.line_entries(tenant_id, source_doc)
     except extraction_store.ExtractionError as exc:
         raise _extraction_http_error(exc)
-    return {"source_doc": source_doc, "page": page, "width_px": entry["width_px"], "height_px": entry["height_px"],
-            "confidence": entry["confidence"], "preview_available": bool(record.get("file_path")),
+    def _line_payload(line, occurrence):
+        entry = entries.get((page, line["text"], occurrence))
+        return {**line, "state": entry["state"] if entry else "open",
+                "approval": extraction_review.approval_state(entry),
+                "corrected_by": entry.get("by") if entry and entry["state"] == "corrected" else None,
+                "approved_by": entry.get("approved_by") if entry else None}
+
+    return {"source_doc": source_doc, "page": page, "width_px": entry_page["width_px"], "height_px": entry_page["height_px"],
+            "confidence": entry_page["confidence"], "preview_available": bool(record.get("file_path")),
             "threshold": extraction_store.review_max_confidence(),
-            "lines": [{**line, "state": decided.get((page, line["text"]), "open")} for line in entry["lines"]]}
+            "require_approval": extraction_review.require_approval(),
+            "lines": [_line_payload(line, occurrence) for line, occurrence in extraction_review._with_occurrence(entry_page)]}
 
 
 @router.get("/admin/extraction/page-image")
 def extraction_page_image(
-    source_doc: str = Query(..., max_length=512), page: int = Query(..., ge=1), tenant_id: str = Query("default", max_length=64),
+    source_doc: str = Query(..., max_length=512), page: int = Query(..., ge=1, le=100000), tenant_id: str = Query("default", max_length=64),
     request: Request = None, _admin_auth: None = Depends(require_admin_auth),
 ):
     _extraction_scope(request, tenant_id)
     try:
         record = extraction_store.load_record(tenant_id, source_doc)
         if record is None:
-            raise extraction_store.ExtractionError("no extraction record for this document")
+            raise extraction_store.ExtractionNotFound("no extraction record for this document")
         png = extraction_store.render_page_png(record, page)
     except extraction_store.ExtractionError as exc:
         raise _extraction_http_error(exc)
@@ -120,18 +131,24 @@ def extraction_page_image(
 
 def _extraction_decision(req: ExtractionLineRequest, request, action: str):
     scope = _extraction_scope(request, req.tenant_id)
-    who = _admin_label(scope)
+    # A typed name (and the single sign-on identifier, when there is a session); else the admin credential's reach.
+    who = admin_common.actor_identity(request, req.actor) if req.actor else _admin_label(scope)
+    if action == "approve" and not req.actor:
+        raise HTTPException(status_code=400, detail="actor (the name of the approver) is required")
     try:
         if action == "correct":
             result = extraction_review.submit_correction(req.tenant_id, req.source_doc, req.page, req.line_id, req.text or "",
                                                          by=who, note=req.note or "")
+        elif action == "approve":
+            result = extraction_review.approve_correction(req.tenant_id, req.source_doc, req.page, req.line_id, by=who,
+                                                          note=req.note or "")
         elif action == "confirm":
             result = extraction_review.confirm_line(req.tenant_id, req.source_doc, req.page, req.line_id, by=who, note=req.note or "")
         else:
             result = {"reverted": extraction_review.revert(req.tenant_id, req.source_doc, req.page, req.line_id)}
     except extraction_store.ExtractionError as exc:
         raise _extraction_http_error(exc)
-    _audit_admin(scope, f"extraction_{action}ed",  # corrected / confirmed / reverted
+    _audit_admin(scope, f"extraction_{action}d" if action.endswith("e") else f"extraction_{action}ed",  # corrected / confirmed / reverted / approved
                  tenant_id=req.tenant_id, source_doc=req.source_doc, page=req.page, line_id=req.line_id)
     return result
 
@@ -139,6 +156,11 @@ def _extraction_decision(req: ExtractionLineRequest, request, action: str):
 @router.post("/admin/extraction/correct")
 def extraction_correct(req: ExtractionLineRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
     return _extraction_decision(req, request, "correct")
+
+
+@router.post("/admin/extraction/approve")
+def extraction_approve(req: ExtractionLineRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
+    return _extraction_decision(req, request, "approve")
 
 
 @router.post("/admin/extraction/confirm")

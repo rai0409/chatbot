@@ -1,6 +1,7 @@
 """SharePoint (Microsoft Graph drive delta) as a source: a local mirror kept up to date by delta (step 5-3)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -39,6 +40,14 @@ def graph_scope() -> str:
 
 def _max_wait() -> float:
     return max(0.0, float(getattr(config, "GRAPH_MAX_WAIT_SECONDS", MAX_WAIT_SECONDS)))
+
+
+def _pull_max_seconds() -> float:
+    # GRAPH_PULL_MAX_SECONDS: one pull stops here (0 = no limit); what was downloaded so far is kept.
+    return max(0.0, float(getattr(config, "GRAPH_PULL_MAX_SECONDS", 0) or 0))
+
+
+_monotonic = time.monotonic
 
 
 def _http_timeout() -> float:
@@ -241,6 +250,7 @@ def _remove(mirror: Path, rel: str) -> bool:
 def pull(record: Dict[str, Any], *, client: Optional[GraphClient] = None) -> Dict[str, Any]:
     """Bring the local mirror of a sharepoint source up to date with its delta feed. Returns counts (never file names)."""
     source_id, options = record["source_id"], record["options"]
+    registry.check_access_model(options)  # before anything is fetched
     folder = "/" + str(options["folder"]).strip("/")
     mirror = registry.mirror_dir(source_id)
     mirror.mkdir(parents=True, exist_ok=True)
@@ -248,6 +258,7 @@ def pull(record: Dict[str, Any], *, client: Optional[GraphClient] = None) -> Dic
     state = _load_state(source_id)
     summary = {"downloaded": 0, "removed": 0, "unsupported": 0, "too_large": 0, "unsafe": 0, "hidden": 0, "unchanged": 0,
                "resync": False, "pages": 0}
+    started, max_seconds = _monotonic(), _pull_max_seconds()
     allowed, limit = supported_extensions(), max_file_bytes()
     items: Dict[str, Dict[str, Any]] = dict(state["items"])
     seen = set()
@@ -307,7 +318,13 @@ def pull(record: Dict[str, Any], *, client: Optional[GraphClient] = None) -> Dic
         url = item.get("@microsoft.graph.downloadUrl")
         if not url:
             return
+        if max_seconds and _monotonic() - started > max_seconds:
+            raise GraphError("the pull exceeded its time limit")
         data = client.download(str(url), max_bytes=limit)
+        expected = str(((item.get("file") or {}).get("hashes") or {}).get("sha256Hash") or "").lower()
+        if expected and hashlib.sha256(data).hexdigest() != expected:
+            summary["corrupt"] = summary.get("corrupt", 0) + 1  # damaged or altered in transit: never mirrored; the next pull tries again
+            return
         target = mirror / safe
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_name(f".{target.name}.part-{os.getpid()}")
@@ -319,11 +336,16 @@ def pull(record: Dict[str, Any], *, client: Optional[GraphClient] = None) -> Dic
         summary["downloaded"] += 1
 
     try:
-        final = run(state["delta_link"])
-    except ResyncRequired:
-        summary["resync"], full = True, True
-        seen.clear()
-        final = run(None)
+        try:
+            final = run(state["delta_link"])
+        except ResyncRequired:
+            summary["resync"], full = True, True
+            seen.clear()
+            final = run(None)
+    except Exception:
+        # Keep what was downloaded (so the next pull does not fetch it again) but do not advance the feed.
+        _save_state(source_id, {"delta_link": state["delta_link"], "items": items})
+        raise
     if full:  # a full listing: what is no longer in the library goes from the mirror
         for item_id in [i for i in items if i not in seen]:
             if _remove(mirror, items[item_id]["path"]):

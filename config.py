@@ -327,6 +327,8 @@ GRAPH_TOKEN_URL = getenv_first("GRAPH_TOKEN_URL", default="https://login.microso
 GRAPH_SCOPE = getenv_first("GRAPH_SCOPE", default="https://graph.microsoft.com/.default")
 GRAPH_HTTP_TIMEOUT_SECONDS = _get_float("GRAPH_HTTP_TIMEOUT_SECONDS", default=60.0)
 GRAPH_MAX_WAIT_SECONDS = _get_float("GRAPH_MAX_WAIT_SECONDS", default=60.0)
+# One SharePoint pull stops after this long (0 = no limit); what was downloaded so far is kept.
+GRAPH_PULL_MAX_SECONDS = _get_float("GRAPH_PULL_MAX_SECONDS", default=1800.0)
 # Alert notifications (webapi/notifications.py).
 NOTIFY_SLACK_TIMEOUT_SECONDS = _get_float("NOTIFY_SLACK_TIMEOUT_SECONDS", default=10.0)
 NOTIFY_SMTP_TIMEOUT_SECONDS = _get_float("NOTIFY_SMTP_TIMEOUT_SECONDS", default=15.0)

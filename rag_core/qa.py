@@ -1381,10 +1381,10 @@ def _build_retrieval_trace(
             guard_reason = None
         used_fallback = guard_reason is not None
 
-    if guard_reason == "missing_procedure_evidence":
-        selected_context = grounded[:1] or [Chunk("1", "OCR", "unknown", tuple(), None)]
-    elif guard_reason:
-        selected_context = grounded[:1] or [Chunk("1", "該当なし", "unknown", tuple(), None)]
+    if guard_reason:
+        # The best real candidate, or nothing: a made-up placeholder chunk (id "1", source "unknown") used to
+        # stand in here and then showed up in traces, audit events and evaluation output as if it was evidence.
+        selected_context = grounded[:1]
     else:
         selected_context = _prefer_sort(grounded, intent)
         selected_context = _cut_context(selected_context, max_context_chars)
@@ -1542,7 +1542,7 @@ def _answer_query_impl(
         )
         return result, trace
 
-    messages = build_messages(q, build_evidence_blocks(grounded))
+    messages = build_messages(q, build_evidence_blocks(grounded), tenant_id)
     generation_started = time.perf_counter()
     try:
         if client is None and not llm_profiles.configured():
@@ -1771,7 +1771,7 @@ def answer_query_stream(
     enforce = bool(not stream_profile.get("warnings") and stream_rule and stream_rule.get("fallback_if_failed") is True)
     buffered_chars = 0
     max_buffer_chars = 1_000_000
-    messages = build_messages(q, build_evidence_blocks(grounded))
+    messages = build_messages(q, build_evidence_blocks(grounded), tenant_id)
     pieces: List[str] = []
     generation_started = time.perf_counter()
     try:

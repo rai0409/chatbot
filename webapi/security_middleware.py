@@ -11,11 +11,17 @@ from __future__ import annotations
   with inline scripts keep working; tighten with SECURITY_CSP.
 """
 
+import asyncio
 import os
+import re
+import uuid
 from typing import Iterable, Tuple
 
 _DEFAULT_MAX_REQUEST_BYTES = 1024 * 1024
 _DEFAULT_CSP = "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_DEFAULT_BODY_IDLE_TIMEOUT = 30.0
+_HSTS = b"max-age=31536000; includeSubDomains"
 
 
 def max_request_bytes() -> int:
@@ -27,6 +33,8 @@ def max_request_bytes() -> int:
 
 
 _UPLOAD_PATHS = {"/admin/ingestion/upload"}
+# Other routes whose body may be larger than the default request limit (a CSV of approved QA, as base64: 5 MiB of file).
+_PATH_LIMITS = {"/admin/approved-qa/import": 8 * 1024 * 1024}
 
 
 def max_upload_bytes() -> int:
@@ -38,19 +46,64 @@ def max_upload_bytes() -> int:
     return value if value > 0 else 50 * 1024 * 1024
 
 
+def body_idle_timeout() -> float:
+    """Seconds without a body chunk before the request is dropped with 408 (0 = never)."""
+    try:
+        value = float(str(os.getenv("REQUEST_BODY_IDLE_TIMEOUT_SECONDS", "")).strip() or _DEFAULT_BODY_IDLE_TIMEOUT)
+    except ValueError:
+        return _DEFAULT_BODY_IDLE_TIMEOUT
+    return max(0.0, value)
+
+
+def _hsts_enabled() -> bool:
+    raw = str(os.getenv("SECURITY_HSTS", "")).strip().lower()
+    if raw:
+        return raw in {"1", "true", "yes", "on"}
+    return str(os.getenv("APP_ENV", "")).strip().lower() == "production"
+
+
 def security_headers() -> Iterable[Tuple[bytes, bytes]]:
     csp = str(os.getenv("SECURITY_CSP", "")).strip() or _DEFAULT_CSP
-    return (
+    headers = [
         (b"x-content-type-options", b"nosniff"),
         (b"x-frame-options", b"DENY"),
         (b"referrer-policy", b"no-referrer"),
         (b"content-security-policy", csp.encode("latin-1")),
         (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
-    )
+    ]
+    if _hsts_enabled():
+        headers.append((b"strict-transport-security", _HSTS))
+    return tuple(headers)
 
 
 class _TooLarge(Exception):
     pass
+
+
+class _BodyTimeout(Exception):
+    pass
+
+
+def _request_id(headers) -> str:
+    for key, value in headers:
+        if key.lower() == b"x-request-id":
+            text = value.decode("latin-1", "replace")
+            if _REQUEST_ID_RE.fullmatch(text):
+                return text
+    return uuid.uuid4().hex
+
+
+def _framing_problem(headers) -> str | None:
+    """A request whose body length is ambiguous or malformed (the usual request-smuggling shapes)."""
+    lengths = [value for key, value in headers if key.lower() == b"content-length"]
+    chunked = any(key.lower() == b"transfer-encoding" for key, _ in headers)
+    if lengths and chunked:
+        return "both content-length and transfer-encoding"
+    if any(not (v.isascii() and v.isdigit()) for v in lengths):
+        return "invalid content-length"
+    if len(set(lengths)) > 1:
+        return "conflicting content-length headers"
+    return None
 
 
 class HardeningMiddleware:
@@ -63,33 +116,16 @@ class HardeningMiddleware:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
-        limit = max_upload_bytes() if scope.get("path") in _UPLOAD_PATHS else max_request_bytes()
-        headers = dict(scope.get("headers") or [])
-        declared = headers.get(b"content-length")
-        if declared is not None:
-            try:
-                if int(declared) > limit:
-                    await _send_413(send)
-                    return
-            except ValueError:
-                await _send_413(send)
-                return
-
-        received = 0
-
-        async def limited_receive():
-            nonlocal received
-            message = await receive()
-            if message.get("type") == "http.request":
-                received += len(message.get("body") or b"")
-                if received > limit:
-                    raise _TooLarge()
-            return message
-
-        extra = list(security_headers())
+        raw_headers = list(scope.get("headers") or [])
+        request_id = _request_id(raw_headers)
+        scope.setdefault("state", {})["request_id"] = request_id
+        extra = list(security_headers()) + [(b"x-request-id", request_id.encode("ascii"))]
+        started = False
 
         async def send_with_headers(message):
+            nonlocal started
             if message.get("type") == "http.response.start":
+                started = True
                 existing = {k.lower() for k, _ in message.get("headers") or []}
                 message = dict(message)
                 message["headers"] = list(message.get("headers") or []) + [
@@ -97,18 +133,62 @@ class HardeningMiddleware:
                 ]
             await send(message)
 
+        problem = _framing_problem(raw_headers)
+        if problem:
+            await _send_error(send_with_headers, 400, "invalid request framing")
+            return
+        if str(scope.get("path") or "").startswith("/admin/ingestion"):
+            try:  # a limit changed in the console (by another worker process) applies to this request
+                from rag_core import ingest_settings
+
+                ingest_settings.sync_environ()
+            except Exception:  # noqa: BLE001 - the limits then stay as they were
+                pass
+        limit = max_upload_bytes() if scope.get("path") in _UPLOAD_PATHS else _PATH_LIMITS.get(scope.get("path"), 0) or max_request_bytes()
+        declared = next((v for k, v in raw_headers if k.lower() == b"content-length"), None)
+        if declared is not None and int(declared) > limit:
+            await _send_error(send_with_headers, 413, "request body too large")
+            return
+
+        received = 0
+        body_done = False  # set when the final body message (more_body false) has been received
+        idle = body_idle_timeout()
+
+        async def limited_receive():
+            nonlocal received, body_done
+            if idle > 0 and not body_done:
+                # Only while the body is still arriving: later receive() calls
+                # (waiting for a disconnect during a stream) may block for long.
+                try:
+                    message = await asyncio.wait_for(receive(), timeout=idle)
+                except asyncio.TimeoutError:
+                    raise _BodyTimeout() from None
+            else:
+                message = await receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body") or b"")
+                if received > limit:
+                    raise _TooLarge()
+                if not message.get("more_body"):
+                    body_done = True
+            return message
+
         try:
             await self.app(scope, limited_receive, send_with_headers)
         except _TooLarge:
-            await _send_413(send)
+            if not started:
+                await _send_error(send_with_headers, 413, "request body too large")
+        except _BodyTimeout:
+            if not started:
+                await _send_error(send_with_headers, 408, "request body timed out")
 
 
-async def _send_413(send) -> None:
-    body = b'{"detail":"request body too large"}'
+async def _send_error(send, status: int, detail: str) -> None:
+    body = ('{"detail":"%s"}' % detail).encode("utf-8")
     await send(
         {
             "type": "http.response.start",
-            "status": 413,
+            "status": status,
             "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())],
         }
     )

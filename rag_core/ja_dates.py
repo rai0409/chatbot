@@ -73,6 +73,10 @@ _WESTERN_SEP_RE = re.compile(
 _WESTERN_YM_RE = re.compile(r"(?<![\d./-])(?P<y>\d{4})[/-](?P<m>\d{1,2})(?![\d./-])")
 
 
+def era_by_name(name: str) -> Optional[Era]:
+    return _ERA_BY_NAME.get(name)
+
+
 def _last_day(year: int, month: int) -> date:
     if month == 12:
         return date(year, 12, 31)

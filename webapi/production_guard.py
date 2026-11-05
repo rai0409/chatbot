@@ -61,6 +61,16 @@ def production_problems() -> List[str]:
         problems.append(f"OIDC_SESSION_SECRET of at least {_MIN_SECRET_BYTES} bytes")
     if _env("OIDC_COOKIE_SECURE").lower() in {"0", "false", "no", "off"}:
         problems.append("OIDC_COOKIE_SECURE must not be false")
+    if len(_env("FEEDBACK_TOKEN_SECRET").encode("utf-8")) < _MIN_SECRET_BYTES:
+        problems.append(
+            f"FEEDBACK_TOKEN_SECRET of at least {_MIN_SECRET_BYTES} bytes (signs /chat/feedback tokens)"
+        )
+    try:
+        import rag_grounded
+
+        rag_grounded.load_domain_rules()
+    except ValueError as exc:
+        problems.append(f"GROUNDED_DOMAIN_RULES_PATH: {exc}")
     if _enabled("DISABLE_GUARD"):
         problems.append("DISABLE_GUARD must not be enabled")
     if not _enabled("TENANT_FILTER_STRICT"):

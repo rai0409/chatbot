@@ -156,4 +156,11 @@ export const overviewApi = {
     request<AuditPage>(`/admin/audit?${query(p)}`),
   auditVerify: (kind: AuditKind) => request<AuditVerify>(`/admin/audit/verify?kind=${kind}`),
   logoutAll: () => request<{ ok: boolean }>("/admin/logout-all", { method: "POST" }),
+  /** Ends every single-sign-on session of one person (the fingerprint is what usage and audit records show). */
+  revokeIdentity: (keyFingerprint: string) =>
+    request<{ ok: boolean; key_fingerprint: string }>("/admin/sessions/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key_fingerprint: keyFingerprint }),
+    }),
 };

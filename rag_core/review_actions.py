@@ -68,6 +68,7 @@ def build_review_action_event(
     tags: List[str] | None = None,
     action_id: str | None = None,
     created_at: str | None = None,
+    actor: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     return {
         "action_id": action_id or f"action_{uuid.uuid4().hex}",
@@ -80,6 +81,8 @@ def build_review_action_event(
         "status_after": status_after,
         "tags": _bounded_list(tags),
         "created_at": created_at or datetime.now(timezone.utc).isoformat(),
+        # Who acted: the administrator's reach (never a token), as in the audit log.
+        "actor": dict(actor) if actor else None,
     }
 
 
@@ -106,8 +109,24 @@ def append_review_action_event(event: Dict[str, Any]) -> bool:
         return False
 
 
+def _event_time(value: Any) -> float | None:
+    """Epoch seconds of an ISO timestamp (no zone = UTC); None when it cannot be read."""
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
 def latest_review_statuses(path: Path) -> Dict[tuple, str]:
-    """(tenant_id, review_id) -> status_after of the newest action."""
+    """(tenant_id, review_id) -> status_after of the newest action.
+
+    "Newest" is by real time (zones respected), not by the text of the
+    timestamp; a status outside ALLOWED_STATUS_AFTER is ignored; an action
+    whose time cannot be read ranks below every readable one (and among
+    unreadable ones the later line wins)."""
     statuses: Dict[tuple, tuple] = {}
     try:
         f = Path(path).open("r", encoding="utf-8")
@@ -123,10 +142,11 @@ def latest_review_statuses(path: Path) -> Dict[tuple, str]:
             except json.JSONDecodeError:
                 continue
             status = event.get("status_after") if isinstance(event, dict) else None
-            if not status:
+            if not status or str(status) not in ALLOWED_STATUS_AFTER:
                 continue
             key = (str(event.get("tenant_id") or "default"), str(event.get("review_id") or ""))
-            stamp = str(event.get("created_at") or "")
-            if key not in statuses or stamp >= statuses[key][0]:
-                statuses[key] = (stamp, str(status))
+            when = _event_time(event.get("created_at"))
+            rank = float("-inf") if when is None else when
+            if key not in statuses or rank >= statuses[key][0]:
+                statuses[key] = (rank, str(status))
     return {key: value[1] for key, value in statuses.items()}

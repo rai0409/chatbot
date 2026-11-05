@@ -37,6 +37,7 @@ export const MENU: MenuGroup[] = [
     entries: [
       { path: "/records", label: t.nav.records },
       { path: "/review", label: t.nav.reviewQueue },
+      { path: "/approved-qa", label: t.nav.approvedQa },
       { path: "/golden", label: t.nav.golden },
       { path: "/changes", label: t.nav.changes },
     ],
@@ -47,6 +48,7 @@ export const MENU: MenuGroup[] = [
     entries: [
       { path: "/audit", label: t.nav.audit },
       { path: "/access", label: t.nav.access },
+      { path: "/backups", label: t.nav.backups },
     ],
   },
 ];

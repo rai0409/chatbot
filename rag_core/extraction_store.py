@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
@@ -14,11 +15,16 @@ from rag_core.source_registry import allowed_roots
 
 SCHEMA = 1
 DEFAULT_REVIEW_MAX_CONFIDENCE = 80.0
+_MAX_PREVIEW_PIXELS = 60_000_000
 _TENANT_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class ExtractionError(ValueError):
     pass
+
+
+class ExtractionNotFound(ExtractionError):
+    """The record, page or line asked for does not exist (HTTP 404, by type and not by wording)."""
 
 
 def store_dir() -> Path:
@@ -53,7 +59,7 @@ def record_path(tenant_id: str, source_doc: str) -> Path:
 
 def _write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp, path)
 
@@ -135,22 +141,27 @@ def render_page_png(record: Mapping[str, Any], page_number: int) -> bytes:
     path = Path(record.get("file_path") or "")
     entry = next((p for p in record["pages"] if p["page"] == page_number), None)
     if entry is None or not record.get("file_path") or not path.is_file() or not _inside_allowed_roots(path):
-        raise ExtractionError("the page preview is not available")
+        raise ExtractionNotFound("the page preview is not available")
     try:
         import io
 
         import pypdfium2 as pdfium
     except ImportError:
-        raise ExtractionError("the page preview is not available") from None
+        raise ExtractionNotFound("the page preview is not available") from None
     dpi = min(int(entry.get("dpi") or 300), 300)
     try:
         document = pdfium.PdfDocument(str(path))
         try:
-            image = document[page_number - 1].render(scale=dpi / 72).to_pil()
+            pdf_page = document[page_number - 1]
+            width, height = pdf_page.get_size()
+            scale = dpi / 72
+            if width * scale * height * scale > _MAX_PREVIEW_PIXELS:  # huge media box: stay inside the cap
+                scale = (_MAX_PREVIEW_PIXELS / max(1.0, width * height)) ** 0.5
+            image = pdf_page.render(scale=scale).to_pil()
         finally:
             document.close()
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
     except Exception:  # noqa: BLE001
-        raise ExtractionError("the page preview is not available") from None
+        raise ExtractionNotFound("the page preview is not available") from None
     return buffer.getvalue()

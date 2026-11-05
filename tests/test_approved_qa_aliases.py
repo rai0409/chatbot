@@ -150,8 +150,7 @@ def test_alias_chat_mode_audit_and_no_llm_or_retrieval(monkeypatch, tmp_path):
     _write(path, [_record(aliases=["承認alias？"])])
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
-    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
-    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_cache", {})
     monkeypatch.setattr(chat_router, "ensure_openai_client", lambda *a, **k: (_ for _ in ()).throw(AssertionError("LLM used")))
     monkeypatch.setattr(chat_router, "answer_query_with_trace", lambda *a, **k: (_ for _ in ()).throw(AssertionError("retrieval used")))
     events = []

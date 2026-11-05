@@ -159,8 +159,7 @@ def test_approved_chat_lookup_does_not_call_llm(monkeypatch, tmp_path):
     _write_jsonl(path, [_record()])
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
-    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
-    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_cache", {})
 
     def _fail_client(*args, **kwargs):
         raise AssertionError("LLM client must not be created for approved exact match")

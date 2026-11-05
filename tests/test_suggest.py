@@ -97,8 +97,7 @@ def api(monkeypatch, path, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
-    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_cache", {})
     audit = []
     monkeypatch.setattr(chat_router, "append_audit_event", lambda kind, event: audit.append((kind, event)))
     return TestClient(main.app), audit
@@ -149,4 +148,4 @@ def test_the_shared_loader_still_serves_the_exact_lookup(api):
     assert main._approved_qa_lookup("存在しない質問", "default") is None
     alias = main._approved_qa_lookup("パスワードを忘れた", "default")
     assert alias.match_type == "alias" and alias.qa_id == "q1"
-    assert main._approved_qa_index_for("default") is main._approved_qa_index  # one cached index
+    assert main._approved_qa_index_for("default") is main._approved_qa_index_for("default")  # one cached index

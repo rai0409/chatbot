@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import os
 import secrets
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Sequence
 
@@ -58,8 +63,60 @@ def _bounded(value: Any, max_chars: int) -> str:
     return text[: max_chars - len(suffix)] + suffix
 
 
-def generate_feedback_token() -> str:
-    return secrets.token_urlsafe(18)
+_TOKEN_VERSION = "v1"
+_DEFAULT_TOKEN_TTL_SECONDS = 86400
+
+
+def _token_secret() -> bytes | None:
+    raw = str(os.getenv("FEEDBACK_TOKEN_SECRET", "") or "").strip()
+    return raw.encode("utf-8") if raw else None
+
+
+def feedback_signing_enabled() -> bool:
+    return _token_secret() is not None
+
+
+def _token_ttl_seconds() -> int:
+    try:
+        return max(1, int(str(os.getenv("FEEDBACK_TOKEN_TTL_SECONDS", "") or _DEFAULT_TOKEN_TTL_SECONDS)))
+    except ValueError:
+        return _DEFAULT_TOKEN_TTL_SECONDS
+
+
+def _token_signature(secret: bytes, nonce: str, expires: int, tenant_id: str) -> str:
+    message = f"{_TOKEN_VERSION}|{nonce}|{expires}|{tenant_id}".encode("utf-8")
+    digest = hmac.new(secret, message, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def generate_feedback_token(tenant_id: str | None = None, *, now: float | None = None) -> str:
+    """With FEEDBACK_TOKEN_SECRET: "v1.<nonce>.<expiry>.<HMAC>", bound to the tenant and expiring
+    (FEEDBACK_TOKEN_TTL_SECONDS, default one day). Without it: an opaque random token (development)."""
+    secret = _token_secret()
+    if secret is None:
+        return secrets.token_urlsafe(18)
+    nonce = secrets.token_urlsafe(12)
+    expires = int((time.time() if now is None else now) + _token_ttl_seconds())
+    tenant = str(tenant_id or "default").strip() or "default"
+    return f"{_TOKEN_VERSION}.{nonce}.{expires}.{_token_signature(secret, nonce, expires, tenant)}"
+
+
+def verify_feedback_token(token: str, tenant_id: str | None, *, now: float | None = None) -> str:
+    """"ok", "expired", "invalid" (forged, other tenant or other secret) or "unsigned" (signing is off)."""
+    secret = _token_secret()
+    if secret is None:
+        return "unsigned"
+    parts = str(token or "").split(".")
+    if len(parts) != 4 or parts[0] != _TOKEN_VERSION or not parts[2].isdigit():
+        return "invalid"
+    _version, nonce, expires_text, signature = parts
+    tenant = str(tenant_id or "default").strip() or "default"
+    expected = _token_signature(secret, nonce, int(expires_text), tenant)
+    if not hmac.compare_digest(expected, signature):
+        return "invalid"
+    if (time.time() if now is None else now) > int(expires_text):
+        return "expired"
+    return "ok"
 
 
 def build_candidate_contract(candidate: Dict[str, Any], *, max_preview_chars: int = _DEFAULT_PREVIEW_CHARS) -> Dict[str, Any]:
@@ -168,7 +225,7 @@ def build_product_answer_envelope(
         "decision": dict(decision or {}),
         "profile_info": dict(profile_info or {}),
         "warnings": list(warnings or []),
-        "feedback_token": feedback_token or generate_feedback_token(),
+        "feedback_token": feedback_token or generate_feedback_token(tenant_id),
     }
 
 

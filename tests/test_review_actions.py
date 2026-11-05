@@ -129,16 +129,20 @@ def test_operator_note_and_tags_are_bounded(monkeypatch, tmp_path):
     assert event["tags"] == tags[:20]
 
 
-def test_logging_failure_returns_safe_warning(monkeypatch):
+def test_logging_failure_is_a_503_and_not_reported_as_done(monkeypatch):
+    # An action that was not recorded did not happen: the operator must not see "ok".
+    audited = []
     monkeypatch.setattr(main, "append_review_action_event", lambda event: False)
+    monkeypatch.setattr(main, "_audit_admin", lambda scope, action, **fields: audited.append((action, fields)))
 
-    response = main.admin_review_action(
-        main.ReviewActionRequest(review_id="review-6", action_type="mark_ignored")
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        main.admin_review_action(
+            main.ReviewActionRequest(review_id="review-6", action_type="mark_ignored")
+        )
 
-    assert response["ok"] is True
-    assert response["stored"] is False
-    assert response["warning"] == "review_action_logging_failed"
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "review action could not be recorded"
+    assert [a for a, _ in audited] == ["review_action_failed"]  # the attempt is on record, not a success
 
 
 def test_action_event_excludes_candidate_payloads_and_approved_answers(monkeypatch, tmp_path):

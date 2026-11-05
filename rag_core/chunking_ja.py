@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
-import unicodedata
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import config
@@ -52,6 +52,29 @@ _DEFAULT_TARGETS: Dict[str, Tuple[int, int]] = {
     ),
 }
 
+_TARGET_ENV = {
+    DOC_TYPE_FAQ: ("JA_CHUNK_TARGET_FAQ_MIN_CHARS", "JA_CHUNK_TARGET_FAQ_MAX_CHARS"),
+    DOC_TYPE_PROCEDURE: ("JA_CHUNK_TARGET_PROCEDURE_MIN_CHARS", "JA_CHUNK_TARGET_PROCEDURE_MAX_CHARS"),
+    DOC_TYPE_POLICY: ("JA_CHUNK_TARGET_POLICY_MIN_CHARS", "JA_CHUNK_TARGET_POLICY_MAX_CHARS"),
+    DOC_TYPE_TABLE: ("JA_CHUNK_TARGET_TABLE_MIN_CHARS", "JA_CHUNK_TARGET_TABLE_MAX_CHARS"),
+}
+
+
+def _targets(doc_type: str) -> Tuple[int, int]:
+    """(min, max) chunk size in characters. The environment (which the console's ingestion settings write) is read
+    at every call, so a change applies to the next document without a restart; an unusable pair gives the defaults."""
+    default = _DEFAULT_TARGETS[doc_type]
+    names = _TARGET_ENV.get(doc_type)
+    if not names:
+        return default
+    try:
+        low = int(os.environ.get(names[0], "") or default[0])
+        high = int(os.environ.get(names[1], "") or default[1])
+    except ValueError:
+        return default
+    return (low, high) if 0 < low < high else default
+
+
 # "1." / "1)" must not be followed by a digit (3.5%, 2024.4.1 are not
 # headings) and "1-2" must be followed by whitespace (03-1234, 2024-04-01 are
 # not headings).
@@ -68,6 +91,21 @@ _ARTICLE_BODY_MIN_CHARS = 30
 _STEP_RE = re.compile(r"^\s*([0-9]+[\.\)]|[①-⑳]|手順[0-9一二三四五六七八九十]+)\s*(.+)$")
 _TABLE_SPLIT_RE = re.compile(r"\s*\|\s*")
 _BLANK_LINE_RE = re.compile(r"\n{2,}")
+
+
+def detect_doc_type(text: str) -> str:
+    """The document type of a whole text when none was given: a question / answer list (at least three of each
+    marker, balanced, and a real share of the lines) is a FAQ; everything else is a policy document.
+    A procedure is not guessed: numbered articles and steps look alike, so it must be asked for."""
+    lines = [ln.strip() for ln in _nfkc_keeping_circled(text or "").splitlines() if ln.strip()]
+    if not lines:
+        return DOC_TYPE_POLICY
+    questions = sum(1 for ln in lines if _FAQ_QUESTION_RE.match(ln))
+    answers = sum(1 for ln in lines if _FAQ_ANSWER_RE.match(ln))
+    if (questions >= 3 and answers >= 3 and min(questions, answers) >= 0.6 * max(questions, answers)
+            and (questions + answers) >= 0.1 * len(lines)):
+        return DOC_TYPE_FAQ
+    return DOC_TYPE_POLICY
 
 
 def normalize_doc_type(doc_type: str) -> str:
@@ -102,7 +140,7 @@ def build_ja_chunk_records(
     if not norm_text:
         return []
 
-    target_min, target_max = _DEFAULT_TARGETS[normalized_doc_type]
+    target_min, target_max = _targets(normalized_doc_type)
     sections = _build_sections(
         norm_text,
         doc_type=normalized_doc_type,
@@ -135,9 +173,9 @@ def build_ja_chunk_records(
         section_path = [str(x).strip() for x in (section.get("section_path") or []) if str(x).strip()]
         parent_id = f"{id_prefix}{doc_id}:ja:{call_scope}:parent:{sec_idx}"
         parent_display_text = str(section.get("display_text") or "").strip()
-        parent_searchable_text = _join_non_empty(
+        parent_searchable_text = _search_form(_join_non_empty(
             [title, " > ".join(section_path), str(section.get("searchable_text") or parent_display_text)]
-        )
+        ))
 
         child_texts = _split_by_target(
             parent_display_text,
@@ -181,14 +219,14 @@ def build_ja_chunk_records(
             # Title + section path + the child's own text. The whole section
             # is no longer copied into every child (it made all children of a
             # section look alike to BM25 and diluted their vectors).
-            child_searchable_text = _join_non_empty(
+            child_searchable_text = _search_form(_join_non_empty(
                 [
                     title,
                     " > ".join(section_path),
                     str(section.get("faq_question") or ""),
                     child_display_text,
                 ]
-            )
+            ))
             child_record = _base_record(
                 chunk_id=child_id,
                 text=child_display_text,
@@ -246,8 +284,12 @@ def _base_record(
     }
 
 
+from rag_core.ja_text import fold_circled as _search_form  # noqa: E402  (circled numbers fold only in search text)
+from rag_core.ja_text import nfkc_keep_circled as _nfkc_keeping_circled  # noqa: E402
+
+
 def _normalize_text(text: str) -> str:
-    norm = unicodedata.normalize("NFKC", text or "")
+    norm = _nfkc_keeping_circled(text)
     norm = norm.replace("\r\n", "\n").replace("\r", "\n")
     norm = re.sub(r"[ \t]+", " ", norm)
     norm = re.sub(r"\n{3,}", "\n\n", norm)
@@ -263,6 +305,20 @@ def _page_scope_token(pages: Sequence[int]) -> str:
 
 def _join_non_empty(parts: Iterable[str]) -> str:
     return " ".join(str(p).strip() for p in parts if str(p).strip())
+
+
+def _join_wrapped(lines: Iterable[str]) -> str:
+    """Join the lines of one wrapped sentence. A line break inside Japanese text is not a space; only two
+    ASCII neighbours (English words) keep one."""
+    out = ""
+    for raw in lines:
+        part = str(raw).strip()
+        if not part:
+            continue
+        if out and out[-1].isascii() and part[0].isascii():
+            out += " "
+        out += part
+    return out
 
 
 def _build_sections(
@@ -281,7 +337,16 @@ def _build_sections(
     return _build_policy_sections(text, title=title, initial_path=inherited_section_path)
 
 
-_FAQ_QUESTION_START_RE = re.compile(r"^(Q[:：]|質問[:：])", flags=re.IGNORECASE)
+# Question / answer markers after NFKC: "Q:", "Q.", "Q1.", "Q1)", "質問1：", "問1 ", and for answers "A:", "A1.", "回答：", "答 ".
+# The Latin letter needs a punctuation mark right after its optional number (so "QRコード" is not a question);
+# 問/質問/答/回答 may also be followed by a space (they are not words of their own there).
+_FAQ_QUESTION_RE = re.compile(
+    r"^(?:(?:Q|質問|問)\s*\d{0,5}\s*[:.、)]|(?:質問|問)\s*\d{0,5}\s+)\s*(.*)$", flags=re.IGNORECASE
+)
+_FAQ_ANSWER_RE = re.compile(
+    r"^(?:(?:A|回答|答)\s*\d{0,5}\s*[:.、)]|(?:回答|答)\s*\d{0,5}\s+)\s*(.*)$", flags=re.IGNORECASE
+)
+_FAQ_QUESTION_START_RE = _FAQ_QUESTION_RE
 
 
 def _faq_blocks(text: str) -> List[str]:
@@ -310,19 +375,23 @@ def _build_faq_sections(text: str, *, title: str) -> List[Dict[str, Any]]:
         question = ""
         answer = ""
         term_aliases: List[str] = []
-        q_match = re.match(r"^(Q[:：]\s*|質問[:：]\s*)(.+)$", lines[0], flags=re.IGNORECASE)
+        q_match = _FAQ_QUESTION_RE.match(lines[0])
         if q_match:
-            question_lines = [q_match.group(2).strip()]
+            question_lines = [q_match.group(1)]
+            answer_lines: List[str] = []
+            in_answer = False
             for line in lines[1:]:
-                a_match = re.match(r"^(A[:：]\s*|回答[:：]\s*)(.+)$", line, flags=re.IGNORECASE)
+                a_match = _FAQ_ANSWER_RE.match(line)
                 if a_match:
-                    answer = a_match.group(2).strip()
-                elif answer:
-                    answer = f"{answer} {line}".strip()
+                    in_answer = True
+                    answer_lines = [a_match.group(1)]
+                elif in_answer:
+                    answer_lines.append(line)
                 else:
                     # A question wrapped onto several lines before "A:".
                     question_lines.append(line)
-            question = " ".join(question_lines).strip()
+            question = _join_wrapped(question_lines)
+            answer = _join_wrapped(answer_lines)
         elif "：" in lines[0] or ":" in lines[0]:
             head, tail = re.split(r"[:：]", lines[0], maxsplit=1)
             if 1 <= len(head.strip()) <= 80:
@@ -333,7 +402,7 @@ def _build_faq_sections(text: str, *, title: str) -> List[Dict[str, Any]]:
             first = lines[0]
             if len(first) <= 80:
                 question = first
-                answer = " ".join(lines[1:]).strip()
+                answer = _join_wrapped(lines[1:])
         display = _join_non_empty([f"Q: {question}" if question else "", f"A: {answer}" if answer else block])
         if not display:
             display = block

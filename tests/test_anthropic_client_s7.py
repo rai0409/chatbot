@@ -114,7 +114,7 @@ def test_a_stream_gives_the_pieces_as_openai_chunks_and_skips_empty_ones():
     assert pieces == ["原文", "です"]
 
 
-def test_the_sdks_errors_are_kept_so_the_retry_rules_and_the_breaker_work():
+def test_the_sdks_errors_are_kept_so_the_retry_rules_and_the_breaker_work(require_anthropic):
     import anthropic
     import httpx2
 
@@ -128,7 +128,7 @@ def test_the_sdks_errors_are_kept_so_the_retry_rules_and_the_breaker_work():
     assert llm._retryable(anthropic.APITimeoutError(request=request)) and llm._retryable(anthropic.APIConnectionError(request=request))
 
 
-def test_the_real_sdk_client_is_built_with_its_own_retries_off(monkeypatch):
+def test_the_real_sdk_client_is_built_with_its_own_retries_off(require_anthropic, monkeypatch):
     client = AnthropicChatClient(api_key="key-not-a-secret")
     assert client.sdk_client.max_retries == 0
     monkeypatch.setitem(__import__("sys").modules, "anthropic", None)  # the package is missing
@@ -164,7 +164,7 @@ def test_an_anthropic_profile_is_parsed_and_checked(tmp_path, monkeypatch):
         assert message in llm_profiles.validate()[0], bad
 
 
-def test_make_client_gives_an_anthropic_client_and_needs_the_key(tmp_path, monkeypatch):
+def test_make_client_gives_an_anthropic_client_and_needs_the_key(require_anthropic, tmp_path, monkeypatch):
     _file(tmp_path, monkeypatch, {"provider": "anthropic", "api_key_env": "CLAUDE_KEY_FOR_TEST", "model": "claude-haiku-5-5", "effort": "low"})
     profile = llm_profiles.all_profiles()["claude"]
     monkeypatch.delenv("CLAUDE_KEY_FOR_TEST", raising=False)

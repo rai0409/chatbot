@@ -12,9 +12,10 @@ installed there.
 """
 
 from docextract.images import load_image
+from docextract.isolation import IsolatedFailure, run_isolated
 from docextract.models import OcrLine, OcrResult, Table, TableRegion
 from docextract.ocr import available_engines, ocr_available, ocr_image
-from docextract.pdf import PdfUnavailable, open_pdf
+from docextract.pdf import PdfEncrypted, PdfUnavailable, open_pdf
 from docextract.tables import (
     BackendUnavailable,
     extract_pdf_tables,
@@ -26,6 +27,8 @@ from docextract.tables import (
 __version__ = "1.1.0"
 
 __all__ = [
+    "IsolatedFailure",
+    "run_isolated",
     "BackendUnavailable",
     "OcrLine",
     "OcrResult",
@@ -39,6 +42,7 @@ __all__ = [
     "ocr_image",
     "open_pdf",
     "pdfplumber_page_tables",
+    "PdfEncrypted",
     "PdfUnavailable",
     "resolve_backend",
 ]

@@ -4,7 +4,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from urllib.parse import quote
 
@@ -32,6 +32,8 @@ from webapi.admin_auth import (
 )
 from rag_core import integrations, llm_gateway
 from webapi.routers import access as access_router
+from webapi.routers import approved_qa as approved_qa_router
+from webapi.routers import backups as backups_router
 from webapi.routers import audit as audit_router
 from webapi.routers import console as console_router
 from webapi.routers import contracts as contracts_router
@@ -201,6 +203,7 @@ for _router_module in (
     records_router, golden_router, usage_router, audit_router, governance_router, access_router,
     ingestion_router, contracts_router, extraction_router, sources_router, synonyms_router,
     infra_router, auth_router, admin_core_router, conversations_router, chat_source_router, chat_router,
+    approved_qa_router, backups_router,
 ):
     app.include_router(_router_module.router)
 # The LLM gateway (rag_core/llm_gateway.py): breaker changes go to the usage log, its counters to the metrics.
@@ -333,20 +336,23 @@ def admin_review_action(req: ReviewActionRequest, request: Request = None, _admi
         operator_note=req.operator_note,
         status_after=status_after,
         tags=req.tags,
+        actor=admin_common.admin_actor(scope),
     )
     stored = append_review_action_event(event)
+    if not stored:
+        # Not recorded = not done: answering "ok" would let the operator believe the item was handled.
+        _audit_admin(scope, "review_action_failed", tenant_id=req.tenant_id or "default", review_id=review_id,
+                     action_type=action_type, status_after=status_after)
+        raise HTTPException(status_code=503, detail="review action could not be recorded")
     _audit_admin(scope, "review_action", tenant_id=req.tenant_id or "default", review_id=review_id,
                  action_type=action_type, status_after=status_after)
-    response: Dict[str, Any] = {
+    return {
         "ok": True,
-        "stored": stored,
+        "stored": True,
         "action_id": event["action_id"],
         "review_id": event["review_id"],
         "action_type": event["action_type"],
     }
-    if not stored:
-        response["warning"] = "review_action_logging_failed"
-    return response
 
 
 # The routes moved to webapi/routers/*; the names below stay reachable as attributes of this module
@@ -375,8 +381,8 @@ _admin_label = admin_common.admin_label
 
 
 def __getattr__(name: str):
-    # The approved-QA index cache lives in the chat router (it reassigns it); read it from there so
-    # main._approved_qa_index is always the current value.
-    if name in ("_approved_qa_index", "_approved_qa_index_path"):
+    # The approved-QA index cache lives in the chat router; read it from there so
+    # main._approved_qa_cache is the router's own dict.
+    if name == "_approved_qa_cache":
         return getattr(chat_router, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

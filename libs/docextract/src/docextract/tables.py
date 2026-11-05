@@ -108,6 +108,46 @@ def _min_confidence() -> float:
 # --- pdfplumber -------------------------------------------------------------------------------
 
 
+def _cuts_running_text(page, table) -> bool:
+    """True when a column boundary of a text-alignment table runs through connected text.
+
+    In a real table the boundary between two columns lies in a gap of white space. A list of lines that merely
+    start at the same x ("Q1. ...", "A1. ...") is split by the alignment detector in the middle of sentences: on
+    most lines the characters left and right of the boundary touch each other (or one crosses it)."""
+    try:
+        cells = list(getattr(table, "cells", None) or [])
+        left, top, right, bottom = table.bbox
+        chars = [c for c in page.chars if left - 1 <= float(c["x0"]) and float(c["x1"]) <= right + 1
+                 and top - 1 <= float(c["top"]) and float(c["bottom"]) <= bottom + 1 and str(c.get("text") or "").strip()]
+    except Exception:  # noqa: BLE001 - cannot tell: keep the table
+        return False
+    if not cells or not chars:
+        return False
+    boundaries = sorted({round(float(c[2]), 1) for c in cells if float(c[2]) < right - 1})
+    lines: dict = {}
+    for ch in chars:
+        lines.setdefault(round(float(ch["top"]) / 3), []).append(ch)
+    for boundary in boundaries:
+        considered = bridged = 0
+        for line in lines.values():
+            before = [c for c in line if float(c["x1"]) <= boundary + 0.5]
+            after = [c for c in line if float(c["x0"]) >= boundary - 0.5]
+            crossing = any(float(c["x0"]) < boundary - 0.5 and float(c["x1"]) > boundary + 0.5 for c in line)
+            if not crossing and not (before and after):
+                continue
+            considered += 1
+            if crossing:
+                bridged += 1
+                continue
+            last, first = max(before, key=lambda c: float(c["x1"])), min(after, key=lambda c: float(c["x0"]))
+            size = float(last.get("size") or 10.0)
+            if float(first["x0"]) - float(last["x1"]) < 0.6 * size:
+                bridged += 1
+        if considered >= 2 and bridged >= 0.5 * considered:
+            return True
+    return False
+
+
 def pdfplumber_page_tables(page, page_number: int = 0, *, borderless: Optional[bool] = None) -> List[Table]:
     """Tables of one pdfplumber page: ruled tables first; borderless ones
     (text alignment) only when the page has no ruled table."""
@@ -136,6 +176,8 @@ def pdfplumber_page_tables(page, page_number: int = 0, *, borderless: Optional[b
         except Exception:  # noqa: BLE001
             continue
         score = plausible_borderless(grid)
+        if _cuts_running_text(page, table):
+            continue  # the "columns" are cut through sentences: a list of lines, not a table
         if score >= _min_confidence():
             made = _make_table(grid, page_number, table.bbox, "pdfplumber:text", score)
             if made:

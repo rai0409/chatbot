@@ -12,61 +12,28 @@ import hashlib
 import json
 import os
 import re
-import unicodedata
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import config
 from rag_core import extraction
-from rag_core.chunking_ja import build_ja_chunk_records
+from rag_core.chunking_ja import DOC_TYPE_POLICY, DOC_TYPE_PROCEDURE, _HEADING_RE, build_ja_chunk_records, detect_doc_type, normalize_doc_type
 from rag_core.document_converters.base import table_rows_to_chunks
-from rag_core.ingest_preprocess import PREPROCESS_VERSION, PreprocessOptions, preprocess_rows
+from rag_core.ingest_preprocess import PREPROCESS_VERSION, preprocess_options, preprocess_rows
 
 
-BULLET_RE = re.compile(r"^(\s*([0-9]+[\.)]|[①-⑳]|[-•・※▶]))")
+from rag_core.ja_text import nfkc_keep_circled
+from rag_core.line_joining import join_separator as _join_separator  # shared with the generic preprocessing
+
 _JA_CHAR = r"[ぁ-んァ-ヴー一-龥々〆〤]"
-_JA_EDGE_RE = re.compile(_JA_CHAR)
 _OCR_JA_SPACE_RE = re.compile(rf"(?<={_JA_CHAR})[ 　]+(?={_JA_CHAR})")
-# A line made only of numbers, units and separators ("100", "2024/4/1", "12,000円").
-_NUMERIC_LINE_RE = re.compile(r"^[\d,.\-−+%/:()（）年月日円万億 ]+$")
-# Two or more inner spaces or a tab usually mean table columns.
-_TABLE_LINE_RE = re.compile(r"\S(?: {2,}|\t)\S|\|")
-_SHORT_LINE_CHARS = 12
-_SENTENCE_END = "。.!?！？"
 
 
-def _is_numeric_line(line: str) -> bool:
-    return bool(_NUMERIC_LINE_RE.fullmatch(line.strip()))
-
-
-def _join_separator(prev: str, nxt: str) -> Optional[str]:
-    """Separator used to join two physical lines, or None to keep them apart.
-
-    Japanese on both sides joins without a space; anything else joins with a
-    space so "100" and "200" never become "100200". Numeric, short and
-    table-like lines are never joined.
-    """
-    if not prev or not nxt:
-        return None
-    if prev[-1] in _SENTENCE_END:
-        return None
-    if BULLET_RE.match(nxt):
-        return None
-    if _is_numeric_line(prev) or _is_numeric_line(nxt):
-        return None
-    if _TABLE_LINE_RE.search(prev) or _TABLE_LINE_RE.search(nxt):
-        return None
-    if len(prev) <= _SHORT_LINE_CHARS:
-        return None
-    if _JA_EDGE_RE.fullmatch(prev[-1]) and _JA_EDGE_RE.fullmatch(nxt[0]):
-        return ""
-    if prev.endswith("-") and len(prev) >= 2 and prev[-2].isascii() and prev[-2].isalpha() and nxt[0].isascii() and nxt[0].isalpha():
-        return "\0"  # English word broken by a hyphen: drop the hyphen
-    return " "
-
-
-def _normalize_text(text: str, *, ocr: bool = False) -> str:
-    text = unicodedata.normalize("NFKC", text or "")
+def _normalize_text(text: str, *, ocr: bool = False, join: bool = True) -> str:
+    """NFKC (keeping circled numbers and symbols), whitespace cleanup and, with join=True, the joining of the lines
+    a PDF layout wrapped. join=False keeps every physical line: header / footer detection and heading detection
+    need them (a header glued to the next line cannot be recognised as a repeated line)."""
+    text = nfkc_keep_circled(text or "")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     if ocr:
         # OCR inserts spaces between Japanese characters.
@@ -86,7 +53,7 @@ def _normalize_text(text: str, *, ocr: bool = False) -> str:
         if not buf:
             buf = line
             continue
-        sep = _join_separator(buf, line)
+        sep = _join_separator(buf, line) if join else None
         if sep is None:
             out.append(buf)
             buf = line
@@ -100,6 +67,31 @@ def _normalize_text(text: str, *, ocr: bool = False) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" *\n *", "\n", text)
     return text.strip()
+
+
+def _tables_of_page(page) -> list:
+    """The tables of one page. On a vertical (縦書き) page the columns of characters line up like table cells, so
+    text-alignment ("borderless") detection would turn the text into table rows; only ruled tables are looked for."""
+    if page.is_vertical():
+        return page.tables(borderless=False)
+    return page.tables()
+
+
+def _mark_headings(text: str, headings: Sequence[str]) -> str:
+    """Put a blank line around each heading line and start it with the heading marker "■" (which the chunker
+    reads as a section heading), unless it already is one ("第3条", "1.", ...)."""
+    wanted = {" ".join(h.split()) for h in headings if h.strip()}
+    out: List[str] = []
+    for line in text.split("\n"):
+        key = " ".join(line.split())
+        if key and key in wanted:
+            if out and out[-1] != "":
+                out.append("")
+            out.append(line if _HEADING_RE.match(key) else f"■ {key}")
+            out.append("")
+        else:
+            out.append(line)
+    return "\n".join(out)
 
 
 def _is_garbled(text: str) -> bool:
@@ -378,7 +370,7 @@ def _extract_pages(
             try:
                 page_heights[page_num] = page.height
                 if backend == "pdfplumber":
-                    page_found = page.tables()
+                    page_found = _tables_of_page(page)
                     found_tables.extend(page_found)
                     for table in page_found:
                         regions_by_page.setdefault(page_num, []).append(table.regions[0].bbox)
@@ -387,7 +379,7 @@ def _extract_pages(
                 if page.is_vertical():
                     # 縦書き: read top-to-bottom, right-to-left (docextract.pdf).
                     report["pages_vertical"].append(page_num)
-                norm_text = _normalize_text(_text_outside(page, boxes) if boxes else page.text())
+                norm_text = _normalize_text(_text_outside(page, boxes) if boxes else page.text(), join=False)
                 garbled = _is_garbled(norm_text)
                 # A page that is mostly a (located) table has little text outside
                 # it; that is not a scanned page (OCR would duplicate the table).
@@ -398,7 +390,7 @@ def _extract_pages(
                     report["pages_garbled"].append(page_num)
                 if needs_ocr and ocr:
                     result = _ocr_page_result(page, dpi=dpi, lang=ocr_lang)
-                    norm_text = _normalize_text(result.text, ocr=True)
+                    norm_text = _normalize_text(result.text, ocr=True, join=False)
                     confidence = result.confidence
                     method = "ocr_fallback"
                     report["pages_ocr"] += 1
@@ -413,7 +405,7 @@ def _extract_pages(
                     image_boxes = _image_boxes(page, image_min_area)
                     if image_boxes:
                         image_text, confidence = _ocr_regions_result(page, image_boxes, dpi=dpi, lang=ocr_lang)
-                        image_text = _normalize_text(image_text, ocr=True)
+                        image_text = _normalize_text(image_text, ocr=True, join=False)
                         if image_text:
                             norm_text = f"{norm_text}\n\n{image_text}".strip()
                             method = "text+ocr_images"
@@ -428,7 +420,14 @@ def _extract_pages(
                     continue
                 if method == "text":
                     report["pages_text"] += 1
-                pages.append({"page": page_num, "text": norm_text, "extraction_method": method, "ocr_confidence": confidence})
+                headings: List[str] = []
+                if method == "text" and not page.is_vertical():
+                    try:
+                        headings = [_normalize_text(h, join=False) for h in page.heading_lines()]
+                    except Exception:  # noqa: BLE001 - heading hints are optional
+                        headings = []
+                pages.append({"page": page_num, "text": norm_text, "extraction_method": method,
+                              "ocr_confidence": confidence, "heading_lines": headings})
             finally:
                 page.close()  # long PDFs: free each page's parsed objects
     finally:
@@ -489,13 +488,28 @@ def convert_pdf_to_rows(
         ]
         cleaned, page_report = preprocess_rows(
             page_rows,
-            PreprocessOptions(join_broken_lines=False, attach_quantities=False),
+            preprocess_options(join_broken_lines=False, attach_quantities=False),
         )
         for page, row in zip(pages, cleaned):
             page["text"] = str(row.get("text") or "").strip()
         report["page_preprocess"] = {
             k: page_report.get(k) for k in ("repeated_lines_removed", "repeated_line_keys", "rows_changed")
         }
+
+    # Headers/footers are gone: now headings are marked and the wrapped lines of each page are joined.
+    # (Joining first glued a header to the first line of the page, so it was never recognised as a repeated line.)
+    if str(doc_type or "").strip().lower() == "auto":
+        doc_type = detect_doc_type("\n\n".join(p["text"] for p in pages))
+    report["doc_type"] = normalize_doc_type(doc_type)
+    mark_headings = (chunking != "fixed" and _env_flag("DOCEXTRACT_HEADINGS", True)
+                     and normalize_doc_type(doc_type) in (DOC_TYPE_POLICY, DOC_TYPE_PROCEDURE))
+    for page in pages:
+        text = page["text"]
+        if mark_headings and page.get("heading_lines"):
+            text = _mark_headings(text, page["heading_lines"])
+        page["text"] = _normalize_text(text, join=_env_flag("INGEST_PREPROCESS_JOIN_LINES", True))
+        page.pop("heading_lines", None)
+    pages = [p for p in pages if p["text"]]
 
     rows: List[Dict[str, Any]] = []
     chunk_index = 0
@@ -595,7 +609,7 @@ def convert_pdf_to_rows(
     if preprocess and rows:
         rows, chunk_report = preprocess_rows(
             rows,
-            PreprocessOptions(clean_text=False, join_broken_lines=False, remove_repeated_lines=False),
+            preprocess_options(clean_text=False, join_broken_lines=False, remove_repeated_lines=False),
         )
         report["quantities_by_kind"] = chunk_report.get("quantities_by_kind")
         report["invalid_quantities"] = chunk_report.get("invalid_quantities")

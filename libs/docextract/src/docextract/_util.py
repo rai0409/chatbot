@@ -113,9 +113,19 @@ def plausible_borderless(rows: List[List[str]]) -> float:
     return round(min(0.85, 0.45 + 0.2 * fill + 0.35 * numeric), 3)
 
 
+class TableHtmlTooComplex(ValueError):
+    """Model-produced table HTML beyond the nesting / size limits."""
+
+
+_MAX_TABLE_DEPTH = 8
+_MAX_TABLE_CELLS = 200_000
+_MAX_GRID_ENTRIES = 1_000_000  # cells after rowspan/colspan expansion
+
+
 class _HtmlTableParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
+        self._cell_count = 0
         self.tables: List[List[List[Dict[str, Any]]]] = []
         self._tables: List[List[List[Dict[str, Any]]]] = []  # open tables
         self._cells: List[Dict[str, Any]] = []  # open cells (nested tables)
@@ -130,12 +140,17 @@ class _HtmlTableParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if tag == "table":
+            if len(self._tables) >= _MAX_TABLE_DEPTH:
+                raise TableHtmlTooComplex("tables are nested too deeply")
             self._tables.append([])
         elif tag == "tr" and self._tables:
             self._tables[-1].append([])
         elif tag in ("td", "th") and self._tables:
             if not self._tables[-1]:
                 self._tables[-1].append([])
+            self._cell_count += 1
+            if self._cell_count > _MAX_TABLE_CELLS:
+                raise TableHtmlTooComplex("too many cells")
             cell = {"text": "", "rowspan": self._span(attrs, "rowspan"), "colspan": self._span(attrs, "colspan")}
             self._tables[-1][-1].append(cell)
             self._cells.append(cell)
@@ -157,8 +172,17 @@ class _HtmlTableParser(HTMLParser):
 
 def html_tables(html: str) -> List[List[List[str]]]:
     """Every <table> as a grid; rowspan/colspan values are repeated."""
+    html = html or ""
+    if len(html) > int(env_float("DOCEXTRACT_MAX_TABLE_HTML_CHARS", 2_000_000)):
+        return []
     parser = _HtmlTableParser()
-    parser.feed(html or "")
+    try:
+        parser.feed(html)
+        entries = sum(c["rowspan"] * c["colspan"] for t in parser.tables for row in t for c in row)
+        if entries > _MAX_GRID_ENTRIES:
+            raise TableHtmlTooComplex("spans expand too far")
+    except TableHtmlTooComplex:
+        return []  # fail closed: the caller falls back to text lines
     grids: List[List[List[str]]] = []
     for table in parser.tables:
         grid: Dict[tuple, str] = {}

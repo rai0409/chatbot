@@ -33,6 +33,60 @@ export interface RawDocumentsBody {
   collection: string;
   execute: boolean;
   async_job: boolean;
+  /** How PDFs are split: auto, policy, faq, procedure (omitted: auto). */
+  doc_type?: string;
+  /** OCR for pages without text (omitted: the INGEST_PDF_OCR setting). */
+  ocr?: boolean;
+}
+
+export type SettingKind = "int" | "float" | "bool" | "choice";
+export type SettingSource = "override" | "environment" | "default";
+
+export interface IngestSetting {
+  name: string;
+  key: string;
+  kind: SettingKind;
+  group: string;
+  default: number | boolean | string;
+  value: number | boolean | string;
+  source: SettingSource;
+  minimum: number | null;
+  maximum: number | null;
+  choices: string[];
+  unit: string;
+  /** "workers": the conversion workers are restarted when it changes. */
+  restart: string;
+  by: string | null;
+  reason: string | null;
+  at: string | null;
+}
+
+export interface SettingChangeRow {
+  rev: number;
+  at: string;
+  name: string;
+  by: string;
+  reason: string;
+  before: unknown;
+  after: unknown;
+}
+
+export interface IngestSettings {
+  rev: number;
+  settings: IngestSetting[];
+  groups: string[];
+  history: SettingChangeRow[];
+  /** Only the installation administrator changes the settings. */
+  can_edit: boolean;
+}
+
+export interface SettingChange {
+  name: string;
+  value?: number | boolean | string;
+  reset?: boolean;
+  reason: string;
+  actor: string;
+  expected_rev?: number;
 }
 
 export interface PromoteBody {
@@ -88,4 +142,6 @@ export const ingestionApi = {
   job: (id: string) => request<IngestionJob>(`/admin/ingestion/jobs/${encodeURIComponent(id)}`),
   promote: (body: PromoteBody) => post<Report>("/admin/ingestion/promote", body),
   deleteDocuments: (body: DeleteBody) => post<Report>("/admin/ingestion/documents/delete", body),
+  settings: () => request<IngestSettings>("/admin/ingestion/settings"),
+  changeSetting: (body: SettingChange) => post<{ ok: boolean; rev: number }>("/admin/ingestion/settings", body),
 };
