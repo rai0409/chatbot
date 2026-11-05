@@ -2,14 +2,15 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IngestionPage } from "../pages/Ingestion";
 import { jsonResponse } from "./fixtures";
-import { JOBS, JOB_DETAIL_DONE, JOB_DETAIL_OK, UPLOAD_RESULT } from "./ingestionFixtures";
+import { JOBS, JOB_DETAIL_DONE, JOB_DETAIL_OK, SETTINGS, UPLOAD_RESULT } from "./ingestionFixtures";
 
 afterEach(cleanup);
 
 type Handler = (init: RequestInit) => Response;
 
 /** A fetch that answers by "METHOD path" (the query string is ignored in the key); anything else is a 404. */
-function routes(table: Record<string, Handler | Response | unknown>) {
+function routes(given: Record<string, Handler | Response | unknown>) {
+  const table: Record<string, Handler | Response | unknown> = { "GET /admin/ingestion/settings": SETTINGS, ...given }; // every page load also reads the settings
   const mock = vi.fn((url: string, init: RequestInit = {}) => {
     const key = `${(init.method ?? "GET").toUpperCase()} ${url.split("?")[0]}`;
     const entry = table[key];

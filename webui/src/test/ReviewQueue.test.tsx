@@ -104,6 +104,20 @@ describe("the review queue page", () => {
     expect(mock).toHaveBeenCalledTimes(1);
   });
 
+  it("tells the operator a 503 means the action was NOT recorded, and keeps the form usable", async () => {
+    stub((url) => {
+      if (url !== "/admin/review/action") return jsonResponse(REVIEW_RESPONSE);
+      return jsonResponse({ detail: "review action could not be recorded" }, 503);
+    });
+    render(<ReviewQueuePage />);
+    const card = await screen.findByRole("listitem", { name: "rv_001" });
+    const submit = within(card).getByRole("button", { name: "Log action" });
+    fireEvent.click(submit);
+    expect(await within(card).findByRole("alert")).toHaveTextContent("記録されていません");
+    expect(within(card).queryByText(/記録しました/)).not.toBeInTheDocument();
+    expect(submit).toBeEnabled();
+  });
+
   it("shows a warning when the action was accepted but not stored, and a clear 403", async () => {
     let n = 0;
     stub((url) => {

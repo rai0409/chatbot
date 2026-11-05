@@ -165,8 +165,7 @@ def test_approved_chat_increments_approved_mode(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
-    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_cache", {})
     metrics_registry.reset()
 
     main.chat(main.ChatRequest(question="営業時間を教えてください"))

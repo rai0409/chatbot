@@ -2,6 +2,8 @@
 import { ApiError, LOGIN_URL, request } from "./client";
 
 export type LineState = "open" | "corrected" | "confirmed";
+/** With EXTRACTION_REQUIRE_APPROVAL a correction waits until a different person approves it. */
+export type Approval = "awaiting" | "approved" | null;
 
 export interface ExtractionDoc {
   source_doc: string;
@@ -11,6 +13,8 @@ export interface ExtractionDoc {
   open: number;
   corrected: number;
   confirmed: number;
+  /** Corrections that wait for a second person (0 unless approval is required). */
+  awaiting_approval?: number;
   preview_available: boolean;
 }
 
@@ -21,6 +25,7 @@ export interface ReviewItem {
   text: string;
   confidence: number | null;
   state: LineState;
+  approval?: Approval;
 }
 
 export interface PageLine {
@@ -30,6 +35,9 @@ export interface PageLine {
   /** [left, top, right, bottom] in the pixels of the page image, when the OCR gave a position. */
   bbox?: number[] | null;
   state: LineState;
+  approval?: Approval;
+  corrected_by?: string | null;
+  approved_by?: string | null;
 }
 
 export interface PageData {
@@ -40,6 +48,8 @@ export interface PageData {
   confidence: number | null;
   preview_available: boolean;
   threshold: number;
+  /** True when a correction needs the approval of a different person before it enters the index. */
+  require_approval?: boolean;
   lines: PageLine[];
 }
 
@@ -94,8 +104,13 @@ export const extractionApi = {
     return response.blob();
   },
 
-  correct: (tenant: string, ref: LineRef, text: string) => post<unknown>("/admin/extraction/correct", { tenant_id: tenant, ...ref, text }),
-  confirm: (tenant: string, ref: LineRef) => post<unknown>("/admin/extraction/confirm", { tenant_id: tenant, ...ref }),
+  // `actor` is the name of the person at the keyboard: it is kept in the record, and an approval needs it.
+  correct: (tenant: string, ref: LineRef, text: string, actor = "") =>
+    post<unknown>("/admin/extraction/correct", { tenant_id: tenant, ...ref, text, ...(actor ? { actor } : {}) }),
+  confirm: (tenant: string, ref: LineRef, actor = "") =>
+    post<unknown>("/admin/extraction/confirm", { tenant_id: tenant, ...ref, ...(actor ? { actor } : {}) }),
+  approve: (tenant: string, ref: LineRef, actor: string) =>
+    post<unknown>("/admin/extraction/approve", { tenant_id: tenant, ...ref, actor }),
   revert: (tenant: string, ref: LineRef) => post<{ reverted: boolean }>("/admin/extraction/revert", { tenant_id: tenant, ...ref }),
   reingest: (tenant: string, sourceDoc: string) =>
     post<ReingestResult>("/admin/extraction/reingest", { tenant_id: tenant, source_doc: sourceDoc }),

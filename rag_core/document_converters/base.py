@@ -160,8 +160,13 @@ def table_rows_to_chunks(
     parser: str,
     start_index: int,
     extra_builder=None,
+    table_title: str = "",
+    summary_rows: Sequence[int] = (),
 ) -> List[Dict[str, Any]]:
-    """Convert header + (row_number, cells) pairs into row/qa_pair chunks."""
+    """Convert header + (row_number, cells) pairs into row/qa_pair chunks.
+
+    table_title: the title found above the table (shown in the section path and the search text of every row).
+    summary_rows: row numbers of total rows; their chunks carry row_kind="summary"."""
     headers = [compact(h) for h in headers]
     qa = detect_qa_columns(headers)
     chunks: List[Dict[str, Any]] = []
@@ -181,6 +186,8 @@ def table_rows_to_chunks(
         }
         if extra_builder:
             extra.update(extra_builder(row_number, values))
+        if row_number in summary_rows:
+            extra["row_kind"] = "summary"
         location = f"{location_prefix}r{row_number}"
         if qa is not None:
             q_idx, a_idx = qa
@@ -193,7 +200,7 @@ def table_rows_to_chunks(
                     if v and j not in (q_idx, a_idx)
                 ]
                 text = f"Q: {question}\nA: {answer}"
-                searchable = "\n".join([text, *others])
+                searchable = "\n".join(([table_title] if table_title else []) + [text, *others])
                 chunks.append(
                     build_chunk(
                         source_type=source_type,
@@ -206,6 +213,8 @@ def table_rows_to_chunks(
                         tenant_id=tenant_id,
                         doc_type=doc_type,
                         parser=parser,
+                        title=table_title or None,
+                        section_path=[table_title] if table_title else None,
                         extra=extra,
                     )
                 )
@@ -218,11 +227,14 @@ def table_rows_to_chunks(
                 source_doc=source_doc,
                 location=location,
                 text=text,
+                searchable_text=f"{table_title}\n{text}" if table_title else None,
                 chunk_type="row",
                 chunk_index=index,
                 tenant_id=tenant_id,
                 doc_type=doc_type,
                 parser=parser,
+                title=table_title or None,
+                section_path=[table_title] if table_title else None,
                 extra=extra,
             )
         )

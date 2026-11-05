@@ -230,8 +230,7 @@ def test_chat_approved_lookup_respects_tenant(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
-    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_cache", {})
 
     payload_a = main.chat(main.ChatRequest(question="営業時間を教えてください", tenant_id="tenant_a"))
     payload_b = main.chat(main.ChatRequest(question="営業時間を教えてください", tenant_id="tenant_b"))

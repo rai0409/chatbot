@@ -7,13 +7,15 @@ interface Props {
   busy: boolean;
   onSave: (text: string) => void;
   onConfirm: () => void;
+  /** Shown when the correction waits for a second person. */
+  onApprove?: () => void;
   onRevert: () => void;
   onReingest: () => void;
   onClose: () => void;
 }
 
 /** Edit one line. Enter saves, Esc closes (the parent puts the focus back), Shift+Enter is a line break. */
-export function LineEditor({ line, busy, onSave, onConfirm, onRevert, onReingest, onClose }: Props) {
+export function LineEditor({ line, busy, onSave, onConfirm, onApprove, onRevert, onReingest, onClose }: Props) {
   const [text, setText] = useState(line.text);
   const [problem, setProblem] = useState("");
   const area = useRef<HTMLTextAreaElement>(null);
@@ -33,6 +35,8 @@ export function LineEditor({ line, busy, onSave, onConfirm, onRevert, onReingest
       <h3 id="ex-editor-title">{x.editorTitle}</h3>
       <p className="muted">{x.ocrText(line.text)}</p>
       {line.state !== "open" && <p>{x.alreadyDecided(x.states[line.state] ?? line.state)}</p>}
+      {line.approval === "awaiting" && <p role="status">{x.approvalNeeded(line.corrected_by ?? "")}</p>}
+      {line.approval === "approved" && <p role="status">{x.approvalDone(line.approved_by ?? "")}</p>}
       <label className="ex-field">
         {x.textLabel}
         <textarea
@@ -72,6 +76,11 @@ export function LineEditor({ line, busy, onSave, onConfirm, onRevert, onReingest
         <button type="button" disabled={busy} onClick={onConfirm}>
           {x.confirm}
         </button>
+        {line.approval === "awaiting" && onApprove && (
+          <button type="button" disabled={busy} onClick={onApprove}>
+            {x.approve}
+          </button>
+        )}
         <button type="button" disabled={busy || line.state === "open"} onClick={onRevert}>
           {x.revert}
         </button>

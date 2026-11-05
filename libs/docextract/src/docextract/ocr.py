@@ -95,7 +95,11 @@ def _prepare_for_tesseract(image):
     short = min(gray.size)
     if short < 1000:
         factor = min(3.0, 1000.0 / max(1, short))
-        gray = gray.resize((int(gray.width * factor), int(gray.height * factor)), Image.LANCZOS)
+        # A very long strip (e.g. 100000 x 600 px) times 3 would allocate gigabytes.
+        max_pixels = env_float("DOCEXTRACT_OCR_MAX_PIXELS", 40_000_000)
+        factor = min(factor, (max_pixels / max(1, gray.width * gray.height)) ** 0.5)
+        if factor > 1.0:
+            gray = gray.resize((int(gray.width * factor), int(gray.height * factor)), Image.LANCZOS)
     return gray
 
 
@@ -119,7 +123,11 @@ def _tesseract_pass(image, lang: str, psm: str) -> OcrResult:
     import pytesseract
 
     data = pytesseract.image_to_data(
-        image, lang=lang, config=f"--oem 1 --psm {psm}", output_type=pytesseract.Output.DICT
+        image,
+        lang=lang,
+        config=f"--oem 1 --psm {psm}",
+        output_type=pytesseract.Output.DICT,
+        timeout=int(env_float("DOCEXTRACT_OCR_TIMEOUT_SECONDS", 120)),  # kills a hung tesseract
     )
     grouped: Dict[tuple, List[tuple]] = {}
     for i, word in enumerate(data.get("text") or []):

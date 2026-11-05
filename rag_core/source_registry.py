@@ -107,6 +107,25 @@ def list_sources(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     return [r for r in rows if tenant_id is None or r["tenant_id"] == tenant_id]
 
 
+ACCESS_MODELS = ("tenant_wide",)
+
+
+def check_access_model(options: Mapping[str, Any]) -> None:
+    """A remote source's per-file permissions are not carried into search: whoever may query the tenant may
+    read every mirrored file. options.access_model="tenant_wide" is the administrator's statement that this is
+    acceptable for the folder; production refuses a source without it (development: optional)."""
+    import os
+
+    value = options.get("access_model")
+    if value is not None and value not in ACCESS_MODELS:
+        raise SourceError(f"options.access_model must be one of: {', '.join(ACCESS_MODELS)}")
+    if value is None and str(os.getenv("APP_ENV", "")).strip().lower() == "production":
+        raise SourceError(
+            "options.access_model=tenant_wide is required in production: SharePoint file permissions are not "
+            "applied in search, so every user of the tenant can read every synced file"
+        )
+
+
 def create(
     source_id: str, *, tenant_id: str, kind: str = "folder", path: Optional[str] = None,
     options: Optional[Mapping[str, Any]] = None, schedule_minutes: int = 0, collection: Optional[str] = None,
@@ -146,6 +165,7 @@ def create(
         for key in ("drive_id", "folder"):
             if not str(opts.get(key) or "").strip():
                 raise SourceError(f"a sharepoint source needs options.{key}")
+        check_access_model(opts)
         if not str(opts["folder"]).startswith("/"):
             raise SourceError("options.folder must start with '/', e.g. /Shared Documents/Policies")
         if not _inside_allowed_roots(mirror_dir(source_id)):

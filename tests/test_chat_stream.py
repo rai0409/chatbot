@@ -211,8 +211,7 @@ def test_chat_stream_endpoint_approved_single_event(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
-    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_cache", {})
     monkeypatch.setattr(chat_router, "ensure_openai_client", _forbidden_client)
 
     response = main.chat_stream(main.ChatRequest(question="営業時間を教えてください"))
@@ -274,3 +273,22 @@ def _has_api_auth(route: APIRoute) -> bool:
 def test_chat_stream_route_has_api_auth_and_chat_unchanged():
     assert _has_api_auth(_route("/chat/stream", "POST"))
     assert _has_api_auth(_route("/chat", "POST"))
+
+
+def test_chat_stream_cache_hit_is_recorded_like_the_chat_route(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "APPROVED_QA_ENABLED", False)
+    monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr(chat_router, "ensure_openai_client", _forbidden_client)
+    cached = {"answer_text": "キャッシュ済みの回答です。", "citations": [], "retrieved": [], "answer_mode": "grounded",
+              "guard_reason": None, "used_fallback": False}
+    monkeypatch.setattr(chat_router.answer_cache, "enabled", lambda: True)
+    monkeypatch.setattr(chat_router.answer_cache, "get", lambda key: dict(cached))
+    monkeypatch.setattr(chat_router, "_cache_validation_passed", lambda payload: True)
+    recorded = []
+    monkeypatch.setattr(chat_router.records_hook, "record_chat", lambda *a, **k: recorded.append(k))
+
+    response = main.chat_stream(main.ChatRequest(question="キャッシュの質問です"))
+    events = _parse_sse(_collect_body(response))
+
+    assert [name for name, _ in events] == ["final"]
+    assert len(recorded) == 1 and recorded[0]["source"] == "cache"

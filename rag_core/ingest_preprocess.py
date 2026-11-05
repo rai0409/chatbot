@@ -2,8 +2,8 @@
 
 Steps (each switchable, each counted in the report):
 1. display-safe cleanup (invisible characters, whitespace) of text fields;
-2. joining Japanese lines broken by PDF layout (単一改行 between Japanese
-   characters; paragraph breaks are kept);
+2. joining Japanese lines broken by PDF layout (rag_core/line_joining.py: cautious, so titles, list items,
+   names and numbered steps stay on their own lines; paragraph breaks are kept);
 3. removing header/footer lines that repeat across pages of one document
    (digits masked, so "- 3 -" and "- 4 -" count as the same line);
 4. attaching extracted quantities (money, dates, counts, ...) as metadata.
@@ -13,18 +13,18 @@ rewriting happen at tokenization time so citations show the source text.
 
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, Iterable, List, Set, Tuple
 
+from rag_core.line_joining import join_wrapped_lines
 from rag_core.quantities import EXTRACTOR_VERSION, extract_quantities
 from rag_core.text_normalize import PROFILE_VERSION, normalize
 
 PREPROCESS_VERSION = "ingest-preprocess-v1"
 _TEXT_FIELDS = ("text", "searchable_text", "display_text")
-_JA_CHAR = r"[ぁ-んァ-ヴー一-龥々〆〤、。「」『』（）]"
-_BROKEN_LINE_RE = re.compile(rf"(?<={_JA_CHAR})\n(?={_JA_CHAR})")
 _DIGITS_RE = re.compile(r"\d+")
 _MAX_QUANTITIES = 50
 
@@ -42,6 +42,39 @@ class PreprocessOptions:
     repeated_line_min_ratio: float = 0.6
     edge_lines: int = 2
     attach_quantities: bool = True
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.environ.get(name, "") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _env_number(name: str, default, low, high, cast):
+    try:
+        value = cast(str(os.environ.get(name, "") or "").strip())
+    except ValueError:
+        return default
+    return value if low <= value <= high else default
+
+
+def preprocess_options(*, office: bool = False, **overrides) -> PreprocessOptions:
+    """The options for one ingestion, from the INGEST_PREPROCESS_* settings (the console writes them; anything
+    unusable keeps the default). office=True: the file was a docx / pptx / xlsx / csv, whose line breaks are
+    structure, so lines are never joined (joining is for the layout wrapping of PDF / OCR text)."""
+    defaults = PreprocessOptions()
+    options = PreprocessOptions(
+        remove_repeated_lines=_env_bool("INGEST_PREPROCESS_REPEATED_LINES", defaults.remove_repeated_lines),
+        repeated_line_min_pages=_env_number("INGEST_PREPROCESS_REPEATED_MIN_PAGES", defaults.repeated_line_min_pages, 2, 50, int),
+        repeated_line_min_ratio=_env_number("INGEST_PREPROCESS_REPEATED_MIN_RATIO", defaults.repeated_line_min_ratio, 0.1, 1.0, float),
+        repeated_line_max_chars=_env_number("INGEST_PREPROCESS_REPEATED_MAX_CHARS", defaults.repeated_line_max_chars, 5, 200, int),
+        join_broken_lines=False if office else _env_bool("INGEST_PREPROCESS_JOIN_LINES", defaults.join_broken_lines),
+        attach_quantities=_env_bool("INGEST_PREPROCESS_QUANTITIES", defaults.attach_quantities),
+    )
+    return replace(options, **overrides) if overrides else options
 
 
 def _line_key(line: str) -> str:
@@ -132,7 +165,7 @@ def preprocess_rows(
                 if field == "text":
                     report["repeated_lines_removed"] += removed
             if options.join_broken_lines:
-                value, joined = _BROKEN_LINE_RE.subn("", value)
+                value, joined = join_wrapped_lines(value)
                 if field == "text":
                     report["lines_joined"] += joined
             new_row[field] = value

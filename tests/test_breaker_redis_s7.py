@@ -9,6 +9,9 @@ from rag_core.circuit_breaker import CLOSED, HALF_OPEN, OPEN, CircuitBreaker, Fa
 from webapi import breaker_store
 
 
+pytestmark = pytest.mark.usefixtures("require_redis")  # skipped without the package (failure when REQUIRE_OPTIONAL_DEPS=1)
+
+
 class FakeRedis:
     """Just enough of redis-py for the store: get, and a pipeline with watch/multi/execute that detects a change in between."""
 

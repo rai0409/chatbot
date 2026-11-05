@@ -11,6 +11,7 @@ def _complete_production_env(monkeypatch):
     monkeypatch.setenv("SEARCH_DEBUG_ENABLED", "false")
     monkeypatch.setenv("ALLOWED_HOSTS", "rag.example.co.jp")
     monkeypatch.setenv("METRICS_TOKEN", "m" * 40)
+    monkeypatch.setenv("FEEDBACK_TOKEN_SECRET", "f" * 40)
     monkeypatch.setenv("EMBED_FINGERPRINT_STRICT", "true")
     for name in (
         "ADMIN_AUTH_ALLOW_INSECURE_DEV", "DISABLE_GUARD", "CORS_ALLOW_ORIGINS", "ENTERPRISE_OIDC_ENABLED",

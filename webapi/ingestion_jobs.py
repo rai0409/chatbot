@@ -32,7 +32,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 import config
 from rag_core.document_converters import SUPPORTED_FORMATS, isolated
-from rag_core.ingest_preprocess import PreprocessOptions, preprocess_rows
+from rag_core.ingest_preprocess import preprocess_options, preprocess_rows
 from rag_core.retrieval import keyword_index_path_for_collection
 from scripts.ingest_canonical_jsonl import ingest_canonical_rows, new_generation_id, write_keyword_rows
 from scripts.import_manifest import build_manifest
@@ -446,7 +446,9 @@ def _preprocess_converted(converted: List[Dict[str, Any]]) -> tuple[List[Dict[st
     # PDF rows were already preprocessed page by page inside the converter.
     if all(str(row.get("source_type") or "") == "pdf" for row in converted):
         return converted, {}
-    rows, report = preprocess_rows(converted, PreprocessOptions())
+    # Office files keep their paragraphs, slide lines and cell lines: a line break there is structure, not the wrap
+    # of a PDF page, so lines are not joined (joining glued slide bullets and headings into one run of text).
+    rows, report = preprocess_rows(converted, preprocess_options(office=True))
     summary = {key: int(report.get(key) or 0) for key in _PREPROCESS_REPORT_KEYS}
     summary["quantities_by_kind"] = dict(report.get("quantities_by_kind") or {})
     return rows, summary
@@ -479,14 +481,35 @@ def document_name(path: Path) -> str:
     return path.name
 
 
-def _convert_files(paths: List[Path], tenant: str) -> Dict[Path, Any]:
+JOB_DOC_TYPES = ("auto", "policy", "faq", "procedure")
+
+
+def normalize_job_options(doc_type: Optional[str], ocr: Optional[bool]) -> Dict[str, Any]:
+    """The per-job options of an ingestion: doc_type (how PDFs are split: auto, policy, faq, procedure; empty = the
+    default, which is auto) and ocr (True / False; None = the INGEST_PDF_OCR setting)."""
+    kind = str(doc_type or "").strip().lower()
+    if kind and kind not in JOB_DOC_TYPES:
+        raise ValueError(f"doc_type is one of: {', '.join(JOB_DOC_TYPES)}")
+    if ocr is not None and not isinstance(ocr, bool):
+        raise ValueError("ocr is true or false")
+    return {"doc_type": kind or None, "ocr": ocr}
+
+
+def conversion_tasks(paths: List[Path], tenant: str, options: Optional[Dict[str, Any]] = None) -> List[tuple]:
+    """(path, tenant, source_doc, options) for the conversion; doc_type and ocr only matter to PDFs."""
+    options = options or {"doc_type": None, "ocr": None}
+    none = {"doc_type": None, "ocr": None}
+    return [(path, tenant, document_name(path), dict(options) if path.suffix.lower() == ".pdf" else dict(none)) for path in paths]
+
+
+def _convert_files(paths: List[Path], tenant: str, options: Optional[Dict[str, Any]] = None) -> Dict[Path, Any]:
     """path -> chunk list, or the exception the conversion raised.
 
     Each file is converted in a worker process with a time limit
     (rag_core/document_converters/isolated.py, INGEST_CONVERT_TIMEOUT_SECONDS).
     """
     workers = min(_convert_workers(), max(1, len(paths)))
-    return isolated.convert_files([(path, tenant, document_name(path)) for path in paths], workers=workers)
+    return isolated.convert_files(conversion_tasks(paths, tenant, options), workers=workers)
 
 
 def run_raw_document_job(
@@ -497,6 +520,8 @@ def run_raw_document_job(
     execute: bool = False,
     clock=time.time,
     job_id: Optional[str] = None,
+    doc_type: Optional[str] = None,
+    ocr: Optional[bool] = None,
 ) -> Dict[str, Any]:
     # Converts supported raw documents to canonical chunks, validates a manifest,
     # and optionally writes those chunks to an explicit non-production staging
@@ -512,6 +537,11 @@ def run_raw_document_job(
     if is_production_collection(target):
         raise ValueError("refusing production/default collection for ingestion")
     validate_collection_name(target)
+    options = normalize_job_options(doc_type, ocr)
+    # The console's ingestion settings (written by any worker process of the API) apply from this job on.
+    from rag_core import ingest_settings
+
+    ingest_settings.sync_environ()
 
     paths = _resolve_inputs(inputs)
     owner = get_collection(target)
@@ -535,6 +565,7 @@ def run_raw_document_job(
         "chunks_generated": 0,
         "warnings": [],
         "errors": [],
+        "options": options,
         "owner": _owner_token(),
     }
     _save_job(record)
@@ -554,7 +585,7 @@ def run_raw_document_job(
                 p for p in paths
                 if p.suffix.lower().lstrip(".") in SUPPORTED_FORMATS and p.is_file() and p.stat().st_size <= max_bytes
             ]
-            conversions = _convert_files(eligible, tenant)
+            conversions = _convert_files(eligible, tenant, options)
             names = Counter(document_name(p) for p in eligible)
             for path in paths:
                 file_name = _safe_file_label(path)
@@ -799,6 +830,8 @@ def submit_raw_document_job(
     collection: str,
     execute: bool = False,
     clock=time.time,
+    doc_type: Optional[str] = None,
+    ocr: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Validate now, run in a worker thread, return the queued job at once.
 
@@ -814,6 +847,7 @@ def submit_raw_document_job(
     if is_production_collection(target):
         raise ValueError("refusing production/default collection for ingestion")
     validate_collection_name(target)
+    options = normalize_job_options(doc_type, ocr)
     _resolve_inputs(inputs)
     owner = get_collection(target)
     if owner is not None and owner["owner_tenant"] != tenant:
@@ -829,6 +863,7 @@ def submit_raw_document_job(
         "mode": "raw_document_execute" if execute else "raw_document_dry_run",
         "vectorstore_mutated": False,
         "async": True,
+        "options": options,
         "owner": _owner_token(),
     }
     _save_job(record)
@@ -836,7 +871,8 @@ def submit_raw_document_job(
     def _run() -> None:
         try:
             run_raw_document_job(
-                list(inputs), expected_tenant=tenant, collection=target, execute=execute, clock=clock, job_id=job_id
+                list(inputs), expected_tenant=tenant, collection=target, execute=execute, clock=clock, job_id=job_id,
+                doc_type=options["doc_type"], ocr=options["ocr"],
             )
         except Exception as exc:  # noqa: BLE001 - recorded on the job
             failed = dict(record)

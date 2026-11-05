@@ -3,6 +3,7 @@ import { overviewApi, type MappingCount } from "../api/overview";
 import { jaOverview } from "../i18n/overview";
 import { useLoad } from "../lib/useLoad";
 import { Block } from "./overview/Block";
+import { RevokeIdentity } from "./overview/RevokeIdentity";
 
 const a = jaOverview.access;
 const c = jaOverview.common;
@@ -41,6 +42,7 @@ export function AccessPage() {
           <p role="note" className="notice">
             {state.data.note}
           </p>
+          {state.data.you.reach === "installation" && <RevokeIdentity />}
           <div className="ov-grid">
             <section className="panel">
               <h2>{a.adminAuth}</h2>

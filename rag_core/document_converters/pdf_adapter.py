@@ -54,7 +54,7 @@ def convert_pdf_with_report(
 
     rows, report = pdf_to_canonical_jsonl.convert_pdf_to_rows(
         Path(path),
-        doc_type=doc_type or "policy",
+        doc_type=doc_type or "auto",  # "auto": a Q&A list is read as a FAQ, anything else as a policy
         tenant_id=tenant_id or "default",
         ocr=ocr_mode(),
         source_doc=source_doc,

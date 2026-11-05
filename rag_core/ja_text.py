@@ -30,6 +30,31 @@ _PUNCT_TRANSLATION = str.maketrans(
 )
 
 
+# Characters that NFKC rewrites but that a reader of the source expects to see as written. Stored text keeps them;
+# the search text folds them (a query written "(株)" or "10kg" has to find "㈱" and "10㎏").
+#   circled numbers  ①-⑳ ㉑-㉟ ㊱-㊿   number the steps of a procedure; NFKC makes them plain digits, so the step
+#                                      patterns (which look for them) could never match
+#   ㈱ ㈲ ... (U+3220-3243)             company forms and other parenthesized ideographs
+#   Ⅰ-Ⅻ ⅰ-ⅻ (U+2160-217F)             Roman numerals (第Ⅲ章)
+#   ℃ ℉ № ℡                           symbols
+#   U+3300-33FF                        squared units and eras (㎏ ㎡ ㌔ ㍻)
+_PROTECTED_RE = re.compile("([\u2460-\u2473\u3251-\u325f\u32b1-\u32bf\u3220-\u3243\u2160-\u217f\u2103\u2109\u2116\u2121\u3300-\u33ff])")
+
+
+def nfkc_keep_circled(text: str) -> str:
+    """NFKC for display, except for the protected characters above. The text is split around them and each piece
+    is folded, so kana and their (semi-)voiced marks still compose inside a piece."""
+    return "".join(
+        piece if _PROTECTED_RE.fullmatch(piece) else unicodedata.normalize("NFKC", piece)
+        for piece in _PROTECTED_RE.split(text or "")
+    )
+
+
+def fold_circled(text: str) -> str:
+    """The search form: NFKC of everything, protected characters included (① -> 1, ㈱ -> (株), ㎏ -> kg)."""
+    return unicodedata.normalize("NFKC", text or "")
+
+
 def normalize_japanese_text(text: str) -> str:
     out = unicodedata.normalize("NFKC", text or "")
     out = out.replace("　", " ")

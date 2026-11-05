@@ -7,6 +7,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # A missing optional package (anthropic, redis) is a failure here, never a silent skip.
+      REQUIRE_OPTIONAL_DEPS: "1"
     services:
       postgres:
         image: postgres:16

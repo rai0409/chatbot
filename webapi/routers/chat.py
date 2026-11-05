@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -40,6 +41,7 @@ from rag_core.product_contract import (
     build_candidate_contract,
     build_product_answer_envelope,
     generate_feedback_token,
+    verify_feedback_token,
 )
 from rag_core.feedback_rerank_profile import PROFILE_PATH, apply_feedback_preview_rerank
 from rag_core.product_profile import load_product_profile
@@ -84,8 +86,11 @@ from rag_core.audit_log import set_audit_actor
 
 router = APIRouter()
 
-_approved_qa_index: ApprovedQAIndex | None = None
-_approved_qa_index_path: str | None = None
+# Approved-QA indexes by (file path, tenant, file version). One dict under one
+# lock: the former pair of module globals was written in two steps, so a
+# request in another thread could read the index another tenant had just loaded.
+_approved_qa_cache: Dict[tuple, ApprovedQAIndex] = {}
+_approved_qa_cache_lock = threading.Lock()
 _ALLOWED_FEEDBACK_TYPES = {
     "good",
     "bad",
@@ -345,25 +350,30 @@ def _approved_qa_lookup(question: str, tenant_id: str = "default") -> ApprovedAn
 
 def _approved_qa_index_for(tenant_id: str = "default"):
     """The approved-QA index of a tenant (cached), or None when approved QA is off."""
-    global _approved_qa_index, _approved_qa_index_path
     if not getattr(config, "APPROVED_QA_ENABLED", False):
         return None
     tenant = normalize_tenant_id(tenant_id)
     path = str(config.APPROVED_QA_PATH)
-    # Single-slot cache keyed by path AND tenant: load_approved_qa filters
-    # records per tenant, so an index loaded for one tenant must never serve
-    # another.
-    # The file's mtime is part of the key: an edited approved-QA file is
-    # reloaded on the next request instead of after a restart.
+    # The file's version (mtime, size) is part of the key: an edited approved-QA
+    # file is reloaded on the next request instead of after a restart.
     try:
-        mtime_ns = os.stat(path).st_mtime_ns
+        stat = os.stat(path)
+        version = (stat.st_mtime_ns, stat.st_size)
     except OSError:
-        mtime_ns = None
-    cache_key = f"{path}::{tenant}::{mtime_ns}"
-    if _approved_qa_index is None or _approved_qa_index_path != cache_key:
-        _approved_qa_index = load_approved_qa(path, tenant_id=tenant)
-        _approved_qa_index_path = cache_key
-    return _approved_qa_index
+        version = None
+    key = (path, tenant, version)
+    with _approved_qa_cache_lock:
+        index = _approved_qa_cache.get(key)
+        if index is not None:
+            return index
+        # load_approved_qa filters records per tenant, so an index is only ever
+        # served for the tenant it was loaded for (the tenant is in the key).
+        index = load_approved_qa(path, tenant_id=tenant)
+        # Older versions of this file are no longer reachable: drop them.
+        for old in [k for k in _approved_qa_cache if k[0] == path and k[1] == tenant]:
+            del _approved_qa_cache[old]
+        _approved_qa_cache[key] = index
+        return index
 
 
 def _approved_chat_payload(answer: ApprovedAnswer) -> Dict[str, Any]:
@@ -1330,6 +1340,9 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                     })
                     metrics_registry.increment("chat_cache_hit_total")
                     _record_chat_outcome_metrics(answer_mode=str(hit.get("answer_mode") or "grounded"))
+                    # Same interaction record as the /chat cache hit (the stream used to skip it).
+                    records_hook.record_chat(api_auth, request, tenant_id=tenant_id, question=req.question,
+                                             payload=hit, trace_id=req.trace_id, source="cache")
                     yield _sse_event("final", hit)
                     return
             client = (
@@ -1483,7 +1496,7 @@ def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContex
         apply_feature_rerank=apply_feature_rerank,
         feature_rerank_profile=feature_rerank_profile,
     )
-    feedback_token = generate_feedback_token()
+    feedback_token = generate_feedback_token(tenant_id)
 
     try:
         if bool(policy_context.get("tenant_blocked")):
@@ -1791,6 +1804,13 @@ def chat_feedback(req: ProductFeedbackRequest, api_auth: ApiAuthContext = Depend
         raise HTTPException(status_code=400, detail="feedback_token is required")
     if feedback_type not in _ALLOWED_FEEDBACK_TYPES:
         raise HTTPException(status_code=400, detail="invalid feedback_type")
+    # With FEEDBACK_TOKEN_SECRET the token must be one this server issued for this tenant
+    # (a made-up or another tenant's token is refused; an expired one is told apart).
+    verdict = verify_feedback_token(feedback_token, normalize_tenant_id(req.tenant_id))
+    if verdict == "expired":
+        raise HTTPException(status_code=400, detail="feedback_token has expired")
+    if verdict == "invalid":
+        raise HTTPException(status_code=400, detail="invalid feedback_token")
 
     # Observability only: feedback_type is a stable enum label (good / bad /
     # neutral / human_review_requested); never a raw key, query, or document.

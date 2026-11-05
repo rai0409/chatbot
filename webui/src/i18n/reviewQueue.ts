@@ -40,6 +40,7 @@ export const jaReviewQueue = {
   stored: (id: string) => `記録しました（${id}）`,
   notStored: (warning: string) => `受け付けましたが保存されませんでした: ${warning}`,
   failed: "記録できませんでした。",
+  notRecorded: "記録されていません。操作は実行されていないため、しばらくしてからもう一度お試しください。",
   forbiddenAction: "この項目に対する権限がありません（別のテナントの項目です）。",
   conflict: "他の人が先に変更しました。Refresh で最新の状態を確認してください。",
   badRequest: "入力が正しくありません。",

@@ -263,5 +263,5 @@ def test_a_draft_is_made_from_a_template_and_the_history_records_it_without_the_
     assert "株式会社サンプル ご担当者様" in payload["body"]["content"] and "更新しない旨の通知期限（2026-12-31）" in payload["body"]["content"]
     assert "ひな形" in payload["body"]["content"]
     history = contracts.get(TENANT, "c1")["history"][-1]
-    assert history == {"at": T0.isoformat(), "by": "山田太郎", "action": "draft_created", "field": "non_renewal_notice", "old": None, "new": "AAMk-9"}
+    assert history == {"at": T0.isoformat(), "by": "山田太郎", "action": "draft_created", "field": "non_renewal_notice", "old": "2026-12-31", "new": "AAMk-9"}  # old = the deadline date (the idempotency key)
     assert "ご担当者様" not in json.dumps(contracts.get(TENANT, "c1"), ensure_ascii=False)

@@ -15,10 +15,12 @@ export const ja = {
     records: "記録とレビュー",
     reviewQueue: "回答レビュー",
     golden: "ゴールデン QA",
+    approvedQa: "承認済み QA",
     changes: "変更管理",
     contracts: "契約管理",
     audit: "監査ログ",
     access: "権限の確認",
+    backups: "バックアップ",
   },
   system: {
     title: "システム状態",

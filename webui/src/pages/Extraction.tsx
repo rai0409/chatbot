@@ -4,6 +4,7 @@ import { extractionApi, type ItemFilter, type LineRef, type PageLine, type Revie
 import { ErrorState, Loading } from "../components/Feedback";
 import { jaExtraction as x } from "../i18n/extraction";
 import { dateTime, number } from "../lib/format";
+import { rememberActor, storedActor } from "../lib/actor";
 import { useLoad } from "../lib/useLoad";
 import { ConfirmDialog } from "./extraction/ConfirmDialog";
 import { LineEditor } from "./extraction/LineEditor";
@@ -44,6 +45,7 @@ export function ExtractionPage() {
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [actor, setActor] = useState(storedActor);
   const trigger = useRef<HTMLElement | null>(null);
   const focusIndex = useRef<number | null>(null);
   const tableRef = useRef<HTMLTableElement>(null);
@@ -56,6 +58,7 @@ export function ExtractionPage() {
     [filter.tenant, filter.maxConfidence, filter.includeReviewed, filter.sourceDoc],
     x.itemsLoadFailed,
   );
+  const awaitingColumn = (docs.data ?? []).some((d) => (d.awaiting_approval ?? 0) > 0);
   const pageLoad = useLoad(
     () => (target ? extractionApi.page(tenant, target.source_doc, target.page) : Promise.resolve(null)),
     [tenant, target?.source_doc, target?.page],
@@ -140,16 +143,31 @@ export function ExtractionPage() {
     }
   }
 
+  function changeActor(value: string) {
+    setActor(value);
+    rememberActor(value);
+  }
+
   const save = (text: string) =>
     decide(async () => {
-      await extractionApi.correct(tenant, target as LineRef, text);
+      await extractionApi.correct(tenant, target as LineRef, text, actor.trim());
       return x.saved;
     }, x.saveFailed);
   const confirmLine = () =>
     decide(async () => {
-      await extractionApi.confirm(tenant, target as LineRef);
+      await extractionApi.confirm(tenant, target as LineRef, actor.trim());
       return x.confirmed;
     }, x.saveFailed);
+  const approveLine = () => {
+    if (!actor.trim()) {
+      setNotice({ ok: false, text: x.actorRequired });
+      return;
+    }
+    return decide(async () => {
+      await extractionApi.approve(tenant, target as LineRef, actor.trim());
+      return x.approved;
+    }, x.approveFailed);
+  };
   const revert = () =>
     decide(async () => {
       const r = await extractionApi.revert(tenant, target as LineRef);
@@ -204,6 +222,15 @@ export function ExtractionPage() {
         </label>
         <button type="submit">{x.load}</button>
       </form>
+      <div className="toolbar">
+        <label>
+          {x.actorLabel}
+          <input value={actor} onChange={(e) => changeActor(e.target.value)} maxLength={64} size={14} aria-describedby="ex-actor-hint" />
+        </label>
+      </div>
+      <p id="ex-actor-hint" className="muted">
+        {x.actorHint}
+      </p>
       <p id="ex-max-hint" className="muted">
         {x.maxConfidenceHint}
       </p>
@@ -237,6 +264,7 @@ export function ExtractionPage() {
                   <th scope="col">{x.colOpen}</th>
                   <th scope="col">{x.colCorrected}</th>
                   <th scope="col">{x.colConfirmed}</th>
+                  {awaitingColumn && <th scope="col">{x.colAwaiting}</th>}
                   <th scope="col">{x.colSaved}</th>
                   <th scope="col">{x.colAction}</th>
                 </tr>
@@ -250,6 +278,7 @@ export function ExtractionPage() {
                     <td>{number(d.open)}</td>
                     <td>{number(d.corrected)}</td>
                     <td>{number(d.confirmed)}</td>
+                    {awaitingColumn && <td>{number(d.awaiting_approval ?? 0)}</td>}
                     <td>{dateTime(d.saved_at)}</td>
                     <td>
                       <button type="button" aria-label={`${x.showDocLines}: ${d.source_doc}`} onClick={(e) => showDoc(d.source_doc, e)}>
@@ -333,6 +362,7 @@ export function ExtractionPage() {
                   busy={busy}
                   onSave={save}
                   onConfirm={confirmLine}
+                  onApprove={approveLine}
                   onRevert={() => setDialog({ kind: "revert" })}
                   onReingest={() => setDialog({ kind: "reingest", doc: target.source_doc })}
                   onClose={closeEditor}
@@ -362,7 +392,10 @@ export function ExtractionPage() {
                               {l.text}
                             </button>
                           </td>
-                          <td>{x.states[l.state] ?? l.state}</td>
+                          <td>
+                            {x.states[l.state] ?? l.state}
+                            {l.approval && <span className="muted"> ({x.approvalStates[l.approval]})</span>}
+                          </td>
                         </tr>
                       );
                     })}
@@ -408,7 +441,10 @@ function ItemRow({ item, current, onPick }: { item: ReviewItem; current: boolean
           {item.text}
         </button>
       </td>
-      <td>{x.states[item.state] ?? item.state}</td>
+      <td>
+        {x.states[item.state] ?? item.state}
+        {item.approval && <span className="muted"> ({x.approvalStates[item.approval]})</span>}
+      </td>
     </tr>
   );
 }

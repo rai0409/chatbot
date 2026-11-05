@@ -20,6 +20,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Dict, List
 
+from rag_core.document_converters.table_layout import find_layout
 from rag_core.document_converters.base import table_rows_to_chunks
 
 _NS_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -296,15 +297,13 @@ def convert_xlsx(
             if not rows:
                 continue
             ordered = sorted(rows.items())
-            header_row_number, header_cells = ordered[0]
             width = max(max(r.keys()) for _, r in ordered) + 1
             if width > max_columns() or width * len(ordered) > max_cells():
                 raise DocumentTooLarge(f"sheet {sheet_name[:40]}: {len(ordered)} rows x {width} columns")
-            headers = [header_cells.get(i, "") for i in range(width)]
-            data = [
-                (row_number, [cells.get(i, "") for i in range(width)])
-                for row_number, cells in ordered[1:]
-            ]
+            grid = [(row_number, [cells.get(i, "") for i in range(width)]) for row_number, cells in ordered]
+            layout = find_layout(grid)  # a title above the table is not the header
+            headers = grid[layout.header_index][1]
+            data = grid[layout.header_index + 1:]
             last_col = _column_letters(width - 1)
 
             def _extra(row_number: int, values, _sheet=sheet_name, _last=last_col):
@@ -324,6 +323,8 @@ def convert_xlsx(
                     doc_type=doc_type or "table",
                     parser="stdlib_ooxml",
                     start_index=len(chunks) + 1,
+                    table_title=layout.title,
+                    summary_rows=layout.summary_rows,
                     extra_builder=_extra,
                 )
             )

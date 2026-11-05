@@ -37,6 +37,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     add.add_argument("--kind", default="folder", choices=list(source_registry.KINDS))
     add.add_argument("--path", default=None, help="the folder (kind folder)")
     add.add_argument("--drive-id", default=None, help="the drive id (kind sharepoint)")
+    add.add_argument("--access-model", default=None, choices=["tenant_wide"],
+                     help="tenant_wide: every user of the tenant may read every synced file (required in production; kind sharepoint)")
     add.add_argument("--folder", default=None, help="the folder in the drive, e.g. /Shared Documents/Policies (kind sharepoint)")
     add.add_argument("--collection", default=None)
     add.add_argument("--schedule", type=int, default=0)
@@ -65,7 +67,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         if args.command == "add":
-            options = {"drive_id": args.drive_id, "folder": args.folder} if args.kind == "sharepoint" else None
+            options = ({"drive_id": args.drive_id, "folder": args.folder,
+                        **({"access_model": args.access_model} if args.access_model else {})}
+                       if args.kind == "sharepoint" else None)
             result = source_registry.create(args.id, tenant_id=args.tenant, kind=args.kind, path=args.path, options=options,
                                             collection=args.collection, schedule_minutes=args.schedule, created_by=args.by)
         elif args.command == "list":

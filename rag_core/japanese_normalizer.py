@@ -48,11 +48,27 @@ def normalize_for_match(text: str) -> str:
     return normalized
 
 
+_PARTICLES = "のをはがにへと"
+_CONTENT = "一-龥々〆〤ァ-ヴー"  # kanji and katakana: what a particle attaches to
+_LEADING_PARTICLE_RE = re.compile(rf"^[{_PARTICLES}]+(?=[{_CONTENT}])")
+_TRAILING_PARTICLE_RE = re.compile(rf"(?<=[{_CONTENT}])[{_PARTICLES}]+$")
+
+
+def _trim_particles(token: str) -> str:
+    """Drop particles stuck to a term, but only next to a kanji / katakana word. A character-set strip also
+    cut hiragana words (はがき -> き, にほん -> ほん) and left single characters."""
+    if not _TOKEN_RE.fullmatch(token) or token[0] in string.ascii_lowercase + string.digits:
+        return token
+    trimmed = _TRAILING_PARTICLE_RE.sub("", _LEADING_PARTICLE_RE.sub("", token))
+    # a token made only of particles is not a term
+    return "" if not trimmed.strip(_PARTICLES) else trimmed
+
+
 def tokenize_lightweight(text: str) -> List[str]:
     normalized = normalize_for_match(text)
     tokens = []
     for match in _TOKEN_RE.finditer(normalized):
-        token = match.group(0).strip("のをはがにへと")
+        token = _trim_particles(match.group(0))
         if token:
             tokens.append(token)
     return _bounded_unique(tokens)

@@ -27,7 +27,7 @@ EXTRACTOR_VERSION = "quantities-v1"
 
 @dataclass(frozen=True)
 class Quantity:
-    kind: str  # number | money | percent | measure | duration | count | ratio | article | date
+    kind: str  # number | money | percent | measure | duration | count | ratio | article | date | fiscal_year | time
     canonical: str
     value: Optional[Decimal]
     unit: str
@@ -105,6 +105,18 @@ _CODE_RE = re.compile(
     r"|\d+(?:-\d+){2,}"  # 03-1234-5678
     r"|\d{3}-\d{4}(?!\d)"  # 100-0001
 )
+# Day counts that are periods ("10日以内", "30日前まで", "5営業日"), not calendar days ("毎月25日", "4月1日").
+# A bare "N日" stays a number: the surrounding words decide.
+_DAYS_RE = re.compile(
+    r"(?<![\d,.])(?P<num>\d+(?:\.\d+)?)(?:(?P<biz>営業日)|日(?=以内|以上|以下|未満|超|前|後|経過|ごと|毎|おき))"
+)
+# A fiscal year ("2024年度", "令和6年度") is not the calendar year; "午後3時30分" is a time of day, not "3" and "30分".
+_FISCAL_RE = re.compile(
+    rf"(?:(?P<era>令和|平成|昭和|大正|明治)\s*(?P<ey>元|{_ARABIC}|[{KANJI_NUMERAL_CLASS}]+)|(?<![\d,.])(?P<wy>\d{{4}}))\s*年度"
+)
+_TIME_RE = re.compile(
+    r"(?P<ampm>午前|午後)?\s*(?P<h>\d{1,2})\s*時(?!間)(?:\s*(?P<m>\d{1,2})\s*分(?!間))?"
+)
 _RANGE_SEPARATORS = ("〜", "~", "-", "から")
 _KANJI_CHAR_RE = re.compile(r"[一-龥々〆〤]")
 _NUMERIC_CONTEXT_SUFFIX_RE = re.compile(rf"(?:{UNIT_ALTERNATION}|[年月日時])")
@@ -158,7 +170,37 @@ def extract_quantities(text: str) -> List[Quantity]:
     taken: List[Tuple[int, int]] = []
     nums: Dict[int, str] = {}  # start -> numeral part, for range handling
 
+    # Fiscal years first: "2024年度" must not also be read as the calendar year 2024.
+    for match in _FISCAL_RE.finditer(norm):
+        if match.group("wy"):
+            year = int(match.group("wy"))
+        else:
+            era_year = parse_japanese_number(match.group("ey")) if match.group("ey") != "元" else 1
+            era = ja_dates.era_by_name(match.group("era"))
+            if era_year is None or era is None:
+                continue
+            year = era.start.year + int(era_year) - 1
+        found.append(Quantity("fiscal_year", f"FY{year}", Decimal(year), "FY", match.group(0), *match.span()))
+        taken.append(match.span())
+    for match in _TIME_RE.finditer(norm):
+        if _overlaps(match.start(), match.end(), taken):
+            continue
+        hour = int(match.group("h"))
+        minute = int(match.group("m") or 0)
+        ampm = match.group("ampm")
+        if minute > 59 or hour > 24 or (ampm and hour > 12) or (hour == 24 and minute):
+            continue  # not a time of day ("25時30分", "午後13時")
+        if ampm == "午後" and hour < 12:
+            hour += 12
+        elif ampm == "午前" and hour == 12:
+            hour = 0
+        stamp = f"{hour % 24:02d}:{minute:02d}"
+        found.append(Quantity("time", stamp, None, "", match.group(0), *match.span()))
+        taken.append(match.span())
+
     for parsed in ja_dates.find_dates(norm):
+        if _overlaps(parsed.start, parsed.end, taken):
+            continue
         found.append(
             Quantity("date", parsed.iso, None, "", parsed.raw, parsed.start, parsed.end, parsed.valid, parsed.reason)
         )
@@ -179,6 +221,19 @@ def extract_quantities(text: str) -> List[Quantity]:
             continue
         found.append(Quantity("money", _canonical("money", value, "JPY"), value, "JPY", match.group(0), *match.span()))
         taken.append(match.span())
+
+    for match in _DAYS_RE.finditer(norm):
+        if _overlaps(match.start(), match.end(), taken):
+            continue
+        value = parse_japanese_number(match.group("num"))
+        if value is None:
+            continue
+        unit = "business_day" if match.group("biz") else "day"
+        # the span covers the number and the unit word only ("10日", "5営業日"); a following 以内 etc. stays text
+        end = match.end("num") + (len("営業日") if match.group("biz") else 1)
+        found.append(Quantity("duration", _canonical("duration", value, unit), value, unit, norm[match.start():end], match.start(), end))
+        nums[match.start()] = match.group("num")
+        taken.append((match.start(), end))
 
     for match in _QUANTITY_RE.finditer(norm):
         start, end = match.span()

@@ -255,7 +255,8 @@ def test_faq_question_wrapped_over_lines_and_pairs_without_blank_lines():
     rows = build_ja_chunk_records(doc_id="f", source_doc="f.pdf", text=text, doc_type="faq", source_pages=[1])
     questions = [r["faq_question"] for r in rows if r["chunk_role"] == "parent"]
     # Chunk text is NFKC-normalized, so the full-width "？" becomes "?".
-    assert questions == ["申請の期限は いつまでですか?", "窓口はどこですか?"]
+    # A line break inside Japanese text is not a space ("は いつ" was the old, wrong result).
+    assert questions == ["申請の期限はいつまでですか?", "窓口はどこですか?"]
 
 
 # --- 3-9 Q&A table PDF ---------------------------------------------------------------------------

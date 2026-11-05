@@ -10,6 +10,8 @@ class CitationOut:
     source_doc: str
     source_pages: List[int] = field(default_factory=list)
     chunk_id: Optional[str] = None
+    # Ids of every retrieved chunk merged into the cited evidence block.
+    member_chunk_ids: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

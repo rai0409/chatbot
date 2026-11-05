@@ -39,6 +39,7 @@ def test_production_guard_accepts_a_complete_configuration(monkeypatch):
     monkeypatch.setenv("SEARCH_DEBUG_ENABLED", "false")
     monkeypatch.setenv("ALLOWED_HOSTS", "rag.example.co.jp")
     monkeypatch.setenv("METRICS_TOKEN", "m" * 40)
+    monkeypatch.setenv("FEEDBACK_TOKEN_SECRET", "f" * 40)
     monkeypatch.setenv("TENANT_FILTER_STRICT", "true")
     monkeypatch.setenv("EMBED_FINGERPRINT_STRICT", "true")
     for name in (

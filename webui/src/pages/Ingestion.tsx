@@ -6,6 +6,7 @@ import { ji } from "../i18n/ingestion";
 import { dateTime } from "../lib/format";
 import { useLoad } from "../lib/useLoad";
 import { JobView } from "./ingestion/JobView";
+import { SettingsSection } from "./ingestion/Settings";
 import { ConfirmDialog, type Outcome, ResultView, StatusBadge, failureMessage, lines } from "./ingestion/parts";
 
 const ALLOWED = /\.(pdf|docx|xlsx|csv|pptx)$/i;
@@ -26,6 +27,8 @@ function RawSection({ onChanged }: { onChanged: () => void }) {
   const [collection, setCollection] = useState("");
   const [execute, setExecute] = useState(false);
   const [asyncJob, setAsyncJob] = useState(false);
+  const [docType, setDocType] = useState("");
+  const [ocr, setOcr] = useState("");
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [jobId, setJobId] = useState("");
   const [confirming, setConfirming] = useState(false);
@@ -85,7 +88,7 @@ function RawSection({ onChanged }: { onChanged: () => void }) {
     setBusy(true);
     setJobId("");
     try {
-      const res: Report = await ingestionApi.rawDocuments({ inputs, expected_tenant: tenant.trim(), collection: collection.trim(), execute, async_job: asyncJob });
+      const res: Report = await ingestionApi.rawDocuments({ inputs, expected_tenant: tenant.trim(), collection: collection.trim(), execute, async_job: asyncJob, ...(docType ? { doc_type: docType } : {}), ...(ocr ? { ocr: ocr === "true" } : {}) });
       setOutcome({ data: res });
       if (res.async && typeof res.job_id === "string") setJobId(res.job_id);
     } catch (e) {
@@ -167,6 +170,29 @@ function RawSection({ onChanged }: { onChanged: () => void }) {
             <input type="text" value={collection} onChange={(e) => setCollection(e.target.value)} placeholder="pilot_staging_v1" />
           </label>
         </div>
+        <div className="toolbar">
+          <label>
+            {ji.raw.docType}
+            <select value={docType} onChange={(e) => setDocType(e.target.value)}>
+              {Object.entries(ji.raw.docTypes).map(([value, text]) => (
+                <option key={value} value={value}>
+                  {text}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            {ji.raw.ocr}
+            <select value={ocr} onChange={(e) => setOcr(e.target.value)}>
+              {Object.entries(ji.raw.ocrChoices).map(([value, text]) => (
+                <option key={value} value={value}>
+                  {text}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="muted">{ji.raw.optionsNote}</p>
         <p>
           <label>
             <input type="checkbox" checked={execute} onChange={(e) => setExecute(e.target.checked)} /> {ji.raw.execute}
@@ -374,6 +400,7 @@ export function IngestionPage() {
       <RawSection onChanged={reload} />
       <PromoteDeleteSection onChanged={reload} />
       <DryRunSection onChanged={reload} />
+      <SettingsSection />
       <section className="panel" aria-labelledby="h-jobs">
         <h2 id="h-jobs">{ji.jobs.heading}</h2>
         <div className="toolbar">

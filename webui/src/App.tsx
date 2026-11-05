@@ -6,6 +6,8 @@ import { ChangesPage } from "./pages/Changes";
 import { ContractsPage } from "./pages/Contracts";
 import { DashboardPage } from "./pages/Dashboard";
 import { ExtractionPage } from "./pages/Extraction";
+import { ApprovedQaPage } from "./pages/ApprovedQa";
+import { BackupsPage } from "./pages/Backups";
 import { GoldenPage } from "./pages/Golden";
 import { IngestionPage } from "./pages/Ingestion";
 import { LimitsPage } from "./pages/Limits";
@@ -32,11 +34,13 @@ export function App() {
           <Route path="synonyms" element={<SynonymsPage />} />
           <Route path="records" element={<RecordsPage />} />
           <Route path="review" element={<ReviewQueuePage />} />
+          <Route path="approved-qa" element={<ApprovedQaPage />} />
           <Route path="golden" element={<GoldenPage />} />
           <Route path="changes" element={<ChangesPage />} />
           <Route path="contracts" element={<ContractsPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="access" element={<AccessPage />} />
+          <Route path="backups" element={<BackupsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

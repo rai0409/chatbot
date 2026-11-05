@@ -16,6 +16,7 @@ function failureText(e: unknown): string {
     if (e.status === 403) return j.forbiddenAction;
     if (e.status === 409) return j.conflict;
     if (e.status === 400) return `${j.badRequest} (${e.detail})`;
+    if (e.status === 503) return j.notRecorded; // the server could not write the log: the action did not happen
   }
   return j.failed;
 }

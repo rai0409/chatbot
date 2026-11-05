@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from rag_core.document_converters.base import table_rows_to_chunks
+from rag_core.document_converters.table_layout import find_layout
 
 # Japanese business CSVs arrive as UTF-8 (with or without BOM), Shift_JIS
 # (cp932, Excel default), EUC-JP or UTF-16 (Excel "Unicode text").
@@ -82,8 +83,10 @@ def convert_csv(
     rows, encoding, delimiter = read_csv_rows(path)
     if not rows:
         return []
-    headers = rows[0]
-    data = [(line_no, cells) for line_no, cells in enumerate(rows[1:], start=2)]
+    numbered = [(line_no, cells) for line_no, cells in enumerate(rows, start=1)]
+    layout = find_layout(numbered)
+    headers = rows[layout.header_index]
+    data = numbered[layout.header_index + 1:]
     return table_rows_to_chunks(
         headers=headers,
         rows=data,
@@ -94,6 +97,8 @@ def convert_csv(
         doc_type=doc_type or "table",
         parser="stdlib_csv",
         start_index=1,
+        table_title=layout.title,
+        summary_rows=layout.summary_rows,
         extra_builder=lambda row_number, values: {
             "sheet_name": None,
             "source_encoding": encoding,

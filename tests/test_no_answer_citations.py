@@ -126,8 +126,7 @@ def test_approved_exact_match_citations_preserved(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
-    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_cache", {})
 
     payload = main.chat(main.ChatRequest(question="営業時間を教えてください"))
 
@@ -135,3 +134,28 @@ def test_approved_exact_match_citations_preserved(monkeypatch, tmp_path):
     assert len(payload["citations"]) == 1
     assert payload["citations"][0]["source_doc"] == "faq.pdf"
     assert payload["citations"][0]["source_pages"] == [3]
+
+
+def test_a_guard_without_any_grounded_chunk_invents_no_evidence_in_the_trace(monkeypatch):
+    # No retrieved chunk at all: the old code put a made-up chunk ("1", "該当なし", source "unknown")
+    # into the selected context, which then appeared in traces, audit events and evaluation output.
+    monkeypatch.setattr(qa, "hybrid_retrieve", lambda *args, **kwargs: [])
+    monkeypatch.setattr(qa, "guard_merged_top", lambda *args, **kwargs: "soft_distance")
+
+    res, trace = qa.answer_query_with_trace("存在しない話題について", client=_forbidden_client(), top_k=5)
+
+    assert res.used_fallback is True and res.citations == []
+    assert trace["selected_context_chunk_ids"] == []
+    assert trace["selected_context_preview"] == [] and trace["selected_context_chars"] == 0
+    assert "unknown" not in json.dumps(trace, ensure_ascii=False, default=str)
+
+
+def test_the_missing_procedure_guard_also_has_no_invented_chunk(monkeypatch):
+    monkeypatch.setattr(qa, "hybrid_retrieve", lambda *args, **kwargs: [])
+    monkeypatch.setattr(qa, "guard_merged_top", lambda *args, **kwargs: None)
+
+    _res, trace = qa.answer_query_with_trace(
+        "暗証番号を再設定したい", client=_forbidden_client(), top_k=5, intent_override="reset"
+    )
+    assert "OCR" not in trace.get("selected_context_preview", [])
+    assert trace["selected_context_chunk_ids"] in ([], ["A"])

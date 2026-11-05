@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccessPage } from "../pages/Access";
 import { ACCESS, routeFetch } from "./overviewFixtures";
@@ -28,5 +28,61 @@ describe("the access page", () => {
     vi.stubGlobal("fetch", routeFetch({ "/admin/access": ACCESS }));
     fireEvent.click(screen.getByRole("button", { name: "再読み込み" }));
     expect(await screen.findByText("次のテナントのみ: sample")).toBeInTheDocument();
+  });
+
+  describe("revoking the sessions of one person", () => {
+    const INSTALLATION = { ...ACCESS, you: { ...ACCESS.you, reach: "installation", tenants: null } };
+
+    function routes(extra: Record<string, unknown> = {}) {
+      const calls: Array<{ url: string; body: string }> = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init?: RequestInit) => {
+          const key = `${(init?.method ?? "GET").toUpperCase()} ${String(url).split("?")[0]}`;
+          if (key === "GET /admin/access") return Promise.resolve(new Response(JSON.stringify(INSTALLATION), { status: 200, headers: { "Content-Type": "application/json" } }));
+          if (key === "POST /admin/sessions/revoke") {
+            calls.push({ url: String(url), body: String(init?.body) });
+            const status = (extra.status as number) ?? 200;
+            return Promise.resolve(new Response(JSON.stringify(extra.body ?? { ok: true }), { status, headers: { "Content-Type": "application/json" } }));
+          }
+          return Promise.reject(new Error(`no route for ${key}`));
+        }),
+      );
+      return calls;
+    }
+
+    it("is offered only to the installation administrator", async () => {
+      vi.stubGlobal("fetch", routeFetch({ "/admin/access": ACCESS })); // reach: tenants only
+      render(<AccessPage />);
+      await screen.findByText("次のテナントのみ: sample");
+      expect(screen.queryByRole("button", { name: "セッションを失効させる" })).toBeNull();
+    });
+
+    it("asks for a valid identifier, then for a confirmation, then revokes", async () => {
+      const calls = routes();
+      render(<AccessPage />);
+      const input = await screen.findByLabelText("識別子（呼び出し元キー）");
+      fireEvent.change(input, { target: { value: "ab" } });
+      fireEvent.click(screen.getByRole("button", { name: "セッションを失効させる" }));
+      expect(await screen.findByText(/6〜64 文字/)).toBeInTheDocument();
+      expect(calls).toHaveLength(0);
+      fireEvent.change(input, { target: { value: "key-abc123" } });
+      fireEvent.click(screen.getByRole("button", { name: "セッションを失効させる" }));
+      expect(await screen.findByText("識別子 key-abc123 の人のセッションをすべて失効させます。よろしいですか？")).toBeInTheDocument();
+      expect(calls).toHaveLength(0); // nothing is sent before the confirmation
+      const dialog = screen.getByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: "セッションを失効させる" }));
+      expect(await screen.findByText("識別子 key-abc123 のセッションを失効させました。")).toBeInTheDocument();
+      expect(JSON.parse(calls[0].body)).toEqual({ key_fingerprint: "key-abc123" });
+    });
+
+    it("says so when the server refuses", async () => {
+      routes({ status: 403, body: { detail: "this action needs the installation administrator" } });
+      render(<AccessPage />);
+      fireEvent.change(await screen.findByLabelText("識別子（呼び出し元キー）"), { target: { value: "key-abc123" } });
+      fireEvent.click(screen.getByRole("button", { name: "セッションを失効させる" }));
+      fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "セッションを失効させる" }));
+      expect(await screen.findByText("この操作は、インストール全体の管理者だけが行えます。")).toBeInTheDocument();
+    });
   });
 });

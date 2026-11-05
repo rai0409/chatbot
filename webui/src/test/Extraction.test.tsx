@@ -1,7 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExtractionPage } from "../pages/Extraction";
-import { PAGE, callsTo, defaultRoutes, routeFetch } from "./extractionFixtures";
+import { DOCS, PAGE, callsTo, defaultRoutes, routeFetch } from "./extractionFixtures";
+
+const DOCS_WITH = (n: number) => ({ ...DOCS[0], awaiting_approval: n });
 import { jsonResponse } from "./fixtures";
 
 const createUrl = vi.fn(() => "blob:page-1");
@@ -9,6 +11,7 @@ const revokeUrl = vi.fn();
 
 beforeEach(() => {
   document.cookie = "admin_csrf=token-123";
+  window.sessionStorage.clear(); // the typed name is remembered per session: every test starts without it
   vi.stubGlobal("location", { ...window.location, assign: vi.fn(), pathname: "/console/extraction" });
   URL.createObjectURL = createUrl;
   URL.revokeObjectURL = revokeUrl;
@@ -197,5 +200,83 @@ describe("the extraction review page", () => {
     routeFetch(defaultRoutes({ "GET /admin/extraction/docs": () => jsonResponse({ detail: "x" }, 401), "GET /admin/extraction/items": () => jsonResponse({ detail: "x" }, 401) }));
     render(<ExtractionPage />);
     await waitFor(() => expect(window.location.assign).toHaveBeenCalledWith("/admin/login?next=%2Fconsole%2Fextraction"));
+  });
+
+  describe("approval of corrections by a second person", () => {
+    const approvalPage = {
+      ...PAGE,
+      require_approval: true,
+      lines: PAGE.lines.map((l) =>
+        l.id === "l2" ? { ...l, state: "corrected" as const, approval: "awaiting" as const, corrected_by: "山田太郎", approved_by: null } : l,
+      ),
+    };
+
+    async function openSecondLine() {
+      fireEvent.click(await screen.findByRole("button", { name: "株式会社サンプル" }));
+      return screen.findByRole("textbox", { name: "補正後の文字" });
+    }
+
+    it("shows who corrected and lets a named person approve", async () => {
+      const mock = routeFetch(
+        defaultRoutes({
+          "GET /admin/extraction/page": () => jsonResponse(approvalPage),
+          "POST /admin/extraction/approve": () => jsonResponse({ id: "x" }),
+        }),
+      );
+      render(<ExtractionPage />);
+      fireEvent.change(await screen.findByLabelText("あなたの名前"), { target: { value: "佐藤次郎" } });
+      await openSecondLine();
+      expect(await screen.findByText(/承認待ちです（補正した人: 山田太郎）/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "補正を承認" }));
+      expect(await screen.findByText(/承認しました/)).toBeInTheDocument();
+      const call = callsTo(mock, "POST /admin/extraction/approve")[0];
+      expect(JSON.parse(String(call[1]?.body))).toMatchObject({ tenant_id: "default", source_doc: "scan-a.pdf", page: 1, line_id: "l2", actor: "佐藤次郎" });
+    });
+
+    it("asks for a name before it sends an approval", async () => {
+      const mock = routeFetch(defaultRoutes({ "GET /admin/extraction/page": () => jsonResponse(approvalPage) }));
+      render(<ExtractionPage />);
+      await openSecondLine();
+      fireEvent.click(await screen.findByRole("button", { name: "補正を承認" }));
+      expect(await screen.findByText("承認するには、あなたの名前を入力してください。")).toBeInTheDocument();
+      expect(callsTo(mock, "POST /admin/extraction/approve")).toHaveLength(0);
+    });
+
+    it("shows the server's reason when the author tries to approve their own correction", async () => {
+      routeFetch(
+        defaultRoutes({
+          "GET /admin/extraction/page": () => jsonResponse(approvalPage),
+          "POST /admin/extraction/approve": () => jsonResponse({ detail: "the author of a correction cannot approve their own correction" }, 400),
+        }),
+      );
+      render(<ExtractionPage />);
+      fireEvent.change(await screen.findByLabelText("あなたの名前"), { target: { value: "山田太郎" } });
+      await openSecondLine();
+      fireEvent.click(await screen.findByRole("button", { name: "補正を承認" }));
+      expect(await screen.findByText(/承認できませんでした: the author of a correction cannot approve/)).toBeInTheDocument();
+    });
+
+    it("sends the typed name with a correction, and shows no approve button when nothing waits", async () => {
+      const mock = routeFetch(defaultRoutes({ "POST /admin/extraction/correct": () => jsonResponse({ id: "y" }) }));
+      render(<ExtractionPage />);
+      fireEvent.change(await screen.findByLabelText("あなたの名前"), { target: { value: "山田太郎" } });
+      const box = await openFirstLine();
+      expect(screen.queryByRole("button", { name: "補正を承認" })).toBeNull();
+      fireEvent.change(box, { target: { value: "請求書番号 12045" } });
+      fireEvent.click(screen.getByRole("button", { name: "補正を保存" }));
+      await waitFor(() => expect(callsTo(mock, "POST /admin/extraction/correct")).toHaveLength(1));
+      expect(JSON.parse(String(callsTo(mock, "POST /admin/extraction/correct")[0][1]?.body)).actor).toBe("山田太郎");
+    });
+
+    it("adds an awaiting-approval column only when something waits", async () => {
+      routeFetch(defaultRoutes());
+      render(<ExtractionPage />);
+      await screen.findByRole("row", { name: /scan-a\.pdf 2 10 2 1 0/ });
+      expect(screen.queryByRole("columnheader", { name: "承認待ち" })).toBeNull();
+      cleanup();
+      routeFetch(defaultRoutes({ "GET /admin/extraction/docs": () => jsonResponse({ documents: [{ ...DOCS_WITH(2) }] }) }));
+      render(<ExtractionPage />);
+      expect(await screen.findByRole("columnheader", { name: "承認待ち" })).toBeInTheDocument();
+    });
   });
 });

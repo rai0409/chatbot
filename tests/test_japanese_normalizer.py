@@ -139,3 +139,19 @@ def test_custom_config_file_loads_expected_shape(tmp_path):
     assert cfg["_metadata"]["loaded"] is True
     assert cfg["synonym_groups"][0]["canonical"] == "申請"
     assert cfg["negative_mismatch_pairs"][0]["left"] == ["追加"]
+
+
+# --- particles are trimmed only next to a content word (PR H) ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("はがきを送る", ["はがきを送る"]),            # は / が belong to the word はがき
+    ("にほんの文化", ["にほんの文化"]),             # に belongs to にほん
+    ("のりと塩", ["のりと塩"]),
+    ("再設定を", ["再設定"]),                       # trailing particle after kanji
+    ("サーバーと", ["サーバー"]),                   # trailing particle after katakana
+    ("の設定", ["設定"]),                           # leading particle before kanji
+    ("と", []),                                     # a lone particle is not a term
+])
+def test_particles_are_only_trimmed_next_to_a_content_word(text, expected):
+    assert tokenize_lightweight(text) == expected

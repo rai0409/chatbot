@@ -168,8 +168,7 @@ def test_approved_exact_match_precedes_and_is_uncached(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "APPROVED_QA_PATH", str(approved_path))
     monkeypatch.setattr(config, "ANSWER_CACHE_ENABLED", True)
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(chat_router, "_approved_qa_index", None)
-    monkeypatch.setattr(chat_router, "_approved_qa_index_path", None)
+    monkeypatch.setattr(chat_router, "_approved_qa_cache", {})
     answer_cache.clear()
 
     def forbidden(*args, **kwargs):
