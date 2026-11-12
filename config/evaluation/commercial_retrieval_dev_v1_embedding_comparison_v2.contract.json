@@ -1,0 +1,520 @@
+{
+  "candidate_embeddings": [
+    {
+      "architecture_family": "XLM-RoBERTa-based BGE-M3 dense encoder",
+      "commercial_use": {
+        "eligible": true,
+        "license_identifier": "MIT",
+        "license_source_reference": "https://huggingface.co/BAAI/bge-m3",
+        "verification": "upstream_model_card_metadata"
+      },
+      "embedding_dimension": 1024,
+      "encoding": {
+        "document_format": "{document}",
+        "embedding_dimension_used": 1024,
+        "matryoshka_supported_dimensions": [],
+        "matryoshka_truncation_supported": false,
+        "normalization": "l2",
+        "pooling": "cls",
+        "precision_dtype": "float32",
+        "query_format": "{query}",
+        "similarity": "cosine_via_dot_product_after_l2_normalization",
+        "truncation_policy": "truncate_to_8192_model_tokens"
+      },
+      "id": "bge_m3_incumbent",
+      "local_loading": {
+        "asset_acquisition_status": "NOT_STARTED",
+        "asset_integrity_manifest_required_before_execution": true,
+        "local_files_only": true,
+        "model_weight_download_allowed_during_contract_freeze": false,
+        "network_allowed_at_runtime": false,
+        "required_snapshot_revision": "5617a9f61b028005a4858fdac845db406aefb181"
+      },
+      "max_sequence_length": 8192,
+      "model_id": "BAAI/bge-m3",
+      "nominal_parameter_count": "approximately_0.6B",
+      "purpose": "current_strongest_incumbent_from_embedding_comparison_v1",
+      "revision": "5617a9f61b028005a4858fdac845db406aefb181",
+      "runtime_assumptions": {
+        "library": "sentence-transformers",
+        "runtime": "python_torch_cpu_or_accelerator",
+        "trust_remote_code": false
+      },
+      "upstream_source": "https://huggingface.co/BAAI/bge-m3"
+    },
+    {
+      "architecture_family": "Qwen3 causal-transformer embedding model",
+      "commercial_use": {
+        "eligible": true,
+        "license_identifier": "Apache-2.0",
+        "license_source_reference": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B/blob/97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3/README.md",
+        "verification": "upstream_model_card_metadata"
+      },
+      "embedding_dimension": 1024,
+      "encoding": {
+        "document_format": "{document}",
+        "embedding_dimension_used": 1024,
+        "matryoshka_supported_dimensions": "32_to_1024",
+        "matryoshka_truncation_supported": true,
+        "normalization": "l2",
+        "pooling": "last_token",
+        "precision_dtype": "float32",
+        "query_format": "Instruct: Given a web search query, retrieve relevant passages that answer the query\\nQuery:{query}",
+        "similarity": "cosine_via_dot_product_after_l2_normalization",
+        "truncation_policy": "truncate_to_8192_model_tokens"
+      },
+      "id": "qwen3_embedding_0_6b_global_challenger",
+      "local_loading": {
+        "asset_acquisition_status": "NOT_STARTED",
+        "asset_integrity_manifest_required_before_execution": true,
+        "local_files_only": true,
+        "model_weight_download_allowed_during_contract_freeze": false,
+        "network_allowed_at_runtime": false,
+        "required_snapshot_revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
+      },
+      "max_sequence_length": 32768,
+      "model_id": "Qwen/Qwen3-Embedding-0.6B",
+      "nominal_parameter_count": "0.6B",
+      "purpose": "current_generation_multilingual_retrieval_challenger",
+      "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+      "runtime_assumptions": {
+        "library": "sentence-transformers>=2.7.0; transformers>=4.51.0",
+        "runtime": "python_torch_cpu_or_accelerator",
+        "trust_remote_code": false
+      },
+      "upstream_source": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B"
+    },
+    {
+      "architecture_family": "ModernBERT-Ja sentence transformer",
+      "commercial_use": {
+        "eligible": true,
+        "license_identifier": "Apache-2.0",
+        "license_source_reference": "https://huggingface.co/cl-nagoya/ruri-v3-310m",
+        "verification": "upstream_model_card_metadata"
+      },
+      "embedding_dimension": 768,
+      "encoding": {
+        "document_format": "検索文書: {document}",
+        "embedding_dimension_used": 768,
+        "matryoshka_supported_dimensions": [],
+        "matryoshka_truncation_supported": false,
+        "normalization": "l2",
+        "pooling": "mean",
+        "precision_dtype": "float32",
+        "query_format": "検索クエリ: {query}",
+        "similarity": "cosine_via_dot_product_after_l2_normalization",
+        "truncation_policy": "truncate_to_8192_model_tokens"
+      },
+      "id": "ruri_v3_310m_japanese_specialist",
+      "local_loading": {
+        "asset_acquisition_status": "NOT_STARTED",
+        "asset_integrity_manifest_required_before_execution": true,
+        "local_files_only": true,
+        "model_weight_download_allowed_during_contract_freeze": false,
+        "network_allowed_at_runtime": false,
+        "required_snapshot_revision": "18b60fb8c2b9df296fb4212bb7d23ef94e579cd3"
+      },
+      "max_sequence_length": 8192,
+      "model_id": "cl-nagoya/ruri-v3-310m",
+      "nominal_parameter_count": "315M",
+      "purpose": "japanese_specialized_medium_size_candidate",
+      "revision": "18b60fb8c2b9df296fb4212bb7d23ef94e579cd3",
+      "runtime_assumptions": {
+        "library": "sentence-transformers; transformers>=4.48.0; sentencepiece",
+        "runtime": "python_torch_cpu_or_accelerator",
+        "trust_remote_code": false
+      },
+      "upstream_source": "https://huggingface.co/cl-nagoya/ruri-v3-310m"
+    },
+    {
+      "architecture_family": "PLaMo custom-code retrieval embedding model",
+      "commercial_use": {
+        "eligible": true,
+        "license_identifier": "Apache-2.0",
+        "license_source_reference": "https://huggingface.co/pfnet/plamo-embedding-1b/blob/f47268047fb3df74113675700c1e9dacdc68cb47/README.md",
+        "verification": "upstream_model_card_metadata"
+      },
+      "embedding_dimension": 2048,
+      "encoding": {
+        "document_format": "model.encode_document([document], tokenizer)",
+        "embedding_dimension_used": 2048,
+        "matryoshka_supported_dimensions": [],
+        "matryoshka_truncation_supported": false,
+        "normalization": "l2",
+        "pooling": "model_provided_encode_document_or_encode_query",
+        "precision_dtype": "float32",
+        "query_format": "model.encode_query(query, tokenizer)",
+        "similarity": "cosine_via_dot_product_after_l2_normalization",
+        "truncation_policy": "truncate_to_1024_model_tokens_for_official_comparison; model_supports_4096"
+      },
+      "id": "plamo_embedding_1b_japanese_higher_capacity",
+      "local_loading": {
+        "asset_acquisition_status": "NOT_STARTED",
+        "asset_integrity_manifest_required_before_execution": true,
+        "local_files_only": true,
+        "model_weight_download_allowed_during_contract_freeze": false,
+        "network_allowed_at_runtime": false,
+        "required_snapshot_revision": "f47268047fb3df74113675700c1e9dacdc68cb47"
+      },
+      "max_sequence_length": 4096,
+      "model_id": "pfnet/plamo-embedding-1b",
+      "nominal_parameter_count": "1B",
+      "purpose": "japanese_specialized_higher_capacity_quality_latency_tradeoff",
+      "revision": "f47268047fb3df74113675700c1e9dacdc68cb47",
+      "runtime_assumptions": {
+        "library": "transformers; torch; sentencepiece",
+        "runtime": "python_torch_cpu_or_accelerator",
+        "trust_remote_code": true
+      },
+      "upstream_source": "https://huggingface.co/pfnet/plamo-embedding-1b"
+    },
+    {
+      "architecture_family": "ModernBERT multilingual dense bi-encoder",
+      "commercial_use": {
+        "eligible": true,
+        "license_identifier": "Apache-2.0",
+        "license_source_reference": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2",
+        "verification": "upstream_model_card_metadata"
+      },
+      "embedding_dimension": 768,
+      "encoding": {
+        "document_format": "{document}",
+        "embedding_dimension_used": 768,
+        "matryoshka_supported_dimensions": [
+          128,
+          256,
+          384,
+          512,
+          768
+        ],
+        "matryoshka_truncation_supported": true,
+        "normalization": "l2",
+        "pooling": "cls",
+        "precision_dtype": "float32",
+        "query_format": "{query}",
+        "similarity": "cosine_via_dot_product_after_l2_normalization",
+        "truncation_policy": "truncate_to_8192_model_tokens"
+      },
+      "id": "granite_embedding_311m_multilingual_r2_enterprise_challenger",
+      "local_loading": {
+        "asset_acquisition_status": "NOT_STARTED",
+        "asset_integrity_manifest_required_before_execution": true,
+        "local_files_only": true,
+        "model_weight_download_allowed_during_contract_freeze": false,
+        "network_allowed_at_runtime": false,
+        "required_snapshot_revision": "44399559930365213510b1ee2eb15ded83374f0e"
+      },
+      "max_sequence_length": 32768,
+      "model_id": "ibm-granite/granite-embedding-311m-multilingual-r2",
+      "nominal_parameter_count": "311M",
+      "purpose": "enterprise_efficient_multilingual_japanese_supported_challenger",
+      "revision": "44399559930365213510b1ee2eb15ded83374f0e",
+      "runtime_assumptions": {
+        "library": "sentence-transformers; transformers; torch",
+        "runtime": "python_torch_cpu_or_accelerator",
+        "trust_remote_code": false
+      },
+      "upstream_source": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2"
+    },
+    {
+      "architecture_family": "multilingual MiniLM sentence transformer",
+      "commercial_use": {
+        "eligible": true,
+        "license_identifier": "Apache-2.0",
+        "license_source_reference": "https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/tree/e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+        "verification": "upstream_model_card_metadata"
+      },
+      "embedding_dimension": 384,
+      "encoding": {
+        "document_format": "{document}",
+        "embedding_dimension_used": 384,
+        "matryoshka_supported_dimensions": [],
+        "matryoshka_truncation_supported": false,
+        "normalization": "l2",
+        "pooling": "mean",
+        "precision_dtype": "float32",
+        "query_format": "{query}",
+        "similarity": "cosine_via_dot_product_after_l2_normalization",
+        "truncation_policy": "truncate_to_128_model_tokens"
+      },
+      "id": "paraphrase_multilingual_minilm_l12_v2_historical_control",
+      "local_loading": {
+        "asset_acquisition_status": "PINNED_V1_ASSET_ALREADY_VERIFIED",
+        "asset_contract": "config/embedding_assets/retrieval_baseline.asset.json",
+        "asset_integrity_manifest_required_before_execution": true,
+        "local_files_only": true,
+        "model_weight_download_allowed_during_contract_freeze": false,
+        "network_allowed_at_runtime": false,
+        "required_snapshot_revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42"
+      },
+      "max_sequence_length": 128,
+      "model_id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "nominal_parameter_count": "118M",
+      "purpose": "historical_lightweight_latency_quality_control_not_automatic_winner",
+      "revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+      "runtime_assumptions": {
+        "library": "sentence-transformers; transformers; torch",
+        "runtime": "python_torch_cpu_or_accelerator",
+        "trust_remote_code": false
+      },
+      "upstream_source": "https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    }
+  ],
+  "contract_status": "FROZEN_READY_FOR_ASSET_ACQUISITION",
+  "dataset_identity": {
+    "abstain_cases": 100,
+    "answerable_cases": 300,
+    "candidate_cases": 400,
+    "dataset_name": "Commercial Retrieval Dev v1",
+    "dataset_role": "DEV_ACTIVE",
+    "development_only": true,
+    "documents": 480,
+    "final_blind_evaluation": false,
+    "release_gate_eligible": false,
+    "source_chunks": 9600
+  },
+  "determinism": {
+    "canonical_artifact_serialization": "UTF-8 ensure_ascii=false indent=2 sort_keys=true trailing_newline",
+    "case_order": "canonical cases.jsonl order",
+    "chunk_order": "canonical chunks.jsonl order",
+    "quality_rerun_requirement": "repeat ranking and metrics from identical fixed vectors; rankings and quality metrics must be byte-identical",
+    "tie_breaker": "ascending canonical chunk_id"
+  },
+  "execution_state": {
+    "embedding_model_comparison_count": 1,
+    "network_attempts": 0,
+    "retrieval_execution_count": 1,
+    "selection_holdout_execution_count": 0,
+    "vector_backend_comparison_count": 0
+  },
+  "frozen_inputs": {
+    "candidate_cases": {
+      "path": "eval/commercial_retrieval_dev_v1/candidates/cases.jsonl",
+      "sha256": "2d7ef396b02217dce9a40855cf63e54ae9701779d0cec988b770b5b13805911d"
+    },
+    "candidate_manifest": {
+      "path": "eval/commercial_retrieval_dev_v1/candidates/manifest.json",
+      "sha256": "bd05cc18fbd983508e7a3212ea1694c094684d301bffdbddacc2482d0c436ae8"
+    },
+    "commercial_retrieval_dev_contract": {
+      "path": "config/evaluation/commercial_retrieval_dev_v1.contract.json",
+      "sha256": "a2b238cc5c5ee3fc95386cb6867ac6efebec4d446b261fb9fd68a7a9222d4b55"
+    },
+    "documents": {
+      "path": "eval/commercial_retrieval_dev_v1/source/documents.jsonl",
+      "sha256": "5d920b490289bd76f2683cc5b84e17d035343ff17c30f10e5c1aa6f5a871f7d1"
+    },
+    "hybrid_activation_audit": {
+      "path": "eval/hybrid_retrieval_activation_audit/v1/audit.json",
+      "sha256": "42d2712f5063b2a883c0b5e425ee946ccb1587ab75da64cd594dc9a8087e783b"
+    },
+    "machine_review_manifest": {
+      "path": "eval/commercial_retrieval_dev_v1/reviews/machine/manifest.json",
+      "sha256": "83d9d88a850a34956b76caace2ecbb00c978d33bf2e104962bcb962fbaae160a"
+    },
+    "machine_reviews": {
+      "path": "eval/commercial_retrieval_dev_v1/reviews/machine/reviews.jsonl",
+      "sha256": "2005426657f5d2a72d62125936f1ddca29ca09795b5056f2de32561c0100ca24"
+    },
+    "source_chunks": {
+      "path": "eval/commercial_retrieval_dev_v1/source/chunks.jsonl",
+      "sha256": "725fc99add1c73e4aee90438b389204671bfd43c24bd2133f43aea14881be467"
+    }
+  },
+  "metadata_provenance": {
+    "access_mode": "read_only_official_upstream_model_card_and_repository_metadata",
+    "evaluation_network_attempt_count": 0,
+    "metadata_access_performed": true,
+    "model_weight_download_count": 0,
+    "verified_on": "2026-09-28"
+  },
+  "multi_document_completeness_metrics": [
+    {
+      "denominator": "multi_document answerable cases",
+      "name": "at_least_one_required_support_at_20",
+      "rule": "top 20 contains at least one ID from required gold_chunk_ids"
+    },
+    {
+      "denominator": "multi_document answerable cases",
+      "name": "all_required_supports_at_20",
+      "rule": "all IDs in required gold_chunk_ids are contained in top 20"
+    },
+    {
+      "denominator": "multi_document answerable cases",
+      "name": "at_least_one_required_support_at_50",
+      "rule": "top 50 contains at least one ID from required gold_chunk_ids"
+    },
+    {
+      "denominator": "multi_document answerable cases",
+      "name": "all_required_supports_at_50",
+      "rule": "all IDs in required gold_chunk_ids are contained in top 50"
+    }
+  ],
+  "operational_measurements": {
+    "hard_eligibility_gates": [],
+    "informative_only": true,
+    "measurement_conditions": {
+      "batch_size": "record_actual_fixed_value_per_candidate_before_run",
+      "device": "record_actual_offline_device",
+      "dtype": "float32_output_vectors",
+      "latency_percentile_method": "nearest_rank",
+      "thread_and_worker_settings": "record_actual_fixed_values_per_candidate_before_run"
+    },
+    "required": [
+      "corpus_embedding_elapsed_seconds",
+      "query_embedding_latency_ms_p50",
+      "query_embedding_latency_ms_p95",
+      "retrieval_latency_ms_p50",
+      "retrieval_latency_ms_p95",
+      "peak_resident_memory_bytes",
+      "embedding_dimension",
+      "serialized_embedding_size_bytes",
+      "serialized_exact_search_index_size_bytes",
+      "model_asset_size_bytes",
+      "runtime_device_dtype_batch_size_worker_thread_settings"
+    ]
+  },
+  "pre_execution_artifact_policy": {
+    "execution_artifact_directory": "eval/commercial_retrieval_dev_v1/embedding_comparison/v2",
+    "execution_result_must_not_exist_before_execution": true,
+    "execution_result_paths": [
+      "eval/commercial_retrieval_dev_v1/embedding_comparison/v2/comparison_result.json",
+      "eval/commercial_retrieval_dev_v1/embedding_comparison/v2/rankings.jsonl",
+      "eval/commercial_retrieval_dev_v1/embedding_comparison/v2/execution_receipt.json"
+    ]
+  },
+  "prohibited_activity": {
+    "benchmark_execution_in_contract_freeze": true,
+    "consume_embedding_selection_holdout": true,
+    "consume_semantic_independent_holdout_step_8c": true,
+    "download_model_weights": true,
+    "embedding_inference_in_contract_freeze": true,
+    "network_access_for_evaluation": true,
+    "retrieval_execution_in_contract_freeze": true,
+    "select_final_embedding_winner": true
+  },
+  "quality_metrics": [
+    {
+      "denominator": "300 answerable cases",
+      "name": "recall_at_5",
+      "rule": "top 5 contains at least one gold_chunk_id"
+    },
+    {
+      "denominator": "300 answerable cases",
+      "name": "recall_at_10",
+      "rule": "top 10 contains at least one gold_chunk_id"
+    },
+    {
+      "denominator": "300 answerable cases",
+      "name": "recall_at_20",
+      "rule": "top 20 contains at least one gold_chunk_id"
+    },
+    {
+      "denominator": "300 answerable cases",
+      "name": "recall_at_50",
+      "rule": "top 50 contains at least one gold_chunk_id"
+    },
+    {
+      "denominator": "300 answerable cases",
+      "name": "mrr_at_20",
+      "rule": "mean reciprocal rank of first gold_chunk_id in top 20; zero if absent"
+    },
+    {
+      "denominator": "300 answerable cases",
+      "name": "ndcg_at_20",
+      "rule": "binary-gain NDCG at 20 using per-case ideal DCG over gold_chunk_ids"
+    },
+    {
+      "denominator": "300 answerable cases",
+      "name": "candidate_coverage_at_20",
+      "rule": "top 20 candidate set contains at least one gold_chunk_id before downstream processing"
+    },
+    {
+      "denominator": "300 answerable cases",
+      "name": "candidate_coverage_at_50",
+      "rule": "top 50 candidate set contains at least one gold_chunk_id before downstream processing"
+    }
+  ],
+  "retrieval_protocol": {
+    "ann_approximation_allowed": false,
+    "chunk_text": "canonical chunks.jsonl content field; no corpus mutation",
+    "cross_encoder_reranking_allowed": false,
+    "dense_only": true,
+    "hybrid_fusion_allowed": false,
+    "query_text": "canonical cases.jsonl query field; candidate-specific frozen formatting only",
+    "ranking": {
+      "method": "exact_dense_dot_product_after_l2_normalization",
+      "ranking_depth": 50,
+      "tie_breaker": "ascending canonical chunk_id",
+      "top_k_values": [
+        5,
+        10,
+        20,
+        50
+      ]
+    },
+    "same_corpus_for_all_candidates": true,
+    "same_query_set_for_all_candidates": true
+  },
+  "schema_version": "commercial_retrieval_dev_v1.embedding_comparison.contract.v2",
+  "selection_policy": {
+    "allowed_development_uses": [
+      "identify_dominated_candidates",
+      "produce_shortlist",
+      "identify_quality_latency_tradeoffs"
+    ],
+    "final_embedding_winner_allowed_from_dev_alone": false,
+    "next_stage_after_v2_execution": "Hybrid-aware Embedding Dev Comparison",
+    "selection_holdout_gold_labels_inspected": false,
+    "selection_holdout_role": "PLANNED",
+    "selection_holdout_unconsumed": true,
+    "thresholds_may_not_change_after_results": true
+  },
+  "slice_metrics": [
+    {
+      "answerable_only": true,
+      "challenge_flag": "low_lexical_overlap",
+      "expected_case_count": 80,
+      "name": "low_lexical_overlap"
+    },
+    {
+      "answerable_only": true,
+      "challenge_flag": "hard_negative",
+      "expected_case_count": 300,
+      "name": "hard_negative"
+    },
+    {
+      "answerable_only": true,
+      "challenge_flag": "condition_exception_negation",
+      "expected_case_count": 45,
+      "name": "condition_exception_negation"
+    },
+    {
+      "answerable_only": true,
+      "challenge_flag": "version_sensitive",
+      "expected_case_count": 35,
+      "name": "version_sensitive"
+    },
+    {
+      "answerable_only": true,
+      "challenge_flag": "multi_document",
+      "expected_case_count": 35,
+      "name": "multi_document"
+    },
+    {
+      "answerable_only": true,
+      "challenge_flag": "ocr_typo_terminology_noise",
+      "expected_case_count": 40,
+      "name": "ocr_typo_noise"
+    }
+  ],
+  "v1_immutable_artifacts": {
+    "bge_asset_manifest": "f678cd667377b2cbffa15455f5549ff6dab3fed0d79edb3a27037e3c108b5da3",
+    "comparison_contract": "33b34bd6b31ebf32546ec3f89f1129ef4582c4751c3cf7439f3b3b954d982c96",
+    "comparison_result": "a5a364f84c7fd1ddf3365cc45dd68b8807edd238b01cd718e7703f8a7df6e8ff",
+    "execution_receipt": "8f3e8c31ce8d56607a4c2e5414aac918008c3d56fa4beb624b5f6f04174f3a30",
+    "minilm_asset_manifest": "0ad484eb05e450ad1e1203bedd50653f790fb046626bb43a22af6ddcbb5b9a2a",
+    "operational_measurements": "b11de9fd755fbe54202565801d573baf841fc432745b4fcc24433397e5f08057",
+    "rankings": "d474f55f90c82d108b770789823b1258873e1a9c40c2b8d95884aa1d27867256"
+  }
+}

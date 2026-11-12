@@ -1,0 +1,43 @@
+{
+  "schema_version": "external_retrieval_eval.contract.v1",
+  "contract_status": "READY_FOR_OFFLINE_DEVELOPMENT_EXECUTION",
+  "candidate_source": {
+    "contract_path": "config/evaluation/commercial_retrieval_dev_v1_embedding_comparison_v2.contract.json",
+    "contract_sha256": "e4c7c114486d87949fc1b6976e927c69138d559fc627755532e16239a53beb7c"
+  },
+  "datasets": {
+    "miracl_ja_lite": {
+      "role": "DEV_DIAGNOSTIC_TEST_ONLY",
+      "revision": "575c225da29d1f5fec01082afa56f35df0f44295",
+      "split": "test",
+      "files": {
+        "corpus": {"path": "miracl_ja_lite/corpus/test-00000-of-00001.parquet", "sha256": "63e96fe7f4d53ec8c1ea1694c067cf39a5fef9d44bfcd3f8f1505950a1ba5692"},
+        "queries": {"path": "miracl_ja_lite/queries/test-00000-of-00001.parquet", "sha256": "79b8a4ba3c1c03e557ef07db53de26412fa7f3cbdb1da8fda6e0b200be76173e"},
+        "qrels": {"path": "miracl_ja_lite/qrels/test-00000-of-00001.parquet", "sha256": "d9dcc7407ca643db6f6146722da1d4e5e63390e0efb23000bc1e463aa1e8d97e"}
+      },
+      "expected": {"corpus": 105064, "queries": 860, "qrels": 1790},
+      "preprocessing": {"document_text": "title + '\\n' + text when title is non-empty", "query_text": "source text unchanged"}
+    },
+    "acord": {
+      "role": "DEV_TRAIN_VALID_ONLY",
+      "revision": "7ba1c6f2e0baaa32e78c78c2b02e9c57b102af4e",
+      "zip_path": "acord/ACORD Dataset & ReadMe.zip",
+      "zip_sha256": "c9e851456a14aed161033b856e9f40f3cc9f46cf7282c2007b143420e93a65c3",
+      "allowed_splits": ["train", "valid"],
+      "forbidden_split": "test",
+      "expected": {"corpus": 3931, "train_queries": 51, "valid_queries": 6},
+      "qrels_policy": {"preserve_grades": true, "positive_for_recall_mrr_hit": 1, "ndcg": "graded_0_to_4"}
+    },
+    "jdocqa": {
+      "role": "ANNOTATION_INSPECTION_ONLY",
+      "revision": "validation_all_local_snapshot",
+      "validation_path": "jdocqa/jdocqa_validation_all.json",
+      "validation_sha256": "edf13c440f199ad37d6a35fe756b14feff8c4268828d7ecf5e3e50444dc055cb",
+      "expected_questions": 1134,
+      "pdf_binaries": "NOT_DOWNLOADED_NOT_VERIFIED",
+      "test_access": "FORBIDDEN"
+    }
+  },
+  "metrics": {"cutoffs": [5, 10, 20, 50], "mrr_cutoffs": [10, 20], "ndcg_cutoff": 10, "tie_breaker": "similarity_desc_then_corpus_id_asc"},
+  "execution": {"offline_required": true, "network_allowed": false, "selection_holdout_access_count": 0, "acord_test_access_count": 0, "jdocqa_test_access_count": 0, "output_dir": "eval/commercial_retrieval_dev_v1/external_retrieval_eval/v1"}
+}
