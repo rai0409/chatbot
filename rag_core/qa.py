@@ -225,7 +225,20 @@ def _evidence_coverage_bypass(question: str, retrieved: Sequence[RetrievedChunk]
     content_len = sum(len(run) for run in _TOO_GENERAL_WORD_RUN_RE.findall(question_norm))
     if content_len >= _TOO_GENERAL_MIN_FULL_QUESTION_CONTENT_LEN:
         return True
-    return len(terms) == 1 and len(terms[0]) >= _TOO_GENERAL_MIN_SINGLE_TERM_LEN
+    if len(terms) == 1 and len(terms[0]) >= _TOO_GENERAL_MIN_SINGLE_TERM_LEN:
+        return True
+    # Commercial fix F16: a short colloquial lookup ("有給ってどう？") names one 2-char
+    # term. It is a legitimate lookup when that term is in the top-1 chunk's heading
+    # fields (title / section path / FAQ question), not merely somewhere in its body.
+    if len(terms) == 1 and len(terms[0]) >= 2:
+        section_path = top_meta.get("section_path") or []
+        if not isinstance(section_path, (list, tuple)):
+            section_path = [str(section_path)]
+        heading = normalize_japanese_text(" ".join(
+            [str(top_meta.get("title") or ""), str(top_meta.get("faq_question") or ""), " ".join(str(p) for p in section_path)]
+        ))
+        return terms[0] in heading
+    return False
 
 
 def _guard_evidence(retrieved: Sequence[RetrievedChunk]) -> Dict[str, object]:
@@ -321,6 +334,15 @@ def guard_merged_top(question: str, intent: str, chunks: Sequence[Chunk], retrie
             and not evidence["has_lexical_match"]
         ):
             return "weak_keyword_evidence"
+    # Commercial fix F8: a question that names a year (2025年度, 令和7年) is not
+    # answered by evidence that only carries other years, however well the
+    # other terms overlap. GUARD_YEAR_MISMATCH_ENABLED=false switches it off.
+    if _setting("GUARD_YEAR_MISMATCH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}:
+        requested_years = _extract_requested_years(question)
+        if requested_years:
+            evidence_compact = re.sub(r"\s+", "", normalize_japanese_text(" ".join(ch.text for ch in chunks)))
+            if not any(year in evidence_compact for year in requested_years):
+                return "year_mismatch"
     salient = _salient_terms(question)
     if salient:
         # Both sides use the index normalization (case, width, dashes).
@@ -531,6 +553,7 @@ _GUARD_MESSAGES = {
     "soft_distance": "質問に十分に関連する記載が見つかりませんでした。",
     "weak_keyword_evidence": "質問の語句を含む記載が見つかりませんでした。",
     "salient_mismatch": "質問にある名称や番号を含む記載が見つかりませんでした。",
+    "year_mismatch": "質問にある年度・年の記載が文書内に見つかりませんでした。",
     "too_general": "質問の範囲が広いため記載を特定できませんでした。対象や項目を具体的にしてください。",
     "insufficient_evidence": "回答に必要な根拠が文書内に見つかりませんでした。",
     "llm_unavailable": "現在回答を生成できず、文書内にも十分な根拠が見つかりませんでした。",
@@ -547,6 +570,31 @@ def _guard_fallback_raw(guard_reason: str) -> str:
     return f"- 関連情報が見つかりませんでした。{message}\n不明: 根拠不足"
 
 
+_GENERATED_BULLET_RE = re.compile(r"^-\s*(.*?)\s*((?:\[S\d+\]\s*)+)$")
+_GENERATED_TAG_RE = re.compile(r"\[S(\d+)\]")
+
+
+def _generated_answer_type_supported(question: str, raw: str, grounded: Sequence[Chunk]) -> bool:
+    """Year / money / count agreement for LLM-generated bullets (commercial fix F2).
+
+    The extractive path already refuses a sentence whose year, amount or count does
+    not match the question (_has_answer_type_support); a generated bullet passed
+    validate_output with a single shared term. Apply the same rule here.
+    """
+    selected: List[Tuple[int, str]] = []
+    for line in (raw or "").splitlines():
+        match = _GENERATED_BULLET_RE.match(line.strip())
+        if not match:
+            continue
+        tags = [int(n) for n in _GENERATED_TAG_RE.findall(match.group(2))]
+        if not tags:
+            continue
+        selected.append((tags[0], match.group(1)))
+    if not selected:
+        return True
+    return _has_answer_type_support(question, selected, grounded)
+
+
 def _finalize_generated_answer(
     raw: str, q: str, grounded: Sequence[Chunk], intent: str, *, tenant_id: str = "default", client=None
 ) -> Tuple[str, bool]:
@@ -557,6 +605,13 @@ def _finalize_generated_answer(
         used_fallback = True
         if not raw.strip():
             # No evidence sentence shares a term with the question.
+            return _guard_fallback_raw("insufficient_evidence"), True
+    if not used_fallback and not _generated_answer_type_supported(q, raw, grounded):
+        # Commercial fix F2: the generated bullets name a year, amount or count the
+        # cited evidence does not support for this question.
+        raw = extractive_fallback(q, grounded)
+        used_fallback = True
+        if not raw.strip():
             return _guard_fallback_raw("insufficient_evidence"), True
     if not used_fallback and getattr(config, "GROUNDING_VERIFY_ENABLED", False):
         # Step 4-3: every sentence must be supported by the evidence it cites. Unsupported ones are dropped; an
@@ -1284,7 +1339,9 @@ def _build_retrieval_trace(
     retrieval_q = q
     expansions: List[str] = []
     preprocess_trace: Optional[Dict[str, object]] = None
-    if _setting("QUERY_PREPROCESS_ENABLED", "false") in _ENABLED_VALUES:
+    # Commercial fix F12: colloquial stripping, synonyms and typo candidates are part
+    # of the product path (QUERY_PREPROCESS_ENABLED=false restores the raw query).
+    if _setting("QUERY_PREPROCESS_ENABLED", "true") in _ENABLED_VALUES:
         pre = query_preprocess.preprocess_query(
             q,
             tenant_id=normalize_tenant_id(tenant_id),

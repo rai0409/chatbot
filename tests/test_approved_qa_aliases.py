@@ -183,3 +183,159 @@ def test_alias_runner_covers_dangerous_differences_and_passes(tmp_path):
     assert summary["false_positive_total"] == 0
     assert summary["tenant_isolation_failures"] == 0
     assert all(dangerous[name]["passed"] for name in ("numeric_difference", "year_difference", "negation_difference"))
+
+
+def test_f13_colloquial_collision_preserves_exact_and_alias_priority(tmp_path):
+    path = tmp_path / "qa.jsonl"
+    _write(path, [_record("one", "PR-2は？", "A"), _record("two", "PR2は？", "B", aliases=["別名は？"])])
+    index = load_approved_qa(path)
+    assert lookup_approved_answer(index, "PR-2は？").qa_id == "one"
+    assert lookup_approved_answer(index, "別名は？").match_type == "alias"
+    assert lookup_approved_answer(index, "あの、PR-2は？") is None
+    assert lookup_approved_answer(index, "あの、PR2は？") is None
+
+
+def test_f13_canonical_and_alias_strong_key_collision(tmp_path):
+    path = tmp_path / "qa.jsonl"
+    _write(path, [_record("one", "料金-Aは？", "A"), _record("two", "別の質問は？", "B", aliases=["料金Aは？"])])
+    index = load_approved_qa(path)
+    assert lookup_approved_answer(index, "料金-Aは？").qa_id == "one"
+    assert lookup_approved_answer(index, "料金Aは？").qa_id == "two"
+    assert lookup_approved_answer(index, "あの、料金Aは？") is None
+
+
+def test_f13_colloquial_preserves_answer_and_citations_and_can_be_disabled(tmp_path, monkeypatch):
+    path = tmp_path / "qa.jsonl"
+    _write(path, [_record("one", "営業時間は？", "回答本文")])
+    index = load_approved_qa(path)
+    exact = lookup_approved_answer(index, "営業時間は？")
+    hit = lookup_approved_answer(index, "あの、営業時間は？")
+    assert hit is not None and hit.match_type == "colloquial"
+    assert hit.qa_id == exact.qa_id and hit.approved_answer == exact.approved_answer
+    assert hit.approved_citations == exact.approved_citations
+    monkeypatch.setenv("APPROVED_QA_COLLOQUIAL_MATCH", "false")
+    assert lookup_approved_answer(index, "あの、営業時間は？") is None
+    assert lookup_approved_answer(index, "営業時間は？").qa_id == "one"
+
+
+@pytest.mark.parametrize("original,other", [
+    ("2025年度の申請は？", "2026年度の申請は？"),
+    ("金額10円は？", "金額100円は？"),
+    ("PR2の申請は？", "PR20の申請は？"),
+    ("申請が必要ですか？", "申請が不要ですか？"),
+    ("申請可能ですか？", "申請不可能ですか？"),
+    ("申請する？", "申請取消する？"),
+    ("申請対象ですか？", "申請対象外ですか？"),
+    ("スーパーは？", "スパは？"),
+])
+def test_f13_meaningful_differences_are_not_automatic_matches(tmp_path, original, other):
+    path = tmp_path / "qa.jsonl"
+    _write(path, [_record("one", original)])
+    assert lookup_approved_answer(load_approved_qa(path), "あの、" + other) is None
+
+
+def test_f13_rule_edits_rebuild_for_the_same_index(tmp_path, monkeypatch):
+    from rag_core import query_preprocess
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    rule_file = rules / "colloquial_ja.json"
+    monkeypatch.setattr(query_preprocess, "RULES_DIR", rules)
+    rule_file.write_text(json.dumps({"strip_prefix": ["^あの、"], "strip_suffix": []}), encoding="utf-8")
+    path = tmp_path / "qa.jsonl"
+    _write(path, [_record("one", "営業時間")])
+    index = load_approved_qa(path)
+    assert lookup_approved_answer(index, "あの、営業時間").qa_id == "one"
+    rule_file.write_text(json.dumps({"strip_prefix": [], "strip_suffix": []}), encoding="utf-8")
+    assert lookup_approved_answer(index, "あの、営業時間") is None
+
+
+def test_f13_tenant_isolation_and_empty_key(tmp_path):
+    path = tmp_path / "qa.jsonl"
+    _write(path, [_record("a", "営業時間は？", "A", tenant="tenant-a"), _record("b", "営業時間は？", "B", tenant="tenant-b")])
+    a = load_approved_qa(path, tenant_id="tenant-a")
+    b = load_approved_qa(path, tenant_id="tenant-b")
+    assert lookup_approved_answer(a, "あの、営業時間は？", tenant_id="tenant-a").approved_answer == "A"
+    assert lookup_approved_answer(b, "あの、営業時間は？", tenant_id="tenant-b").approved_answer == "B"
+    assert lookup_approved_answer(a, "あの、営業時間は？", tenant_id="tenant-b") is None
+    assert lookup_approved_answer(a, "？", tenant_id="tenant-a") is None
+
+
+def test_f13_tenant_rule_change_and_unsafe_rule_are_not_stale(tmp_path, monkeypatch):
+    from rag_core import query_preprocess
+    rules = tmp_path / "rules"
+    (rules / "tenants").mkdir(parents=True)
+    (rules / "colloquial_ja.json").write_text(json.dumps({"strip_prefix": [], "strip_suffix": []}), encoding="utf-8")
+    tenant_file = rules / "tenants" / "tenant-a.json"
+    tenant_file.write_text(json.dumps({"strip_prefix": ["^あの、"], "strip_suffix": []}), encoding="utf-8")
+    monkeypatch.setattr(query_preprocess, "RULES_DIR", rules)
+    path = tmp_path / "qa.jsonl"
+    _write(path, [_record("one", "申請", tenant="tenant-a")])
+    index = load_approved_qa(path, tenant_id="tenant-a")
+    assert lookup_approved_answer(index, "あの、申請", tenant_id="tenant-a").qa_id == "one"
+    tenant_file.write_text(json.dumps({"strip_prefix": ["^取消"], "strip_suffix": []}), encoding="utf-8")
+    assert lookup_approved_answer(index, "あの、申請", tenant_id="tenant-a") is None
+    assert lookup_approved_answer(index, "取消申請", tenant_id="tenant-a") is None
+
+
+@pytest.mark.parametrize("question,mode,source", [
+    ("営業時間は？", "approved_exact_match", "approved_qa_exact"),
+    ("営業時刻は？", "approved_alias_match", "approved_qa_alias"),
+    ("あの、営業時間は？", "approved_colloquial_match", "approved_qa_colloquial"),
+])
+def test_f13_chat_modes_citations_audit_and_metrics(monkeypatch, tmp_path, question, mode, source):
+    from webapi import main, metrics_registry
+    from webapi.routers import chat as chat_router
+    path = tmp_path / "qa.jsonl"
+    _write(path, [_record("qa-1", "営業時間は？", "承認回答", aliases=["営業時刻は？"])])
+    monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
+    monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
+    monkeypatch.setattr(chat_router, "_approved_qa_cache", {})
+    monkeypatch.setattr(chat_router, "ensure_openai_client", lambda *a, **k: pytest.fail("LLM used"))
+    monkeypatch.setattr(chat_router, "answer_query_with_trace", lambda *a, **k: pytest.fail("retrieval used"))
+    audit = []
+    monkeypatch.setattr(chat_router, "append_audit_event", lambda kind, event: audit.append(event))
+    metrics_registry.reset()
+    response = main.chat(main.ChatRequest(question=question))
+    assert response["answer_mode"] == response["intent"] == mode
+    assert response["retrieval_source"] == source
+    assert response["approved_qa_id"] == "qa-1" and response["answer_text"] == "承認回答"
+    assert response["citations"][0]["source_doc"] == "fictional.pdf"
+    assert response["retrieval_required"] is False and response["llm_used"] is False
+    assert audit[-1]["answer_mode"] == mode and audit[-1]["tenant_id"] == "default"
+    assert metrics_registry.snapshot()["chat_answer_mode_total"][mode] == 1
+
+
+def test_f13_unknown_match_type_fails_closed():
+    from dataclasses import replace
+    from webapi.routers import chat as chat_router
+    answer = ApprovedAnswer("id", "質問", "質問", "回答", (), "default", "ja")
+    with pytest.raises(ValueError, match="match_type"):
+        chat_router._approved_chat_payload(replace(answer, match_type="unexpected"))
+
+
+def test_f13_chat_unknown_match_type_does_not_return_answer(monkeypatch):
+    from fastapi import HTTPException
+    from webapi import main
+    from webapi.routers import chat as chat_router
+    answer = ApprovedAnswer("bad", "q", "q", "秘密回答", (), "default", "ja", match_type="unknown")
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: answer)
+    monkeypatch.setattr(chat_router, "append_audit_event", lambda *a, **k: None)
+    with pytest.raises(HTTPException) as exc:
+        main.chat(main.ChatRequest(question="q"))
+    assert exc.value.status_code == 500 and "秘密回答" not in str(exc.value.detail)
+
+
+def test_f13_chat_colloquial_keeps_tenants_separate(monkeypatch, tmp_path):
+    from webapi import main
+    from webapi.routers import chat as chat_router
+    path = tmp_path / "qa.jsonl"
+    _write(path, [_record("a", "営業時間は？", "A回答", tenant="tenant-a"), _record("b", "営業時間は？", "B回答", tenant="tenant-b")])
+    monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
+    monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
+    monkeypatch.setattr(chat_router, "_approved_qa_cache", {})
+    monkeypatch.setattr(chat_router, "append_audit_event", lambda *a, **k: None)
+    for tenant, expected in (("tenant-a", "A回答"), ("tenant-b", "B回答")):
+        result = main.chat(main.ChatRequest(question="あの、営業時間は？", tenant_id=tenant))
+        assert result["answer_mode"] == "approved_colloquial_match"
+        assert result["answer_text"] == expected
+        assert result["citations"][0]["source_doc"] == "fictional.pdf"

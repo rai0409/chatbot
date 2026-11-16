@@ -20,7 +20,7 @@ python scripts/alias_candidates.py coverage --tenant ID [--approved ファイル
 
 ## 質問からの抽出（`mine`）
 
-承認済みの回答に届かなかった利用者の質問（1 行 1 質問のファイルを**ご自身で用意**する）を、文字 2 グラムの類似度で
+canonicalまたはformal aliasに一致しない利用者の質問（1 行 1 質問のファイルを**ご自身で用意**する）を、文字 2 グラムの類似度で
 最も近い承認済みの質問（別表現を含む）に対応づける。しきい値（既定 0.5）以上の最良の 1 件だけを候補にする。
 
 ```
@@ -37,3 +37,7 @@ python scripts/alias_candidates.py mine --tenant ID --questions ファイル [--
   候補は提案にすぎない。人が「承認済みの回答が、その言い方の質問にも答えているか」を確認してから、
   既存のレビューの手順で `approved_aliases` に追加する。似ているだけで答えが違う質問を足すと、誤った承認済み回答を返す。
 - 質問ファイルと出力には利用者の文章が入りうるので、リポジトリ内の無視されるフォルダ（`runs/`）に置く。
+
+## 口語一致との区別
+
+`coverage`はcanonicalおよび人が承認したformal aliasの一致を測定する。未登録の口語表現がruntimeで一致しても正式alias扱いにはならず、候補の登録にはoperatorの承認が必要。semantic similarityのみで承認回答を自動返却しない。

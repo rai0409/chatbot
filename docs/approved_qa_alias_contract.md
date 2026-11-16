@@ -74,7 +74,8 @@ XLSX importだけではruntime aliasは有効にならない。importはcandidat
 
 1. approved canonical question exact/normalized match。
 2. approved formal alias exact/normalized match。
-3. no approved exact-equivalent match。
+3. 同一tenant内で一意かつ安全な口語表現の一致（`colloquial`）。
+4. 不一致なら既存の安全なRAG経路。
 
 alias no-matchからsemantic searchへ自動昇格する新処理は追加していない。既存normal RAG flowは従来通りno-match後に動く。
 
@@ -117,3 +118,7 @@ existing exact 118件は従来gateで独立測定し、alias fixture件数へ混
 ## Rollback
 
 alias deployment前のreviewed/export fileを保持する。rollbackは、候補側の`approved_aliases`を除去してvalidator/runnerを再実行し、既存の別file export/deployment手順へ戻す。runtime codeはfieldなしrecordに後方互換なため、旧approved QA fileへ戻すだけでalias lookupは停止する。vectorstore/collection変更やresetは不要である。
+
+口語自動一致は正式aliasの登録・承認ではない。強い正規化キーが異なるQA間で衝突する場合、口語一致は拒否する。semantic similarityのみで承認回答を自動返却しない。
+
+口語一致は `approved_colloquial_match` / `approved_qa_colloquial` としてcanonical・formal aliasと区別する。回答本文と引用は維持し、候補のみの経路は自動回答しない。

@@ -139,3 +139,15 @@ def test_the_mine_command_reads_a_questions_file(tmp_path, capsys, monkeypatch):
     assert summary["out"] == str(default_out) and json.loads(default_out.read_text(encoding="utf-8"))["alias"].startswith("パスワード")
     assert _run(capsys, "mine", "--approved", str(path), "--questions", str(tmp_path / "missing.txt"))[0] == 3
     assert _run(capsys, "mine", "--approved", str(path), "--questions", str(questions), "--threshold", "0")[0] == 3
+
+
+def test_formal_coverage_and_candidate_do_not_count_runtime_colloquial(tmp_path):
+    question = "営業時間は？"
+    _path, index = _index(tmp_path, [_record("q1", question)])
+    report = aliases.coverage(index, kinds=["filler"], seed="a")
+    assert report["variants"] > 0
+    variant = report["misses"][0]["variant"]
+    runtime = lookup_approved_answer(index, variant)
+    assert runtime is not None and runtime.match_type == "colloquial"
+    rows = aliases.candidates_from_coverage(index, report, kinds=["filler"])
+    assert any(row["alias"] == variant and row["status"] == "pending" for row in rows)

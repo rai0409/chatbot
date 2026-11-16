@@ -292,3 +292,42 @@ def test_chat_stream_cache_hit_is_recorded_like_the_chat_route(monkeypatch, tmp_
 
     assert [name for name, _ in events] == ["final"]
     assert len(recorded) == 1 and recorded[0]["source"] == "cache"
+
+
+@pytest.mark.parametrize("question,mode,source", [
+    ("営業時間は？", "approved_exact_match", "approved_qa_exact"),
+    ("営業時刻は？", "approved_alias_match", "approved_qa_alias"),
+    ("あの、営業時間は？", "approved_colloquial_match", "approved_qa_colloquial"),
+])
+def test_f13_stream_approved_mode_and_audit(monkeypatch, tmp_path, question, mode, source):
+    from webapi import metrics_registry
+    record = {"qa_id": "stream", "question": "営業時間は？", "approved_answer": "回答", "status": "approved", "tenant_id": "default", "approved_aliases": ["営業時刻は？"], "approved_citations": [{"source_doc": "faq.pdf", "source_pages": [1]}]}
+    path = tmp_path / "qa.jsonl"
+    path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+    monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
+    monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
+    monkeypatch.setattr(chat_router, "_approved_qa_cache", {})
+    monkeypatch.setattr(chat_router, "ensure_openai_client", _forbidden_client)
+    monkeypatch.setattr(chat_router, "answer_query_stream", lambda *a, **k: pytest.fail("retrieval used"))
+    audit = []
+    monkeypatch.setattr(chat_router, "append_audit_event", lambda kind, event: audit.append(event))
+    metrics_registry.reset()
+    events = _parse_sse(_collect_body(main.chat_stream(main.ChatRequest(question=question))))
+    assert len(events) == 1 and events[0][0] == "approved"
+    payload = events[0][1]
+    assert payload["answer_mode"] == payload["intent"] == mode
+    assert payload["retrieval_source"] == source and payload["approved_qa_id"] == "stream"
+    assert payload["answer_text"] == "回答" and payload["citations"][0]["source_doc"] == "faq.pdf"
+    assert payload["retrieval_required"] is False and payload["llm_used"] is False
+    assert audit[-1]["answer_mode"] == mode and audit[-1]["tenant_id"] == "default"
+    assert metrics_registry.snapshot()["chat_answer_mode_total"][mode] == 1
+
+
+def test_f13_stream_unknown_match_type_does_not_send_approved(monkeypatch):
+    from rag_core.approved_qa import ApprovedAnswer
+    answer = ApprovedAnswer("bad", "q", "q", "秘密回答", (), "default", "ja", match_type="unknown")
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: answer)
+    monkeypatch.setattr(chat_router, "append_audit_event", lambda *a, **k: None)
+    events = _parse_sse(_collect_body(main.chat_stream(main.ChatRequest(question="q"))))
+    assert len(events) == 1 and events[0][0] == "error"
+    assert "秘密回答" not in json.dumps(events, ensure_ascii=False)

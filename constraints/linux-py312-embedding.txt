@@ -68,7 +68,7 @@ multidict==7.1.0
 narwhals==2.27.1
 networkx==3.7
 numpy==2.5.4
-oauthlib==4.0.0
+oauthlib==4.0.1
 onnxruntime==1.31.0
 openai==3.35.1
 openpyxl==3.1.5

@@ -107,7 +107,8 @@ INDEX_DIR = str((BASE_DIR / "index").resolve())
 OPENAI_API_KEY = getenv_first("OPENAI_API_KEY", default="")
 OPENAI_BASE_URL = getenv_first("OPENAI_BASE_URL", default=None)
 CHAT_MODEL = getenv_first("CHAT_MODEL", default="gpt-4o-mini")
-CHAT_COMPLETION_TIMEOUT_SECONDS = _get_float("CHAT_COMPLETION_TIMEOUT_SECONDS", default=30.0)
+# Commercial fix F5: 10 s keeps the LLM path inside the p95 target (8 s + retrieval); a slower call degrades to extractive.
+CHAT_COMPLETION_TIMEOUT_SECONDS = _get_float("CHAT_COMPLETION_TIMEOUT_SECONDS", default=10.0)
 # Stage 14: OpenAI embeddings (EMBED_PROVIDER=openai) had no timeout.
 OPENAI_EMBED_TIMEOUT_SECONDS = _get_float("OPENAI_EMBED_TIMEOUT_SECONDS", default=30.0)
 CHAT_COMPLETION_MAX_RETRIES = int(getenv_first("CHAT_COMPLETION_MAX_RETRIES", default="1"))
@@ -273,6 +274,8 @@ LLM_FEATURE_MAX_TOKENS = int(getenv_first("LLM_FEATURE_MAX_TOKENS", default="512
 # Sentence-level grounding check of LLM-generated answers (rag_core/grounding.py). Off until evaluated.
 GROUNDING_VERIFY_ENABLED = _get_bool("GROUNDING_VERIFY_ENABLED", default=False)
 GROUNDING_MIN_COVERAGE = _get_float("GROUNDING_MIN_COVERAGE", default=0.5)
+# Commercial fix F4: let the LLM judge reject a bullet that passed term coverage (needs LLM_FEATURES to include verify).
+GROUNDING_LLM_REJECT = _get_bool("GROUNDING_LLM_REJECT", default=False)
 # Mass-change guard of source sync (rag_core/source_apply.py): a plan with at least MIN_DELETES deletions that are more
 # than MAX_DELETE_FRACTION of the applied files, or more than MAX_CHANGES changes, is held for approval.
 SOURCE_MAX_DELETE_FRACTION = _get_float("SOURCE_MAX_DELETE_FRACTION", default=0.2)

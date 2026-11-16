@@ -326,3 +326,11 @@ def test_cli_writes_requested_output_path(tmp_path):
     assert exit_code == 0
     assert output.exists()
     assert _load_json(output)["chat"]["total_questions"] == 1
+
+
+def test_colloquial_breakdown_does_not_increase_exact_count(tmp_path):
+    chat = tmp_path / "chat.jsonl"
+    _write_jsonl(chat, [_chat(answer_mode="approved_exact_match"), _chat(answer_mode="approved_colloquial_match")])
+    result = aggregate_product_metrics(chat_events=chat, feedback_events=tmp_path / "f", review_queue=tmp_path / "r", review_actions=tmp_path / "a", output=tmp_path / "out.json")
+    assert result["chat"]["exact_match_count"] == 1
+    assert result["chat"]["answer_mode_breakdown"]["approved_colloquial_match"] == 1

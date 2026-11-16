@@ -1302,7 +1302,9 @@ def expand_parent_chunks(
             prev_meta["child_chunk_ids"] = child_ids
             if float(ch.score) < float(prev.score):
                 prev_meta["primary_child_chunk_id"] = child_id
-                prev_meta["source_pages"] = meta.get("source_pages") or prev_meta.get("source_pages") or []
+                # Commercial fix F7: the cited pages stay the parent's own pages (the
+                # text shown is the parent's); the best child's pages are kept apart.
+                prev_meta["primary_child_source_pages"] = meta.get("source_pages") or []
                 prev = RetrievedChunk(text=prev.text, metadata=prev_meta, score=float(ch.score))
                 out[pos] = prev
             else:
@@ -1332,8 +1334,11 @@ def expand_parent_chunks(
         merged_meta["primary_child_chunk_id"] = child_id or merged_meta.get("primary_child_chunk_id")
         merged_meta["child_chunk_ids"] = [child_id] if child_id else list(merged_meta.get("child_chunk_ids") or [])
         merged_meta["source_doc"] = meta.get("source_doc") or merged_meta.get("source_doc")
-        merged_meta["source_pages"] = meta.get("source_pages") or merged_meta.get("source_pages") or []
+        # Commercial fix F7: a parent that spans pages is cited with its own pages,
+        # not the retrieving child's single page; the child's pages stay available.
+        merged_meta["source_pages"] = parent_meta.get("source_pages") or meta.get("source_pages") or []
         merged_meta["parent_source_pages"] = parent_meta.get("source_pages") or []
+        merged_meta["primary_child_source_pages"] = meta.get("source_pages") or []
         merged_meta["searchable_text"] = str(
             parent_row.get("searchable_text") or merged_meta.get("searchable_text") or parent_text
         )

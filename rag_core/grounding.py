@@ -18,6 +18,8 @@ _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 _LATIN = re.compile(r"[a-z][a-z0-9._:/-]*")
 _KATAKANA = re.compile(r"[ァ-ヶー]{3,}")
 _KANJI = re.compile(r"[一-龥々〆]{3,}")
+# Commercial fix F3: a negated claim whose evidence carries no negation is not supported.
+_NEGATION = re.compile(r"(できません|できない|ありません|対象外|不可|禁止|無効|不要|ではない|ではありません|認められない|認めない)")
 
 SYSTEM = (
     "あなたは根拠の確認者です。「文」が「根拠」に書かれている内容だけで支えられているかを判定してください。"
@@ -71,6 +73,8 @@ def check_claim(claim: str, evidence: str, *, min_coverage: float) -> Tuple[List
         broken.append("katakana")
     if any(term not in evidence_n for term in _KANJI.findall(claim_n)):
         broken.append("new_term")
+    if _NEGATION.search(claim_n) and not _NEGATION.search(evidence_n):
+        broken.append("negation")
     terms = _terms(claim)
     coverage = sum(1 for term in terms if _compact(term) in evidence_compact) / len(terms) if terms else 1.0
     return broken, coverage
@@ -117,6 +121,11 @@ def verify_answer(
                 _bump("rescued")
             else:
                 reasons.append("coverage")
+        elif not broken and getattr(config, "GROUNDING_LLM_REJECT", False) and llm.check("verify", tenant_id).allowed:
+            # Commercial fix F4: term coverage is necessary, not sufficient. When the
+            # verify feature is allowed for this tenant, the LLM judge may also reject.
+            if not _llm_supports(claim, evidence, tenant_id=tenant_id, client=client):
+                reasons.append("llm_unsupported")
         if reasons:
             result.dropped.append({"index": index, "reasons": reasons})
             _bump("dropped")

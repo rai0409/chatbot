@@ -162,6 +162,11 @@ def _profile_state(tenant_id: str, rag_profile_id: str) -> Tuple:
     )
 
 
+def _cache_question_key(question: str) -> str:
+    """Keep the original normalized question when cache equivalence is unproven."""
+    return normalize_question_for_exact_match(question)
+
+
 def build_key(
     question: str,
     *,
@@ -173,7 +178,7 @@ def build_key(
     tenant = str(tenant_id or "").strip() or "default"
     return (
         tenant,
-        normalize_question_for_exact_match(question or ""),
+        _cache_question_key(question or ""),
         _corpus_state(),
         _index_state(),
         _profile_state(tenant, rag_profile_id),

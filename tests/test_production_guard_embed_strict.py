@@ -20,6 +20,26 @@ def _complete_production_env(monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
 
+    # F1: prerequisites unrelated to the guard under test.
+    monkeypatch.setenv("GROUNDING_VERIFY_ENABLED", "true")
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("ADMIN_SHARED_TOKEN_ACKNOWLEDGED", "true")
+
+    # Use an isolated, matching embedding fingerprint.
+    import config
+    from rag_core import embedding_provider
+
+    monkeypatch.setattr(
+        embedding_provider,
+        "active_fingerprint",
+        lambda: {"embed_model": "fixture-embedding"},
+    )
+    monkeypatch.setattr(
+        config,
+        "RAG_DIST_CALIBRATED_MODEL",
+        "fixture-embedding",
+    )
+
 
 def test_production_requires_the_strict_embedding_fingerprint(monkeypatch):
     _complete_production_env(monkeypatch)
