@@ -93,6 +93,10 @@ def sources_list(request: Request = None, _admin_auth: None = Depends(require_ad
 def sources_create(req: SourceCreateRequest, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
     scope = _request_scope(request)
     require_scope(scope, req.tenant_id)
+    if req.kind == "folder" and req.path:
+        from webapi.routers.ingestion import _check_upload_tenant
+
+        _check_upload_tenant([req.path], req.tenant_id)
     try:
         record = source_registry.create(
             req.source_id, tenant_id=req.tenant_id, kind=req.kind, path=req.path, options=req.options,

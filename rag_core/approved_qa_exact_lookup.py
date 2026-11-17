@@ -145,31 +145,32 @@ def lookup_approved_qa_exact(
     tenant = _normalize_tenant(tenant_id)
     index = load_exact_index(path)
 
-    # 1. index key の完全一致
-    direct_hits = [item for item in index.get(key, []) if _item_tenant(item) == tenant]
-    if direct_hits:
-        return [
-            _copy_hit(item, rank=rank, match_type="key_exact")
-            for rank, item in enumerate(direct_hits[:limit], start=1)
-        ]
-
-    # 2. index作成時の正規化が古い場合に備え、question_text を再正規化して完全一致
-    out: list[dict] = []
-    seen: set[str] = set()
-    tenant_items = [
-        item for items in index.values() for item in items if _item_tenant(item) == tenant
-    ]
+    # Revalidate every stored question under the current normalizer: old
+    # on-disk keys can hold multiple questions that previously collided.
+    tenant_items = [item for items in index.values() for item in items if _item_tenant(item) == tenant]
+    matches = []
+    seen_answers: dict[str, tuple[Any, Any]] = {}
     for item in tenant_items:
         q = _item_question(item)
-        if normalize_exact_question(q) != key:
+        if not q or normalize_exact_question(q) != key:
             continue
         item_id = _item_id(item, q)
-        if item_id in seen:
+        meta = item.get("metadata") or {}
+        signature = (meta.get("approved_answer") or meta.get("answer_text") or item.get("answer_text"),
+                     meta.get("approved_citations") or item.get("approved_citations"))
+        if item_id in seen_answers:
+            if seen_answers[item_id] != signature:
+                return []
             continue
-        seen.add(item_id)
-        out.append(_copy_hit(item, rank=len(out) + 1, match_type="question_exact"))
-        if len(out) >= limit:
-            return out
+        seen_answers[item_id] = signature
+        matches.append(item)
+    # Distinct owners for an identical key are ambiguous; do not auto-answer.
+    if len(matches) > 1:
+        return []
+    if matches:
+        return [_copy_hit(matches[0], rank=1, match_type="key_exact" if matches[0] in index.get(key, []) else "question_exact")]
+    out: list[dict] = []
+    seen: set[str] = set()
 
     # 3. near-exact（既定は無効）。包含に加えて長さの比を要求し、短い質問の誤爆を防ぐ。
     use_near = near_match_enabled() if allow_near_match is None else bool(allow_near_match)

@@ -32,6 +32,7 @@ services:
       - ./data:/app/data
       - ./runs:/app/runs
       - ./models_cache:/app/models_cache
+      - ./backups:/app/backups
     healthcheck:
       test:
         [

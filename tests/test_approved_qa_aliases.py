@@ -339,3 +339,13 @@ def test_f13_chat_colloquial_keeps_tenants_separate(monkeypatch, tmp_path):
         assert result["answer_mode"] == "approved_colloquial_match"
         assert result["answer_text"] == expected
         assert result["citations"][0]["source_doc"] == "fictional.pdf"
+
+
+def test_f13_safe_greeting_and_colloquial_request_preserve_answer(tmp_path):
+    path = tmp_path / "qa.jsonl"
+    _write(path, [_record("one", "営業時間を教えてください", "承認回答")])
+    index = load_approved_qa(path)
+    hit = lookup_approved_answer(index, "お疲れ様です。営業時間おしえてー")
+    assert hit is not None and hit.match_type == "colloquial"
+    assert hit.approved_answer == "承認回答" and hit.approved_citations[0].source_doc == "fictional.pdf"
+    assert lookup_approved_answer(index, "営業時間は不要ですか") is None

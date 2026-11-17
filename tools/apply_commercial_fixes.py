@@ -830,8 +830,10 @@ else:
 from rag_core import answer_cache
 k1 = answer_cache._cache_question_key("退職の手続き教えてほしいんだけど")
 k2 = answer_cache._cache_question_key("退職の手続き")
-assert k1 == k2, ("F17", k1, k2)
-print("F17 ok")
+# F17 safety contract: do not share an answer unless equivalent intent and
+# retrieval conditions have been proven; preserve original-question keys.
+assert k1 != k2, ("F17 unsafe cache sharing", k1, k2)
+print("F17 safe isolation ok")
 print("CHECK PASSED")
 '''
 

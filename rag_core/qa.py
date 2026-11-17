@@ -296,6 +296,17 @@ def distance_guard_calibration() -> Dict[str, object]:
     }
 
 
+def _question_term_coverage(question: str, chunks: Sequence[Chunk]) -> Optional[float]:
+    # The existing deterministic grounding terms require no tokenizer or model.
+    from rag_grounded import _terms
+
+    terms = _terms(normalize_for_index(question))
+    if not terms:
+        return None
+    evidence = normalize_for_index(" ".join(chunk.text for chunk in list(chunks)[:3]))
+    return sum(1 for term in terms if normalize_for_index(term) in evidence) / len(terms)
+
+
 def guard_merged_top(question: str, intent: str, chunks: Sequence[Chunk], retrieved: Sequence[RetrievedChunk]) -> Optional[str]:
     if config.DISABLE_GUARD:
         return None
@@ -349,6 +360,14 @@ def guard_merged_top(question: str, intent: str, chunks: Sequence[Chunk], retrie
         evidence = normalize_for_index(" ".join(ch.text for ch in chunks))
         if not any(normalize_for_index(t) in evidence for t in salient):
             return "salient_mismatch"
+    try:
+        coverage_min = float(_setting("GUARD_TERM_COVERAGE_MIN", "0") or 0)
+    except (TypeError, ValueError):
+        coverage_min = 0.0
+    if 0 < coverage_min <= 1:
+        coverage = _question_term_coverage(question, chunks)
+        if coverage is not None and coverage < coverage_min:
+            return "low_term_coverage"
     if intent == "other":
         if len(re.findall(r"[a-z0-9ぁ-んァ-ヴー一-龥々〆〤]+", normalize_for_index(question))) <= 2:
             req = ["ID", "番号", "許容値", "フラグ"]
@@ -494,6 +513,10 @@ def _generation_limits(profile):
 
 
 def _create_chat_completion(client, messages, profile=None):
+    # Clone only the chat client: embedding calls on the original keep their policy.
+    with_options = getattr(client, "with_options", None)
+    if callable(with_options):
+        client = with_options(max_retries=0)
     attempts = 1 + max(0, int(getattr(config, "CHAT_COMPLETION_MAX_RETRIES", 1)))
     backoff = float(getattr(config, "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", 1.0))
     model, timeout, max_tokens = _generation_limits(profile)
@@ -516,6 +539,9 @@ def _create_chat_completion(client, messages, profile=None):
 def _stream_chat_completion(client, messages, profile=None):
     # Same timeout/max_tokens/retry policy as _create_chat_completion, but
     # retries happen only before the first content token; never mid-stream.
+    with_options = getattr(client, "with_options", None)
+    if callable(with_options):
+        client = with_options(max_retries=0)
     attempts = 1 + max(0, int(getattr(config, "CHAT_COMPLETION_MAX_RETRIES", 1)))
     backoff = float(getattr(config, "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", 1.0))
     model, timeout, max_tokens = _generation_limits(profile)
@@ -548,6 +574,7 @@ def _stream_chat_completion(client, messages, profile=None):
 # User-facing wording per guard reason. The reason code itself stays in the
 # guard_reason field (API, audit, metrics) and is never shown in the answer.
 _GUARD_MESSAGES = {
+    "low_term_coverage": "質問の内容に対応する記載が見つかりませんでした。",
     "no_results": "該当する文書が見つかりませんでした。",
     "hard_distance": "質問に十分に関連する記載が見つかりませんでした。",
     "soft_distance": "質問に十分に関連する記載が見つかりませんでした。",
@@ -595,11 +622,18 @@ def _generated_answer_type_supported(question: str, raw: str, grounded: Sequence
     return _has_answer_type_support(question, selected, grounded)
 
 
+def _is_shortage_only_answer(raw: str) -> bool:
+    lines = [line.strip() for line in strip_reference_block(raw or "").splitlines() if line.strip()]
+    return bool(lines) and all(re.fullmatch(r"(?:不足|不明)(?:\s*[:：].*)?", line) for line in lines)
+
+
 def _finalize_generated_answer(
     raw: str, q: str, grounded: Sequence[Chunk], intent: str, *, tenant_id: str = "default", client=None
 ) -> Tuple[str, bool]:
     raw = strip_reference_block(raw)
     used_fallback = False
+    if _is_shortage_only_answer(raw):
+        return _guard_fallback_raw("insufficient_evidence"), True
     if not validate_output(raw, grounded, intent, config.PREFER_SORT_TERMS_CHANGE + config.PREFER_SORT_TERMS_RESET):
         raw = extractive_fallback(q, grounded)
         used_fallback = True
@@ -1640,8 +1674,10 @@ def _answer_query_impl(
         (time.perf_counter() - generation_started) * 1000
     )
     trace["chat_generation_mode"] = "llm"
+    generated_raw = resp.choices[0].message.content or ""
+    shortage_only = _is_shortage_only_answer(generated_raw)
     raw, used_fallback = _finalize_generated_answer(
-        resp.choices[0].message.content or "", q, grounded, intent,
+        generated_raw, q, grounded, intent,
         tenant_id=tenant_id, client=client if hasattr(client, "chat") else None,
     )
     answer_chunks = grounded
@@ -1649,7 +1685,7 @@ def _answer_query_impl(
         raw,
         answer_chunks,
         intent=intent,
-        guard_reason=None,
+        guard_reason="insufficient_evidence" if shortage_only else None,
         used_fallback=used_fallback,
         retrieved=retrieved,
         rewritten_query=rewritten,
@@ -1839,11 +1875,11 @@ def answer_query_stream(
             client=client, estimate_input="".join(str(m.get("content") or "") for m in messages),
         ):
             buffered_chars += len(delta_text)
-            if enforce and buffered_chars > max_buffer_chars:
-                raise ValueError("profile validation stream buffer limit exceeded")
+            if buffered_chars > max_buffer_chars:
+                raise ValueError("stream validation buffer limit exceeded")
+            # Buffer until citation and profile checks finish: unvalidated text
+            # must not be sent as SSE before it can be rejected.
             pieces.append(delta_text)
-            if not enforce:
-                yield "delta", {"text": delta_text}
     except Exception as exc:
         trace.setdefault("stage_latency_ms", {})["generation_ms"] = int(
             (time.perf_counter() - generation_started) * 1000
@@ -1878,15 +1914,17 @@ def answer_query_stream(
     )
     trace["chat_generation_mode"] = "llm"
 
+    generated_raw = "".join(pieces)
+    shortage_only = _is_shortage_only_answer(generated_raw)
     raw, used_fallback = _finalize_generated_answer(
-        "".join(pieces), q, grounded, state.intent,
+        generated_raw, q, grounded, state.intent,
         tenant_id=tenant_id, client=client if hasattr(client, "chat") else None,
     )
     result = _build_answer_result(
         raw,
         grounded,
         intent=state.intent,
-        guard_reason=None,
+        guard_reason="insufficient_evidence" if shortage_only else None,
         used_fallback=used_fallback,
         retrieved=state.retrieved,
         rewritten_query=state.rewritten_query,
@@ -1896,7 +1934,7 @@ def answer_query_stream(
         trace,
         started_at,
         grounded,
-        guard_reason=None,
+        guard_reason=result.guard_reason,
         used_fallback=used_fallback,
         answer_mode="fallback" if used_fallback else "grounded",
         citations_count=len(result.citations),
@@ -1905,6 +1943,12 @@ def answer_query_stream(
         question, result, trace, state, rag_profile_id=rag_profile_id, started_at=started_at,
         profile_snapshot=stream_profile,
     )
-    if enforce and not result.guard_reason:
-        yield "delta", {"text": result.answer_text}
+    if not result.guard_reason:
+        if (not enforce and not used_fallback
+                and strip_reference_block(generated_raw) == generated_raw
+                and drop_empty_shortage_lines(generated_raw) == raw):
+            for piece in pieces:
+                yield "delta", {"text": piece}
+        else:
+            yield "delta", {"text": result.answer_text}
     yield "final", (result, trace)

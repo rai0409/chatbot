@@ -72,3 +72,8 @@ Generate secrets with `python -c "import secrets; print(secrets.token_urlsafe(48
 - Shared state for several API nodes (Postgres/Redis for audit, conversations,
   jobs, rate limits, caches) — single node only.
 - Asynchronous ingestion jobs (a large upload runs inside the request).
+
+
+### 承認済みQAの旧完全一致インデックス
+
+数値中の小数点・ハイフン、カタカナ語中の長音を保持する正規化に移行する際、旧インデックスの保存キーだけを信頼しない。検索時は収録された質問テキストを現行規則で再検証し、複数の識別子が一致する曖昧な場合は自動回答しない。運用上は、承認済み入力から新しい別ファイルを作成し、検証後に既存の手順で切り替える。稼働中のファイルを直接書き換えない。

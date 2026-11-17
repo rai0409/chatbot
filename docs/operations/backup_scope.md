@@ -23,3 +23,6 @@ The vector store and the keyword corpus must come from the same backup: they
 are checked against each other with `scripts/check_index_consistency.py`
 after a restore. `scripts/dr_drill.sh` only proves that an archive round-trips;
 a drill should also start the API on the restored data and run a search.
+
+
+Composeのバックアップ出力先は永続ボリュームに保存し、`config/rag_profiles` をアーカイブ対象とする。Qdrant、PostgreSQL、Redisのデータは別途それぞれの手順で保護する。

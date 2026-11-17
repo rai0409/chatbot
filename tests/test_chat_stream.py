@@ -172,7 +172,8 @@ def test_midstream_error_aborts_without_final_or_retry(monkeypatch):
             events.append(event)
 
     names = [name for name, _ in events]
-    assert names == ["meta", "delta"]
+    # An interrupted, unverified claim is never exposed to the client.
+    assert names == ["meta"]
     assert len(client.calls) == 1  # never retried after a token was emitted
 
 
@@ -331,3 +332,37 @@ def test_f13_stream_unknown_match_type_does_not_send_approved(monkeypatch):
     events = _parse_sse(_collect_body(main.chat_stream(main.ChatRequest(question="q"))))
     assert len(events) == 1 and events[0][0] == "error"
     assert "秘密回答" not in json.dumps(events, ensure_ascii=False)
+
+
+def test_g2_stream_never_emits_unverified_assertion(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
+    monkeypatch.setattr(qa, "hybrid_retrieve", lambda *a, **k: [_mk_chunk("A", "PR2 は二段階確認の説明です。")])
+    monkeypatch.setattr(qa, "guard_merged_top", lambda *a, **k: None)
+    client = _FakeStreamClient([_stream_chunks("- PR2 は二段階確認です [S1]\n", "秘密の根拠なし断定")])
+    events = list(qa.answer_query_stream("PR2 を教えて", client=client, top_k=5))
+    assert all("秘密の根拠なし断定" not in str(payload) for name, payload in events if name == "delta")
+    assert events[-1][1][0].used_fallback is True
+
+
+def test_g1_stream_shortage_is_insufficient_evidence(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
+    monkeypatch.setattr(qa, "hybrid_retrieve", lambda *a, **k: [_mk_chunk("A", "PR2 は二段階確認の説明です。")])
+    monkeypatch.setattr(qa, "guard_merged_top", lambda *a, **k: None)
+    client = _FakeStreamClient([_stream_chunks("不足: 根拠なし")])
+    events = list(qa.answer_query_stream("PR2 を教えて", client=client, top_k=5))
+    result, trace = events[-1][1]
+    assert result.guard_reason == trace["final_guard_reason"] == "insufficient_evidence"
+    assert result.used_fallback is True and result.citations == []
+    assert all(name != "delta" for name, _ in events)
+
+
+def test_g2_stream_does_not_replay_bullets_removed_by_grounding(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
+    monkeypatch.setattr(config, "GROUNDING_VERIFY_ENABLED", True)
+    monkeypatch.setattr(qa, "hybrid_retrieve", lambda *a, **k: [_mk_chunk("A", "PR2 は二段階確認の説明です。")])
+    monkeypatch.setattr(qa, "guard_merged_top", lambda *a, **k: None)
+    monkeypatch.setattr(qa.grounding, "verify_answer", lambda *a, **k: SimpleNamespace(kept=1, raw="- PR2 は二段階確認の説明です [S1]"))
+    client = _FakeStreamClient([_stream_chunks("- PR2 は二段階確認の説明です [S1]\n", "- PR2 は根拠のない断定です [S1]")])
+    events = list(qa.answer_query_stream("PR2 を教えて", client=client, top_k=5))
+    assert all("根拠のない断定" not in str(payload) for name, payload in events if name == "delta")
+    assert events[-1][1][0].used_fallback is False

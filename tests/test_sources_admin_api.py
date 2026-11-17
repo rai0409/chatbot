@@ -224,3 +224,13 @@ def test_the_inline_script_of_the_page_is_valid_javascript():
     done = subprocess.run(["node", "-e", "new Function(require('fs').readFileSync(0, 'utf8'))"], input=scripts[0],
                           text=True, capture_output=True, timeout=60)
     assert done.returncode == 0, done.stderr
+
+
+def test_g6_upload_source_is_tenant_scoped(api):
+    client, ingest, _fake, _tmp = api
+    own = ingest / "uploads" / "tenant_a"
+    other = ingest / "uploads" / "tenant_b"
+    own.mkdir(parents=True, exist_ok=True)
+    other.mkdir(parents=True, exist_ok=True)
+    assert client.post("/admin/sources", headers=TENANT_A, json={"source_id": "own-upload", "tenant_id": "tenant_a", "path": str(own)}).status_code == 200
+    assert client.post("/admin/sources", headers=TENANT_A, json={"source_id": "other-upload", "tenant_id": "tenant_a", "path": str(other)}).status_code == 403

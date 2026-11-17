@@ -255,6 +255,9 @@ def validate_output(
     bullet_lines = [ln for ln in lines if ln.startswith("-")]
     if not bullet_lines:
         return False
+    # Any non-bullet text must be an explicit shortage, not an unchecked claim.
+    if any(not ln.startswith("-") and not _SHORTAGE_LINE_RE.match(_SOURCE_TAG_RE.sub("", ln)) for ln in lines):
+        return False
     for ln in bullet_lines:
         if not re.search(r"(\[S\d+\]\s*)+$", ln):
             return False

@@ -91,6 +91,8 @@ def production_problems() -> List[str]:
         workers = 1
     if workers > 1 and (_env("VECTOR_BACKEND") or "chroma").lower() == "chroma":
         problems.append("VECTOR_BACKEND=qdrant when WEB_CONCURRENCY > 1 (Chroma is single-process)")
+    if (_env("VECTOR_BACKEND") or "chroma").lower() == "qdrant" and _env("QDRANT_PATH"):
+        problems.append("QDRANT_PATH must be empty in production (embedded Qdrant is for development)")
     # --- commercial fixes (tools/apply_commercial_fixes.py, F1) -------------
     # A generated answer may only reach the user after every bullet was checked
     # against the evidence it cites; the distance guard is meaningless with

@@ -374,8 +374,8 @@ def load_approved_qa(path: str | Path, tenant_id: str = "default") -> ApprovedQA
 from threading import RLock
 
 _COLLOQUIAL_LOCK = RLock()
-_SAFE_PREFIX = re.compile(r"^(?:(?:あの|あのー|えっと|えーと|ええと|すみません|すいません|こんにちは|こんばんは)[、,。\s]*)*$")
-_SAFE_SUFFIX = re.compile(r"^(?:(?:を|が)?教えて(?:ください|下さい|ほしい|欲しい)?|(?:なんですけど|なんだけど|んですけど|んだけど)|[?？。!！、,\s])*$")
+_SAFE_PREFIX = re.compile(r"^(?:(?:あの|あのー|えっと|えーと|ええと|すみません|すいません|こんにちは|こんばんは|お疲れ様です|お疲れさまです|おつかれさまです)[、,。\s]*)*$")
+_SAFE_SUFFIX = re.compile(r"^(?:(?:を|が)?教えて(?:ください|下さい|ほしい|欲しい)?|おしえて(?:ー|〜)?|(?:なんですけど|なんだけど|んですけど|んだけど)|[?？。!！、,\s])*$")
 
 
 def _colloquial_core(text: str, tenant_id: str) -> str:

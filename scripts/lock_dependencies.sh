@@ -5,7 +5,7 @@
 # exists, so a changed or substituted package fails the build instead of
 # being installed.
 #
-#   requirements.lock.txt            requirements.txt + -ja + -pdf + -state + -qdrant
+#   requirements.lock.txt            requirements.txt + -ja + -pdf + -state + -qdrant + -anthropic
 #                                    (the Docker image and CI set), versions from
 #                                    constraints/linux-py312.txt
 #   requirements-embedding.lock.txt  the same + requirements-embedding.txt and
@@ -20,7 +20,7 @@ cd "$(dirname "$0")/.."
 
 PY="${PYTHON_VERSION:-3.12}"
 PLATFORM="${LOCK_PLATFORM:-x86_64-manylinux_2_28}"
-BASE=(requirements.txt requirements-ja.txt requirements-pdf.txt requirements-state.txt requirements-qdrant.txt)
+BASE=(requirements.txt requirements-ja.txt requirements-pdf.txt requirements-state.txt requirements-qdrant.txt requirements-anthropic.txt)
 COMMON=(--python-version "$PY" --python-platform "$PLATFORM" --generate-hashes --no-annotate --no-header)
 
 uv pip compile "${BASE[@]}" "${COMMON[@]}" \

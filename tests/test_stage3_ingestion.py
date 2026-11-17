@@ -407,6 +407,13 @@ def _old_exact_key(text):
     return re.sub(r"\s+", "", s).strip()
 
 
-@pytest.mark.parametrize("text", ["「営業時間」は？", "パスワード・再設定！", "Ｑ＆Ａ ー テスト", "A-1 (b) [c]"])
-def test_exact_match_key_is_unchanged(text):
-    assert exact_match_key(text) == _old_exact_key(text)
+@pytest.mark.parametrize("text,old_key,new_key", [
+    ("「営業時間」は？", "営業時間は", "営業時間は"),
+    # Intentional contract change: preserve a long vowel inside a katakana word.
+    ("パスワード・再設定！", "パスワド再設定", "パスワード再設定"),
+    ("Ｑ＆Ａ ー テスト", "q&aテスト", "q&aテスト"),
+    ("A-1 (b) [c]", "a1bc", "a1bc"),
+])
+def test_exact_match_key_is_unchanged(text, old_key, new_key):
+    assert _old_exact_key(text) == old_key
+    assert exact_match_key(text) == new_key
