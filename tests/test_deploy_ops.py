@@ -162,3 +162,19 @@ def test_backup_refuses_empty_source(tmp_path):
     result = _run(["bash", "scripts/backup.sh", "--source-dir", str(empty), "--output-dir", str(tmp_path / "b")])
     assert result.returncode == 1
     assert "nothing to back up" in result.stderr
+
+
+def test_g12_backup_includes_rag_profiles_and_compose_backup_mount(tmp_path):
+    import tarfile
+    src = tmp_path / "source"
+    profile = src / "config" / "rag_profiles" / "default" / "profile.json"
+    profile.parent.mkdir(parents=True)
+    profile.write_text('{"profile":"synthetic"}', encoding="utf-8")
+    out = tmp_path / "backups"
+    result = _run(["bash", "scripts/backup.sh", "--source-dir", str(src), "--output-dir", str(out)])
+    assert result.returncode == 0
+    archives = list(out.glob("*.tar.gz"))
+    assert len(archives) == 1
+    with tarfile.open(archives[0], "r:gz") as archive:
+        assert "config/rag_profiles/default/profile.json" in archive.getnames()
+    assert "./backups:/app/backups" in Path("docker-compose.yml").read_text(encoding="utf-8")

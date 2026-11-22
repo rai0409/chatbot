@@ -357,6 +357,7 @@ def test_repo_smoke_cases_run_and_include_rerank_movement(
     monkeypatch,
     tmp_path,
 ):
+    monkeypatch.setenv("QUERY_PREPROCESS_ENABLED", "false")
     _install_deterministic_rerank_movement(monkeypatch)
     out_path = tmp_path / "smoke_results.json"
     payload = runner.run_eval(
@@ -396,6 +397,7 @@ def test_run_eval_optional_gold_fields_and_rerank_gain(
     monkeypatch,
     tmp_path,
 ):
+    monkeypatch.setenv("QUERY_PREPROCESS_ENABLED", "false")
     _install_deterministic_rerank_movement(monkeypatch)
     cases_path = tmp_path / "cases.jsonl"
     _write_jsonl(

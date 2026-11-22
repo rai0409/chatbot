@@ -188,3 +188,11 @@ def test_route_planning_returns_expected_ordered_stages():
         "fallback",
         "human_escalation",
     ]
+
+
+def test_colloquial_mode_is_allowed_by_product_envelope():
+    from rag_core.product_contract import ANSWER_MODE_APPROVED_COLLOQUIAL_MATCH
+    envelope = build_product_answer_envelope(request_id="r", trace_id="t", tenant_id="tenant-a", answer_mode=ANSWER_MODE_APPROVED_COLLOQUIAL_MATCH, answer_text="回答", confidence_route="exact_match", citations=[{"source_doc": "faq.pdf", "source_pages": [1]}])
+    assert envelope["answer_mode"] == "approved_colloquial_match"
+    assert envelope["answer_text"] == "回答" and envelope["tenant_id"] == "tenant-a"
+    assert envelope["citations"][0]["source_doc"] == "faq.pdf"

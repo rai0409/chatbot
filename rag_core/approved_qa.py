@@ -368,6 +368,75 @@ def load_approved_qa(path: str | Path, tenant_id: str = "default") -> ApprovedQA
     )
 
 
+# The query-rule loader caches by path. Serialize colloquial lookups and clear
+# that cache before building the map, so edits to global or tenant rules take
+# effect even when the ApprovedQAIndex itself is unchanged.
+from threading import RLock
+
+_COLLOQUIAL_LOCK = RLock()
+_SAFE_PREFIX = re.compile(r"^(?:(?:あの|あのー|えっと|えーと|ええと|すみません|すいません|こんにちは|こんばんは|お疲れ様です|お疲れさまです|おつかれさまです)[、,。\s]*)*$")
+_SAFE_SUFFIX = re.compile(r"^(?:(?:を|が)?教えて(?:ください|下さい|ほしい|欲しい)?|おしえて(?:ー|〜)?|(?:なんですけど|なんだけど|んですけど|んだけど)|[?？。!！、,\s])*$")
+
+
+def _colloquial_core(text: str, tenant_id: str) -> str:
+    """Accept only whitelisted surface deletions, keeping all other characters."""
+    from rag_core.query_preprocess import strip_colloquial
+
+    original = normalize_question_for_exact_match(text)
+    core, _ = strip_colloquial(original, tenant_id=tenant_id)
+    core = core.strip()
+    if not core:
+        return ""
+    # Require one contiguous retained span: arbitrary tenant regexes may remove
+    # meaningful text or edit the middle of the question.
+    offset = original.find(core)
+    if offset < 0 or not _SAFE_PREFIX.fullmatch(original[:offset]) or not _SAFE_SUFFIX.fullmatch(original[offset + len(core):]):
+        return ""
+    return core
+
+
+def _strong_key_map(index: ApprovedQAIndex) -> Dict[Tuple[str, str], Any]:
+    """Map unique tenant/strong keys; distinct QA owners make a key ambiguous."""
+    from rag_core.question_normalization import exact_match_key
+
+    out: Dict[Tuple[str, str], Any] = {}
+    for kind, entries in (("canonical", index.by_tenant_question.items()), ("alias", index.by_tenant_alias.items())):
+        for (tenant, text), value in entries:
+            answer, matched = (value, text) if kind == "canonical" else value
+            core = _colloquial_core(text, tenant)
+            strong = exact_match_key(core)
+            if not core or not strong:
+                continue
+            key = (tenant, strong)
+            candidate = (answer, kind, matched, core)
+            if key not in out:
+                out[key] = candidate
+            elif out[key] is not None and out[key][0].qa_id != answer.qa_id:
+                out[key] = None
+    return out
+
+
+def _lookup_colloquial(index: ApprovedQAIndex, question: str, tenant_id: str) -> ApprovedAnswer | None:
+    """Return a unique safe equivalent; exact and formal alias lookup run first."""
+    if str(os.getenv("APPROVED_QA_COLLOQUIAL_MATCH", "true")).strip().lower() not in {"1", "true", "yes", "on"}:
+        return None
+    from rag_core import query_preprocess
+    from rag_core.question_normalization import exact_match_key
+
+    with _COLLOQUIAL_LOCK:
+        query_preprocess._load_rules.cache_clear()
+        core = _colloquial_core(question or "", tenant_id)
+        strong = exact_match_key(core)
+        if not core or not strong:
+            return None
+        hit = _strong_key_map(index).get((tenant_id, strong))
+        if hit is None or hit[3] != core:
+            return None
+        # An unregistered variation is colloquial even if its source is a
+        # formal alias. Only a direct formal alias has match_type="alias".
+        return replace(hit[0], match_type="colloquial", matched_alias=None)
+
+
 def lookup_approved_answer(
     index: ApprovedQAIndex,
     question: str,
@@ -378,7 +447,7 @@ def lookup_approved_answer(
     if canonical is not None:
         return canonical
     alias_match = index.by_tenant_alias.get((tenant_id, normalized))
-    if alias_match is None:
-        return None
-    answer, matched_alias = alias_match
-    return replace(answer, match_type="alias", matched_alias=matched_alias)
+    if alias_match is not None:
+        answer, matched_alias = alias_match
+        return replace(answer, match_type="alias", matched_alias=matched_alias)
+    return _lookup_colloquial(index, question, tenant_id)

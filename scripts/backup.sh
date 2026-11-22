@@ -48,7 +48,7 @@ MANIFEST_NAME="backup_manifest.sha256"
 
 TARGETS=()
 for candidate in vectorstore index data/approved_qa runs/audit runs/ingestion_registry.sqlite3 runs/state \
-                 runs/conversations configs \
+                 runs/conversations configs config/rag_profiles \
                  runs/settings runs/records runs/usage runs/llm_batch runs/tenant_eval \
                  data/golden_qa data/profile_versions data/sources data/contracts data/extraction "${EXTRA[@]}"; do
   if [[ -e "$SOURCE_DIR/$candidate" ]]; then

@@ -32,6 +32,12 @@ def test_production_guard_lists_unsafe_settings(monkeypatch):
 
 
 def test_production_guard_accepts_a_complete_configuration(monkeypatch):
+    from rag_core import qa
+
+    monkeypatch.setattr(qa, "distance_guard_calibration", lambda: {"calibrated": True, "active_model": "test-model", "calibrated_for": "test-model"})
+    monkeypatch.setenv("GROUNDING_VERIFY_ENABLED", "true")
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("ADMIN_SHARED_TOKEN_ACKNOWLEDGED", "true")
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("API_AUTH_ENABLED", "true")
     monkeypatch.setenv("ADMIN_AUTH_ENABLED", "true")

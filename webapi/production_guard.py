@@ -91,6 +91,37 @@ def production_problems() -> List[str]:
         workers = 1
     if workers > 1 and (_env("VECTOR_BACKEND") or "chroma").lower() == "chroma":
         problems.append("VECTOR_BACKEND=qdrant when WEB_CONCURRENCY > 1 (Chroma is single-process)")
+    if (_env("VECTOR_BACKEND") or "chroma").lower() == "qdrant" and _env("QDRANT_PATH"):
+        problems.append("QDRANT_PATH must be empty in production (embedded Qdrant is for development)")
+    # --- commercial fixes (tools/apply_commercial_fixes.py, F1) -------------
+    # A generated answer may only reach the user after every bullet was checked
+    # against the evidence it cites; the distance guard is meaningless with
+    # thresholds calibrated for another embedding model.
+    if not _enabled("GROUNDING_VERIFY_ENABLED"):
+        problems.append("GROUNDING_VERIFY_ENABLED=true (every generated bullet is checked against its cited evidence)")
+    try:
+        from rag_core import qa as _qa
+
+        _cal = _qa.distance_guard_calibration()
+        if not _cal.get("calibrated"):
+            problems.append(
+                "RAG_DIST_CALIBRATED_MODEL must name the active embedding model "
+                f"(active: {_cal.get('active_model') or 'unknown'}, calibrated for: {_cal.get('calibrated_for') or 'none'}); "
+                "run scripts/calibrate_distance_guard.py and set RAG_SOFT_DIST_* / RAG_HARD_MAX_DIST from its output"
+            )
+    except Exception as exc:  # noqa: BLE001 - a guard that cannot be checked is a problem, not a pass
+        problems.append(f"distance guard calibration could not be checked: {exc}")
+    if not _enabled("RATE_LIMIT_ENABLED"):
+        problems.append("RATE_LIMIT_ENABLED=true (a request budget per key)")
+    if workers > 1 and (_env("RATE_LIMIT_BACKEND") or "local").lower() != "redis":
+        problems.append("RATE_LIMIT_BACKEND=redis when WEB_CONCURRENCY > 1 (the local limiter counts per process)")
+    if not _enabled("ENTERPRISE_OIDC_ENABLED") and not _enabled("ADMIN_SHARED_TOKEN_ACKNOWLEDGED"):
+        problems.append(
+            "ENTERPRISE_OIDC_ENABLED=true so administrators are identified individually "
+            "(a pilot may set ADMIN_SHARED_TOKEN_ACKNOWLEDGED=true to accept the shared admin token; the audit log then "
+            "cannot tell administrators apart)"
+        )
+    # --- end commercial fixes ---------------------------------------------
     from rag_core import llm
 
     llm_problem = llm.production_problem()

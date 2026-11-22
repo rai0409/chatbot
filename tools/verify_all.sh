@@ -28,7 +28,7 @@ run() {  # run <name> <command...>
 if [ ! -x .venv/bin/python ]; then python3 -m venv .venv || { echo "cannot create .venv"; exit 2; }; fi
 PY=.venv/bin/python
 run install-core "$PY" -m pip install -q -r requirements.txt -r requirements-pdf.txt -r requirements-ja.txt \
-  -r requirements-state.txt -r requirements-qdrant.txt -r requirements-anthropic.txt pytest -c constraints/linux-py312.txt
+  -r requirements-state.txt -r requirements-qdrant.txt -r requirements-anthropic.txt pytest pyflakes -c constraints/linux-py312.txt
 export REQUIRE_OPTIONAL_DEPS=1   # a missing optional package is a failure here, never a silent skip
 
 # 2. tests that need nothing else

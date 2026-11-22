@@ -12,6 +12,9 @@ class CitationOut:
     chunk_id: Optional[str] = None
     # Ids of every retrieved chunk merged into the cited evidence block.
     member_chunk_ids: List[str] = field(default_factory=list)
+    # Commercial fix F10: the evidence sentences that support the bullets citing this
+    # block (up to 2), so a reader can verify the answer without opening the page.
+    supporting_sentences: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -163,3 +163,14 @@ def test_a_changed_profile_or_setting_is_not_answered_from_the_cache(state, monk
     assert len(calls) == 3  # a changed retrieval setting: the pipeline runs again
     main.chat(main.ChatRequest(question="質問です"))
     assert len(calls) == 3  # and the new state is cached again
+
+
+def test_colloquial_questions_do_not_share_cache_without_proven_equivalence(state, monkeypatch):
+    monkeypatch.setenv("QUERY_PREPROCESS_ENABLED", "true")
+    _write(state / "rules" / "colloquial_ja.json", json.dumps({"strip_suffix": ["を教えてください$", "の手続きは$"]}))
+    def key(question):
+        return answer_cache.build_key(question, top_k=5, max_context_chars=8000)
+    assert key("申請を教えてください") != key("申請の手続きは")
+    assert key("2025年度の申請") != key("2026年度の申請")
+    assert key("申請が必要") != key("申請は不要")
+    assert key("PR2の申請") != key("PR20の申請")

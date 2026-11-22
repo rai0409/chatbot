@@ -100,6 +100,7 @@ def test_answer_query_procedure_neighbor_context_keeps_stable_order_under_weak_e
 
 
 def test_answer_query_with_trace_matches_answer_query_and_exposes_core_trace(monkeypatch):
+    monkeypatch.setenv("QUERY_PREPROCESS_ENABLED", "false")
     base_hits = [
         _mk_chunk("A", "一般説明です。", 0.25, page=1),
         _mk_chunk("B", "PR2 の説明です。", 0.27, page=2),

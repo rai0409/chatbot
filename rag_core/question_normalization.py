@@ -32,7 +32,19 @@ def exact_match_key(text: str) -> str:
     quotes, brackets, punctuation, dashes, long vowel marks and spaces removed.
     Used by the exact index builder and lookup (one definition)."""
     value = unicodedata.normalize("NFKC", str(text or "")).replace("\u3000", " ").lower()
-    return _EXACT_KEY_DROP_RE.sub("", value)
+    # Retain separators that carry numeric or Japanese word meaning.
+    out = []
+    for i, char in enumerate(value):
+        left = value[i - 1] if i else ""
+        right = value[i + 1] if i + 1 < len(value) else ""
+        numeric = bool(left and right and left.isdecimal() and right.isdecimal())
+        if numeric and char in ".-‐‑‒–—―−":
+            out.append("." if char == "." else "-")
+        elif char == "ー" and right and "ァ" <= right <= "ヺ":
+            out.append(char)
+        elif not _EXACT_KEY_DROP_RE.fullmatch(char):
+            out.append(char)
+    return "".join(out)
 
 
 def normalize_question_for_exact_match(question: str) -> str:

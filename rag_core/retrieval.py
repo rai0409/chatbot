@@ -19,6 +19,7 @@ from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Sequence, Tup
 import config
 from rank_bm25 import BM25Okapi
 from rag_core import embedder, index_generation, ja_terms, ja_tokenizer, quantities, store
+from rag_core.mail_access import is_private_mail_record
 from rag_core.bm25_index import InvertedBM25
 from rag_core.ja_text import (
     active_normalization_version,
@@ -484,7 +485,7 @@ def _reading_lane_min_bm25() -> float:
 # KEYWORD_INDEX_CACHE_KEY or a random key file created next to the cache with
 # mode 0600) and only a file with a valid signature is unpickled; several
 # workers starting together build the index once (file lock).
-_KEYWORD_CACHE_FORMAT = "kwcache-v2"
+_KEYWORD_CACHE_FORMAT = "kwcache-mail-quarantine-v3"
 _KEYWORD_CACHE_MAGIC = b"KWC2"
 _KEYWORD_CACHE_KEEP = 8
 
@@ -664,6 +665,11 @@ def _build_keyword_index_fresh(
                     obj = json.loads(raw)
                 except Exception:
                     continue
+                # Mail is private until a verified per-resource ACL is wired
+                # through every read path. Never include its terms in BM25,
+                # typo vocabulary, citation lookup, or reading suggestions.
+                if is_private_mail_record(obj):
+                    continue
                 text = str(obj.get("text") or "")
                 if not text:
                     continue
@@ -719,7 +725,8 @@ def _build_keyword_index_fresh(
 def chunk_row(chunk_id: str, collection_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """The stored row of one chunk (citation excerpts): the served corpus, or
     the keyword corpus of a staging collection."""
-    return _index_for_collection(collection_name).row(chunk_id)
+    row = _index_for_collection(collection_name).row(chunk_id)
+    return None if is_private_mail_record(row) else row
 
 
 def _load_collection_keyword_index(path: str) -> _KeywordIndex:
@@ -802,6 +809,11 @@ def vector_retrieve(
         create_if_missing=create_collection_if_missing,
     )
     where = _build_base_where(allowed_types, allowed_qualities, tenant_id=tenant_id)
+    # Qdrant prefilter prevents private email points from crowding out
+    # public results. Chroma keeps its legacy where clauses unchanged.
+    if str(os.getenv("VECTOR_BACKEND", "chroma")).strip().lower() == "qdrant":
+        if "type" not in where:
+            where["type"] = {"$ne": "email"}
     embedding = _resolve_query_embedding(question, client, query_embedding)
     oversample = max(1, int(getattr(config, "CHILD_RETRIEVAL_OVERSAMPLE", 2)))
     n_results = max(top_k, top_k * oversample)
@@ -830,7 +842,7 @@ def vector_retrieve(
     out: List[RetrievedChunk] = []
     for text, meta, dist in zip(docs, metas, dists):
         m = dict(meta or {})
-        if not _tenant_matches(m, tenant_id):
+        if not _tenant_matches(m, tenant_id) or is_private_mail_record(m):
             continue
         m["retrieval_source"] = "vector"
         # Raw cosine distance survives fusion so the guard can use real
@@ -882,7 +894,7 @@ def keyword_retrieve(
         out_ranked = []
         for idx, bm25_score in candidates:
             meta = index.metas[idx]
-            if not _meta_matches_where(meta, where):
+            if is_private_mail_record(meta) or not _meta_matches_where(meta, where):
                 continue
             norm_text = index.norm_docs[idx]
             quoted_hits = sum(1 for t in quoted_terms if t and t in norm_text)
@@ -940,7 +952,7 @@ def keyword_retrieve(
             if len(out) >= top_k:
                 break
             meta = index.metas[idx]
-            if idx in present or tenant_ids[idx] != tenant or not _meta_matches_where(meta, where):
+            if idx in present or tenant_ids[idx] != tenant or is_private_mail_record(meta) or not _meta_matches_where(meta, where):
                 continue
             m = dict(meta or {})
             m["retrieval_source"] = "keyword_reading"
@@ -1253,7 +1265,7 @@ def hybrid_retrieve(
                 score=score,
             )
         )
-    return out
+    return [ch for ch in out if not is_private_mail_record(ch.metadata)]
 
 
 def expand_parent_chunks(
@@ -1264,6 +1276,9 @@ def expand_parent_chunks(
     tenant_id: str = DEFAULT_TENANT_ID,
     collection_name: Optional[str] = None,
 ) -> List[RetrievedChunk]:
+    # Never expand a private mail chunk into an answer, even if callers
+    # supply an unfiltered seed or disable parent expansion.
+    chunks = [ch for ch in chunks if not is_private_mail_record(ch.metadata)]
     if not getattr(config, "ENABLE_PARENT_EXPANSION", True):
         return list(chunks)
     if not chunks:
@@ -1288,7 +1303,7 @@ def expand_parent_chunks(
             continue
 
         parent_row = index.row(parent_id)
-        if not parent_row or not _tenant_matches(parent_row, tenant_id):
+        if not parent_row or is_private_mail_record(parent_row) or not _tenant_matches(parent_row, tenant_id):
             out.append(ch)
             continue
 
@@ -1302,7 +1317,9 @@ def expand_parent_chunks(
             prev_meta["child_chunk_ids"] = child_ids
             if float(ch.score) < float(prev.score):
                 prev_meta["primary_child_chunk_id"] = child_id
-                prev_meta["source_pages"] = meta.get("source_pages") or prev_meta.get("source_pages") or []
+                # Commercial fix F7: the cited pages stay the parent's own pages (the
+                # text shown is the parent's); the best child's pages are kept apart.
+                prev_meta["primary_child_source_pages"] = meta.get("source_pages") or []
                 prev = RetrievedChunk(text=prev.text, metadata=prev_meta, score=float(ch.score))
                 out[pos] = prev
             else:
@@ -1332,8 +1349,11 @@ def expand_parent_chunks(
         merged_meta["primary_child_chunk_id"] = child_id or merged_meta.get("primary_child_chunk_id")
         merged_meta["child_chunk_ids"] = [child_id] if child_id else list(merged_meta.get("child_chunk_ids") or [])
         merged_meta["source_doc"] = meta.get("source_doc") or merged_meta.get("source_doc")
-        merged_meta["source_pages"] = meta.get("source_pages") or merged_meta.get("source_pages") or []
+        # Commercial fix F7: a parent that spans pages is cited with its own pages,
+        # not the retrieving child's single page; the child's pages stay available.
+        merged_meta["source_pages"] = parent_meta.get("source_pages") or meta.get("source_pages") or []
         merged_meta["parent_source_pages"] = parent_meta.get("source_pages") or []
+        merged_meta["primary_child_source_pages"] = meta.get("source_pages") or []
         merged_meta["searchable_text"] = str(
             parent_row.get("searchable_text") or merged_meta.get("searchable_text") or parent_text
         )
@@ -1363,6 +1383,7 @@ def add_neighbor_chunks(
     One vector-store request per batch of positions instead of one per seed
     and offset; failures are logged (they used to be swallowed silently).
     """
+    seeds = [ch for ch in seeds if not is_private_mail_record(ch.metadata)]
     out = list(seeds)
     wanted: Dict[Tuple[str, int], float] = {}
     for seed in seeds:
@@ -1401,7 +1422,7 @@ def add_neighbor_chunks(
             continue
         for text, meta in zip(res.get("documents", []), res.get("metadatas", [])):
             m = dict(meta or {})
-            if not _tenant_matches(m, tenant_id):
+            if not _tenant_matches(m, tenant_id) or is_private_mail_record(m):
                 continue
             try:
                 key = (str(m.get("doc_id")), int(m.get("chunk_index")))

@@ -31,6 +31,7 @@ from rag_core.audit_log import (
 )
 from rag_core.product_contract import (
     ANSWER_MODE_APPROVED_ALIAS_MATCH,
+    ANSWER_MODE_APPROVED_COLLOQUIAL_MATCH,
     ANSWER_MODE_APPROVED_EXACT_MATCH,
     ANSWER_MODE_APPROVED_SIMILAR_CANDIDATE_ONLY,
     ANSWER_MODE_FALLBACK_NO_ANSWER,
@@ -400,9 +401,7 @@ def _approved_chat_payload(answer: ApprovedAnswer) -> Dict[str, Any]:
         payload.setdefault("chunk_id", citation.chunk_id)
         payload.setdefault("title", citation.title)
         citations.append(payload)
-    answer_mode = (
-        "approved_alias_match" if answer.match_type == "alias" else "approved_exact_match"
-    )
+    answer_mode = _approved_answer_mode(answer)
     return {
         "answer_text": answer.approved_answer,
         "answer_with_footnotes": answer.approved_answer,
@@ -418,14 +417,24 @@ def _approved_chat_payload(answer: ApprovedAnswer) -> Dict[str, Any]:
         "normalized_question": answer.normalized_question,
         "canonical_approved_question": answer.question,
         "matched_alias": answer.matched_alias,
-        "retrieval_source": "approved_qa_alias" if answer.match_type == "alias" else "approved_qa_exact",
+        "retrieval_source": {
+            ANSWER_MODE_APPROVED_EXACT_MATCH: "approved_qa_exact",
+            ANSWER_MODE_APPROVED_ALIAS_MATCH: "approved_qa_alias",
+            ANSWER_MODE_APPROVED_COLLOQUIAL_MATCH: "approved_qa_colloquial",
+        }[answer_mode],
         "retrieval_required": False,
         "llm_used": False,
     }
 
 
 def _approved_answer_mode(answer: ApprovedAnswer) -> str:
-    return "approved_alias_match" if answer.match_type == "alias" else "approved_exact_match"
+    if answer.match_type == "canonical":
+        return ANSWER_MODE_APPROVED_EXACT_MATCH
+    if answer.match_type == "alias":
+        return ANSWER_MODE_APPROVED_ALIAS_MATCH
+    if answer.match_type == "colloquial":
+        return ANSWER_MODE_APPROVED_COLLOQUIAL_MATCH
+    raise ValueError(f"unsupported approved QA match_type: {answer.match_type}")
 
 
 def _approved_audit_fields(answer: ApprovedAnswer, input_question: str) -> Dict[str, Any]:
@@ -894,6 +903,39 @@ def _record_chat_outcome_metrics(
         metrics_registry.increment("chat_used_fallback_total")
 
 
+_STAGE_LATENCY_BUCKETS_MS = (250, 500, 1000, 2000, 4000, 8000)
+
+
+def _record_stage_latency_metrics(trace, *, citations_count=None, guard_reason=None) -> None:
+    """Commercial fix F11: per-stage latency as cumulative buckets and the no-citation count.
+
+    chat_stage_latency_bucket{label="<stage>:le<ms>"} / "<stage>:le+Inf" and
+    chat_stage_latency_count{label="<stage>"} give p50/p95 per stage on /metrics;
+    chat_no_citation_total counts answers that were not guarded yet cite nothing
+    (an accuracy-regression signal).
+    """
+    if not isinstance(trace, dict):
+        return
+    stages = dict(trace.get("stage_latency_ms") or {})
+    if trace.get("latency_ms") is not None:
+        stages["total_ms"] = trace.get("latency_ms")
+    for stage, value in stages.items():
+        try:
+            ms = float(value)
+        except (TypeError, ValueError):
+            continue
+        name = str(stage)
+        if name.endswith("_ms"):
+            name = name[:-3]
+        metrics_registry.increment("chat_stage_latency_count", name)
+        for le in _STAGE_LATENCY_BUCKETS_MS:
+            if ms <= le:
+                metrics_registry.increment("chat_stage_latency_bucket", f"{name}:le{le}")
+        metrics_registry.increment("chat_stage_latency_bucket", f"{name}:le+Inf")
+    if citations_count is not None and not guard_reason and int(citations_count) == 0:
+        metrics_registry.increment("chat_no_citation_total")
+
+
 def _record_provider_error_metric(generation_error) -> None:
     if generation_error:
         metrics_registry.increment(
@@ -1107,7 +1149,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
                 tenant_id=tenant_id,
                 rag_profile_id=rag_profile_id,
             )
-            cache_key = (*cache_key, "profile-validation-v1")
+            cache_key = (*cache_key, "profile-validation-v1", "mail-quarantine-v1")
             cached = answer_cache.get(cache_key)
             if cached is not None and not _cache_validation_passed(cached):
                 cached = None
@@ -1173,6 +1215,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         _annotate_collection_event(chat_event, staging_collection)
         _annotate_chat_profile(chat_event, runtime_profile)
         append_audit_event("chat", chat_event)
+        _record_stage_latency_metrics(trace, citations_count=len(ans.citations or []), guard_reason=ans.guard_reason)
         _record_chat_outcome_metrics(
             answer_mode=trace.get("answer_mode")
             or ("fallback" if (ans.guard_reason or ans.used_fallback) else "grounded"),
@@ -1322,7 +1365,7 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                     max_context_chars=effective_max_context_chars, tenant_id=tenant_id,
                     rag_profile_id=rag_profile_id,
                 )
-                cache_key = (*cache_key, "profile-validation-v1")
+                cache_key = (*cache_key, "profile-validation-v1", "mail-quarantine-v1")
                 cached = answer_cache.get(cache_key)
                 if cached is not None and not _cache_validation_passed(cached):
                     cached = None
@@ -1406,6 +1449,11 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                 _annotate_collection_event(stream_event, staging_collection)
                 _annotate_chat_profile(stream_event, runtime_profile)
                 append_audit_event("chat", stream_event)
+                _record_stage_latency_metrics(
+                    trace,
+                    citations_count=len(final_payload.get("citations") or []),
+                    guard_reason=final_payload.get("guard_reason"),
+                )
                 records_hook.record_chat(api_auth, request, tenant_id=tenant_id, question=req.question, payload=final_payload,
                                          trace=trace, trace_id=req.trace_id, source="stream")
                 _record_chat_outcome_metrics(
@@ -1577,11 +1625,7 @@ def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContex
         approved = _approved_qa_lookup(user_query, tenant_id=tenant_id)
         if approved is not None:
             latency_ms = round((time.time() - started) * 1000, 3)
-            approved_mode = (
-                ANSWER_MODE_APPROVED_ALIAS_MATCH
-                if approved.match_type == "alias"
-                else ANSWER_MODE_APPROVED_EXACT_MATCH
-            )
+            approved_mode = _approved_answer_mode(approved)
             audit_event = build_audit_event(
                 request_id=request_id,
                 trace_id=trace_id,

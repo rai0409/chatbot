@@ -204,6 +204,9 @@ def revoke_admin_session(cookie: str | None) -> bool:
     parsed = parse_admin_session(cookie)
     if parsed is None:
         return False
+    expected = _expected_token()
+    if not expected or not _valid_admin_session(cookie, expected):
+        return False
     from webapi import state_backend
 
     state_backend.revoke_session(parsed[0], float(parsed[2]))

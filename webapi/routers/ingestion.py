@@ -24,6 +24,7 @@ from rag_core import ingest_settings, runtime_settings
 from rag_core.retrieval import normalize_tenant_id
 from webapi import admin_common
 from webapi import ingestion_jobs
+from webapi import mail_ingestion_jobs
 from webapi import security_middleware
 from webapi.admin_auth import require_admin_auth, require_global, require_scope
 
@@ -160,10 +161,67 @@ def ingestion_raw_documents(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+class MailIngestionRequest(BaseModel):
+    inputs: List[str]
+    expected_tenant: str
+    collection: str
+    execute: bool = False
+    async_job: bool = False
+
+
+@router.post("/admin/ingestion/mail")
+def ingestion_mail(
+    req: MailIngestionRequest,
+    request: Request = None,
+    _admin_auth: None = Depends(require_admin_auth),
+):
+    inputs = [str(p) for p in (req.inputs or []) if str(p).strip()]
+    tenant = str(req.expected_tenant or "").strip()
+    if not inputs or not tenant:
+        raise HTTPException(status_code=400, detail="inputs and expected_tenant are required")
+    scope = _request_scope(request)
+    require_scope(scope, tenant)
+    if ingestion_jobs.is_production_collection(req.collection):
+        raise HTTPException(status_code=400, detail="refusing production/default collection")
+    # Mail may contain confidential per-person data. Unlike generic document
+    # ingestion, the mail endpoint is restricted to this tenant's upload tree.
+    # This prevents a scoped tenant admin from importing another tenant's
+    # files from a shared, otherwise-allowed filesystem root.
+    upload_root = _upload_dir()
+    own_segment = _tenant_segment(tenant)
+    for raw in inputs:
+        try:
+            resolved = ingestion_jobs.resolve_ingest_input(raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        if not resolved.is_relative_to(upload_root):
+            raise HTTPException(status_code=403, detail="mail input must be under tenant upload directory")
+        parts = resolved.relative_to(upload_root).parts
+        if len(parts) != 3 or parts[0] != own_segment or not re.fullmatch(r"\d{8}", parts[1]):
+            raise HTTPException(status_code=403, detail="mail input belongs to another tenant or invalid upload layout")
+    try:
+        # Validate the entire batch before audit/queueing: no write occurs here.
+        mail_ingestion_jobs._validate(inputs, tenant, req.collection)
+        if req.execute:
+            _audit_admin(scope, "mail_ingestion_execute", tenant_id=tenant,
+                         collection=req.collection, files=len(inputs), async_job=bool(req.async_job))
+        if req.async_job:
+            queued = mail_ingestion_jobs.submit_mail_job(
+                inputs, expected_tenant=tenant, collection=req.collection, execute=req.execute)
+            return JSONResponse(status_code=202, content=queued)
+        return mail_ingestion_jobs.run_mail_job(
+            inputs, expected_tenant=tenant, collection=req.collection, execute=req.execute)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 _UPLOAD_SUFFIXES = {".pdf": (b"%PDF-",), ".docx": (b"PK\x03\x04",), ".xlsx": (b"PK\x03\x04",),
-                    ".pptx": (b"PK\x03\x04",), ".csv": ()}
+                    ".pptx": (b"PK\x03\x04",), ".csv": (), ".tsv": (),
+                    ".eml": (), ".xlsm": (b"PK\x03\x04",)}
 # Parts every genuine Office Open XML package of that type contains.
-_OOXML_REQUIRED = {".docx": "word/document.xml", ".xlsx": "xl/workbook.xml", ".pptx": "ppt/presentation.xml"}
+_OOXML_REQUIRED = {".docx": "word/document.xml", ".xlsx": "xl/workbook.xml", ".xlsm": "xl/workbook.xml", ".pptx": "ppt/presentation.xml"}
 _HEAD_BYTES = 8192
 _DEFAULT_TENANT_QUOTA_BYTES = 5 * 1024 ** 3
 
@@ -266,9 +324,11 @@ def _validate_upload(path: Path, suffix: str, head: bytes) -> None:
     signatures = _UPLOAD_SUFFIXES[suffix]
     if signatures and not any(head.startswith(sig) for sig in signatures):
         raise HTTPException(status_code=400, detail="file content does not match its extension")
-    if suffix == ".csv":
+    if suffix in {".csv", ".tsv", ".eml"}:
         if b"\x00" in head:
             raise HTTPException(status_code=400, detail="file content does not match its extension")
+        if suffix == ".eml" and not re.search(rb"(?im)^(from|to|date|subject|message-id):", head):
+            raise HTTPException(status_code=400, detail="invalid EML headers")
         return
     required = _OOXML_REQUIRED.get(suffix)
     if not required:
@@ -327,7 +387,7 @@ async def ingestion_upload(
     name = Path(str(filename or "")).name
     suffix = Path(name).suffix.lower()
     if suffix not in _UPLOAD_SUFFIXES:
-        raise HTTPException(status_code=400, detail="unsupported file type (pdf, docx, xlsx, pptx, csv)")
+        raise HTTPException(status_code=400, detail="unsupported file type (pdf, docx, xlsx, xlsm, pptx, csv, tsv, eml)")
     safe_name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", name)[-120:] or f"upload{suffix}"
     tenant_segment = _tenant_segment(tenant)
     upload_root = _upload_dir()

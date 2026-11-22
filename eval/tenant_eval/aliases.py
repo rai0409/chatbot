@@ -10,9 +10,8 @@ from rag_core.approved_qa import (
     MAX_APPROVED_ALIASES,
     ApprovedAnswer,
     ApprovedQAIndex,
-    lookup_approved_answer,
 )
-from rag_core.question_normalization import exact_match_key
+from rag_core.question_normalization import exact_match_key, normalize_question_for_exact_match
 
 # Kinds of perturbation that people plausibly type again and again (typos and dropped characters do not repeat).
 DEFAULT_ALIAS_KINDS = ("casual_ending", "keywords_only", "katakana_hiragana", "spacing")
@@ -20,6 +19,15 @@ DEFAULT_ALIAS_KINDS = ("casual_ending", "keywords_only", "katakana_hiragana", "s
 
 def _answers(index: ApprovedQAIndex, tenant_id: str) -> List[ApprovedAnswer]:
     return [answer for answer in index.records if answer.tenant_id == tenant_id]
+
+
+def _formal_match(index: ApprovedQAIndex, text: str, tenant_id: str) -> Optional[ApprovedAnswer]:
+    normalized = normalize_question_for_exact_match(text)
+    canonical = index.by_tenant_question.get((tenant_id, normalized))
+    if canonical is not None:
+        return canonical
+    alias = index.by_tenant_alias.get((tenant_id, normalized))
+    return alias[0] if alias else None
 
 
 def coverage(
@@ -33,7 +41,8 @@ def coverage(
         for variant in perturb.perturb_question(answer.question, kinds=kinds, seed=seed):
             stats = by_kind.setdefault(variant["kind"], {"variants": 0, "covered": 0})
             stats["variants"] += 1
-            hit = lookup_approved_answer(index, variant["text"], tenant_id=tenant_id)
+            # Formal coverage excludes automatic colloquial equivalents.
+            hit = _formal_match(index, variant["text"], tenant_id)
             if hit is not None and hit.qa_id == answer.qa_id:
                 stats["covered"] += 1
             else:
@@ -106,7 +115,7 @@ def mine(
     rows: List[Dict[str, Any]] = []
     for text in questions:
         text = str(text or "").strip()
-        if not text or lookup_approved_answer(index, text, tenant_id=tenant_id) is not None or not _valid_alias(text):
+        if not text or _formal_match(index, text, tenant_id) is not None or not _valid_alias(text):
             continue
         best: Optional[tuple] = None
         for answer in answers:

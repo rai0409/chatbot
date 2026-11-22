@@ -233,8 +233,21 @@ def _production_index_checks() -> None:
         )
 
 
+def _production_warmup() -> None:
+    if str(os.getenv("WARMUP_ON_START", "true")).strip().lower() in {"0", "false", "no", "off"}:
+        return
+    try:
+        from rag_core import embedding_provider
+
+        if embedding_provider.is_local_provider():
+            embedding_provider.embed_queries(["warmup"])
+    except Exception:  # noqa: BLE001 - startup and readiness checks remain authoritative
+        logging.warning("embedding warm-up failed", exc_info=True)
+
+
 if production_guard.is_production():
     _production_index_checks()
+    _production_warmup()
 _ALLOWED_HOSTS = [h.strip() for h in str(os.getenv("ALLOWED_HOSTS", "")).split(",") if h.strip()]
 if _ALLOWED_HOSTS:
     from starlette.middleware.trustedhost import TrustedHostMiddleware

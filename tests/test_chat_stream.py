@@ -172,7 +172,8 @@ def test_midstream_error_aborts_without_final_or_retry(monkeypatch):
             events.append(event)
 
     names = [name for name, _ in events]
-    assert names == ["meta", "delta"]
+    # An interrupted, unverified claim is never exposed to the client.
+    assert names == ["meta"]
     assert len(client.calls) == 1  # never retried after a token was emitted
 
 
@@ -292,3 +293,76 @@ def test_chat_stream_cache_hit_is_recorded_like_the_chat_route(monkeypatch, tmp_
 
     assert [name for name, _ in events] == ["final"]
     assert len(recorded) == 1 and recorded[0]["source"] == "cache"
+
+
+@pytest.mark.parametrize("question,mode,source", [
+    ("営業時間は？", "approved_exact_match", "approved_qa_exact"),
+    ("営業時刻は？", "approved_alias_match", "approved_qa_alias"),
+    ("あの、営業時間は？", "approved_colloquial_match", "approved_qa_colloquial"),
+])
+def test_f13_stream_approved_mode_and_audit(monkeypatch, tmp_path, question, mode, source):
+    from webapi import metrics_registry
+    record = {"qa_id": "stream", "question": "営業時間は？", "approved_answer": "回答", "status": "approved", "tenant_id": "default", "approved_aliases": ["営業時刻は？"], "approved_citations": [{"source_doc": "faq.pdf", "source_pages": [1]}]}
+    path = tmp_path / "qa.jsonl"
+    path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+    monkeypatch.setattr(config, "APPROVED_QA_ENABLED", True)
+    monkeypatch.setattr(config, "APPROVED_QA_PATH", str(path))
+    monkeypatch.setattr(chat_router, "_approved_qa_cache", {})
+    monkeypatch.setattr(chat_router, "ensure_openai_client", _forbidden_client)
+    monkeypatch.setattr(chat_router, "answer_query_stream", lambda *a, **k: pytest.fail("retrieval used"))
+    audit = []
+    monkeypatch.setattr(chat_router, "append_audit_event", lambda kind, event: audit.append(event))
+    metrics_registry.reset()
+    events = _parse_sse(_collect_body(main.chat_stream(main.ChatRequest(question=question))))
+    assert len(events) == 1 and events[0][0] == "approved"
+    payload = events[0][1]
+    assert payload["answer_mode"] == payload["intent"] == mode
+    assert payload["retrieval_source"] == source and payload["approved_qa_id"] == "stream"
+    assert payload["answer_text"] == "回答" and payload["citations"][0]["source_doc"] == "faq.pdf"
+    assert payload["retrieval_required"] is False and payload["llm_used"] is False
+    assert audit[-1]["answer_mode"] == mode and audit[-1]["tenant_id"] == "default"
+    assert metrics_registry.snapshot()["chat_answer_mode_total"][mode] == 1
+
+
+def test_f13_stream_unknown_match_type_does_not_send_approved(monkeypatch):
+    from rag_core.approved_qa import ApprovedAnswer
+    answer = ApprovedAnswer("bad", "q", "q", "秘密回答", (), "default", "ja", match_type="unknown")
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: answer)
+    monkeypatch.setattr(chat_router, "append_audit_event", lambda *a, **k: None)
+    events = _parse_sse(_collect_body(main.chat_stream(main.ChatRequest(question="q"))))
+    assert len(events) == 1 and events[0][0] == "error"
+    assert "秘密回答" not in json.dumps(events, ensure_ascii=False)
+
+
+def test_g2_stream_never_emits_unverified_assertion(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
+    monkeypatch.setattr(qa, "hybrid_retrieve", lambda *a, **k: [_mk_chunk("A", "PR2 は二段階確認の説明です。")])
+    monkeypatch.setattr(qa, "guard_merged_top", lambda *a, **k: None)
+    client = _FakeStreamClient([_stream_chunks("- PR2 は二段階確認です [S1]\n", "秘密の根拠なし断定")])
+    events = list(qa.answer_query_stream("PR2 を教えて", client=client, top_k=5))
+    assert all("秘密の根拠なし断定" not in str(payload) for name, payload in events if name == "delta")
+    assert events[-1][1][0].used_fallback is True
+
+
+def test_g1_stream_shortage_is_insufficient_evidence(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
+    monkeypatch.setattr(qa, "hybrid_retrieve", lambda *a, **k: [_mk_chunk("A", "PR2 は二段階確認の説明です。")])
+    monkeypatch.setattr(qa, "guard_merged_top", lambda *a, **k: None)
+    client = _FakeStreamClient([_stream_chunks("不足: 根拠なし")])
+    events = list(qa.answer_query_stream("PR2 を教えて", client=client, top_k=5))
+    result, trace = events[-1][1]
+    assert result.guard_reason == trace["final_guard_reason"] == "insufficient_evidence"
+    assert result.used_fallback is True and result.citations == []
+    assert all(name != "delta" for name, _ in events)
+
+
+def test_g2_stream_does_not_replay_bullets_removed_by_grounding(monkeypatch):
+    monkeypatch.setattr(config, "CHAT_GENERATION_MODE", "llm")
+    monkeypatch.setattr(config, "GROUNDING_VERIFY_ENABLED", True)
+    monkeypatch.setattr(qa, "hybrid_retrieve", lambda *a, **k: [_mk_chunk("A", "PR2 は二段階確認の説明です。")])
+    monkeypatch.setattr(qa, "guard_merged_top", lambda *a, **k: None)
+    monkeypatch.setattr(qa.grounding, "verify_answer", lambda *a, **k: SimpleNamespace(kept=1, raw="- PR2 は二段階確認の説明です [S1]"))
+    client = _FakeStreamClient([_stream_chunks("- PR2 は二段階確認の説明です [S1]\n", "- PR2 は根拠のない断定です [S1]")])
+    events = list(qa.answer_query_stream("PR2 を教えて", client=client, top_k=5))
+    assert all("根拠のない断定" not in str(payload) for name, payload in events if name == "delta")
+    assert events[-1][1][0].used_fallback is False

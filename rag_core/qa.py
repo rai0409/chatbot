@@ -225,7 +225,20 @@ def _evidence_coverage_bypass(question: str, retrieved: Sequence[RetrievedChunk]
     content_len = sum(len(run) for run in _TOO_GENERAL_WORD_RUN_RE.findall(question_norm))
     if content_len >= _TOO_GENERAL_MIN_FULL_QUESTION_CONTENT_LEN:
         return True
-    return len(terms) == 1 and len(terms[0]) >= _TOO_GENERAL_MIN_SINGLE_TERM_LEN
+    if len(terms) == 1 and len(terms[0]) >= _TOO_GENERAL_MIN_SINGLE_TERM_LEN:
+        return True
+    # Commercial fix F16: a short colloquial lookup ("有給ってどう？") names one 2-char
+    # term. It is a legitimate lookup when that term is in the top-1 chunk's heading
+    # fields (title / section path / FAQ question), not merely somewhere in its body.
+    if len(terms) == 1 and len(terms[0]) >= 2:
+        section_path = top_meta.get("section_path") or []
+        if not isinstance(section_path, (list, tuple)):
+            section_path = [str(section_path)]
+        heading = normalize_japanese_text(" ".join(
+            [str(top_meta.get("title") or ""), str(top_meta.get("faq_question") or ""), " ".join(str(p) for p in section_path)]
+        ))
+        return terms[0] in heading
+    return False
 
 
 def _guard_evidence(retrieved: Sequence[RetrievedChunk]) -> Dict[str, object]:
@@ -283,6 +296,17 @@ def distance_guard_calibration() -> Dict[str, object]:
     }
 
 
+def _question_term_coverage(question: str, chunks: Sequence[Chunk]) -> Optional[float]:
+    # The existing deterministic grounding terms require no tokenizer or model.
+    from rag_grounded import _terms
+
+    terms = _terms(normalize_for_index(question))
+    if not terms:
+        return None
+    evidence = normalize_for_index(" ".join(chunk.text for chunk in list(chunks)[:3]))
+    return sum(1 for term in terms if normalize_for_index(term) in evidence) / len(terms)
+
+
 def guard_merged_top(question: str, intent: str, chunks: Sequence[Chunk], retrieved: Sequence[RetrievedChunk]) -> Optional[str]:
     if config.DISABLE_GUARD:
         return None
@@ -321,12 +345,29 @@ def guard_merged_top(question: str, intent: str, chunks: Sequence[Chunk], retrie
             and not evidence["has_lexical_match"]
         ):
             return "weak_keyword_evidence"
+    # Commercial fix F8: a question that names a year (2025年度, 令和7年) is not
+    # answered by evidence that only carries other years, however well the
+    # other terms overlap. GUARD_YEAR_MISMATCH_ENABLED=false switches it off.
+    if _setting("GUARD_YEAR_MISMATCH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}:
+        requested_years = _extract_requested_years(question)
+        if requested_years:
+            evidence_compact = re.sub(r"\s+", "", normalize_japanese_text(" ".join(ch.text for ch in chunks)))
+            if not any(year in evidence_compact for year in requested_years):
+                return "year_mismatch"
     salient = _salient_terms(question)
     if salient:
         # Both sides use the index normalization (case, width, dashes).
         evidence = normalize_for_index(" ".join(ch.text for ch in chunks))
         if not any(normalize_for_index(t) in evidence for t in salient):
             return "salient_mismatch"
+    try:
+        coverage_min = float(_setting("GUARD_TERM_COVERAGE_MIN", "0") or 0)
+    except (TypeError, ValueError):
+        coverage_min = 0.0
+    if 0 < coverage_min <= 1:
+        coverage = _question_term_coverage(question, chunks)
+        if coverage is not None and coverage < coverage_min:
+            return "low_term_coverage"
     if intent == "other":
         if len(re.findall(r"[a-z0-9ぁ-んァ-ヴー一-龥々〆〤]+", normalize_for_index(question))) <= 2:
             req = ["ID", "番号", "許容値", "フラグ"]
@@ -472,6 +513,10 @@ def _generation_limits(profile):
 
 
 def _create_chat_completion(client, messages, profile=None):
+    # Clone only the chat client: embedding calls on the original keep their policy.
+    with_options = getattr(client, "with_options", None)
+    if callable(with_options):
+        client = with_options(max_retries=0)
     attempts = 1 + max(0, int(getattr(config, "CHAT_COMPLETION_MAX_RETRIES", 1)))
     backoff = float(getattr(config, "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", 1.0))
     model, timeout, max_tokens = _generation_limits(profile)
@@ -494,6 +539,9 @@ def _create_chat_completion(client, messages, profile=None):
 def _stream_chat_completion(client, messages, profile=None):
     # Same timeout/max_tokens/retry policy as _create_chat_completion, but
     # retries happen only before the first content token; never mid-stream.
+    with_options = getattr(client, "with_options", None)
+    if callable(with_options):
+        client = with_options(max_retries=0)
     attempts = 1 + max(0, int(getattr(config, "CHAT_COMPLETION_MAX_RETRIES", 1)))
     backoff = float(getattr(config, "CHAT_COMPLETION_RETRY_BACKOFF_SECONDS", 1.0))
     model, timeout, max_tokens = _generation_limits(profile)
@@ -526,11 +574,13 @@ def _stream_chat_completion(client, messages, profile=None):
 # User-facing wording per guard reason. The reason code itself stays in the
 # guard_reason field (API, audit, metrics) and is never shown in the answer.
 _GUARD_MESSAGES = {
+    "low_term_coverage": "質問の内容に対応する記載が見つかりませんでした。",
     "no_results": "該当する文書が見つかりませんでした。",
     "hard_distance": "質問に十分に関連する記載が見つかりませんでした。",
     "soft_distance": "質問に十分に関連する記載が見つかりませんでした。",
     "weak_keyword_evidence": "質問の語句を含む記載が見つかりませんでした。",
     "salient_mismatch": "質問にある名称や番号を含む記載が見つかりませんでした。",
+    "year_mismatch": "質問にある年度・年の記載が文書内に見つかりませんでした。",
     "too_general": "質問の範囲が広いため記載を特定できませんでした。対象や項目を具体的にしてください。",
     "insufficient_evidence": "回答に必要な根拠が文書内に見つかりませんでした。",
     "llm_unavailable": "現在回答を生成できず、文書内にも十分な根拠が見つかりませんでした。",
@@ -547,16 +597,55 @@ def _guard_fallback_raw(guard_reason: str) -> str:
     return f"- 関連情報が見つかりませんでした。{message}\n不明: 根拠不足"
 
 
+_GENERATED_BULLET_RE = re.compile(r"^-\s*(.*?)\s*((?:\[S\d+\]\s*)+)$")
+_GENERATED_TAG_RE = re.compile(r"\[S(\d+)\]")
+
+
+def _generated_answer_type_supported(question: str, raw: str, grounded: Sequence[Chunk]) -> bool:
+    """Year / money / count agreement for LLM-generated bullets (commercial fix F2).
+
+    The extractive path already refuses a sentence whose year, amount or count does
+    not match the question (_has_answer_type_support); a generated bullet passed
+    validate_output with a single shared term. Apply the same rule here.
+    """
+    selected: List[Tuple[int, str]] = []
+    for line in (raw or "").splitlines():
+        match = _GENERATED_BULLET_RE.match(line.strip())
+        if not match:
+            continue
+        tags = [int(n) for n in _GENERATED_TAG_RE.findall(match.group(2))]
+        if not tags:
+            continue
+        selected.append((tags[0], match.group(1)))
+    if not selected:
+        return True
+    return _has_answer_type_support(question, selected, grounded)
+
+
+def _is_shortage_only_answer(raw: str) -> bool:
+    lines = [line.strip() for line in strip_reference_block(raw or "").splitlines() if line.strip()]
+    return bool(lines) and all(re.fullmatch(r"(?:不足|不明)(?:\s*[:：].*)?", line) for line in lines)
+
+
 def _finalize_generated_answer(
     raw: str, q: str, grounded: Sequence[Chunk], intent: str, *, tenant_id: str = "default", client=None
 ) -> Tuple[str, bool]:
     raw = strip_reference_block(raw)
     used_fallback = False
+    if _is_shortage_only_answer(raw):
+        return _guard_fallback_raw("insufficient_evidence"), True
     if not validate_output(raw, grounded, intent, config.PREFER_SORT_TERMS_CHANGE + config.PREFER_SORT_TERMS_RESET):
         raw = extractive_fallback(q, grounded)
         used_fallback = True
         if not raw.strip():
             # No evidence sentence shares a term with the question.
+            return _guard_fallback_raw("insufficient_evidence"), True
+    if not used_fallback and not _generated_answer_type_supported(q, raw, grounded):
+        # Commercial fix F2: the generated bullets name a year, amount or count the
+        # cited evidence does not support for this question.
+        raw = extractive_fallback(q, grounded)
+        used_fallback = True
+        if not raw.strip():
             return _guard_fallback_raw("insufficient_evidence"), True
     if not used_fallback and getattr(config, "GROUNDING_VERIFY_ENABLED", False):
         # Step 4-3: every sentence must be supported by the evidence it cites. Unsupported ones are dropped; an
@@ -1284,7 +1373,9 @@ def _build_retrieval_trace(
     retrieval_q = q
     expansions: List[str] = []
     preprocess_trace: Optional[Dict[str, object]] = None
-    if _setting("QUERY_PREPROCESS_ENABLED", "false") in _ENABLED_VALUES:
+    # Commercial fix F12: colloquial stripping, synonyms and typo candidates are part
+    # of the product path (QUERY_PREPROCESS_ENABLED=false restores the raw query).
+    if _setting("QUERY_PREPROCESS_ENABLED", "true") in _ENABLED_VALUES:
         pre = query_preprocess.preprocess_query(
             q,
             tenant_id=normalize_tenant_id(tenant_id),
@@ -1583,8 +1674,10 @@ def _answer_query_impl(
         (time.perf_counter() - generation_started) * 1000
     )
     trace["chat_generation_mode"] = "llm"
+    generated_raw = resp.choices[0].message.content or ""
+    shortage_only = _is_shortage_only_answer(generated_raw)
     raw, used_fallback = _finalize_generated_answer(
-        resp.choices[0].message.content or "", q, grounded, intent,
+        generated_raw, q, grounded, intent,
         tenant_id=tenant_id, client=client if hasattr(client, "chat") else None,
     )
     answer_chunks = grounded
@@ -1592,7 +1685,7 @@ def _answer_query_impl(
         raw,
         answer_chunks,
         intent=intent,
-        guard_reason=None,
+        guard_reason="insufficient_evidence" if shortage_only else None,
         used_fallback=used_fallback,
         retrieved=retrieved,
         rewritten_query=rewritten,
@@ -1782,11 +1875,11 @@ def answer_query_stream(
             client=client, estimate_input="".join(str(m.get("content") or "") for m in messages),
         ):
             buffered_chars += len(delta_text)
-            if enforce and buffered_chars > max_buffer_chars:
-                raise ValueError("profile validation stream buffer limit exceeded")
+            if buffered_chars > max_buffer_chars:
+                raise ValueError("stream validation buffer limit exceeded")
+            # Buffer until citation and profile checks finish: unvalidated text
+            # must not be sent as SSE before it can be rejected.
             pieces.append(delta_text)
-            if not enforce:
-                yield "delta", {"text": delta_text}
     except Exception as exc:
         trace.setdefault("stage_latency_ms", {})["generation_ms"] = int(
             (time.perf_counter() - generation_started) * 1000
@@ -1821,15 +1914,17 @@ def answer_query_stream(
     )
     trace["chat_generation_mode"] = "llm"
 
+    generated_raw = "".join(pieces)
+    shortage_only = _is_shortage_only_answer(generated_raw)
     raw, used_fallback = _finalize_generated_answer(
-        "".join(pieces), q, grounded, state.intent,
+        generated_raw, q, grounded, state.intent,
         tenant_id=tenant_id, client=client if hasattr(client, "chat") else None,
     )
     result = _build_answer_result(
         raw,
         grounded,
         intent=state.intent,
-        guard_reason=None,
+        guard_reason="insufficient_evidence" if shortage_only else None,
         used_fallback=used_fallback,
         retrieved=state.retrieved,
         rewritten_query=state.rewritten_query,
@@ -1839,7 +1934,7 @@ def answer_query_stream(
         trace,
         started_at,
         grounded,
-        guard_reason=None,
+        guard_reason=result.guard_reason,
         used_fallback=used_fallback,
         answer_mode="fallback" if used_fallback else "grounded",
         citations_count=len(result.citations),
@@ -1848,6 +1943,12 @@ def answer_query_stream(
         question, result, trace, state, rag_profile_id=rag_profile_id, started_at=started_at,
         profile_snapshot=stream_profile,
     )
-    if enforce and not result.guard_reason:
-        yield "delta", {"text": result.answer_text}
+    if not result.guard_reason:
+        if (not enforce and not used_fallback
+                and strip_reference_block(generated_raw) == generated_raw
+                and drop_empty_shortage_lines(generated_raw) == raw):
+            for piece in pieces:
+                yield "delta", {"text": piece}
+        else:
+            yield "delta", {"text": result.answer_text}
     yield "final", (result, trace)

@@ -210,3 +210,13 @@ def test_feedback_counter_increments_with_stable_label(monkeypatch, tmp_path):
     assert snap["chat_feedback_total"] == {"human_review_requested": 1}
     # No raw key/token leaked into metrics labels.
     assert "ui-uuid" not in json.dumps(snap)
+
+
+def test_f13_colloquial_is_served_in_zero_success_alert():
+    from webapi.alerting import chat_request_count, chat_success_count
+    payload = _snapshot(answer_modes={"approved_colloquial_match": 1})
+    assert chat_request_count(payload) == chat_success_count(payload) == 1
+    result = evaluate_alerts(payload)
+    assert next(s for s in result["signals"] if s["name"] == "zero_success")["status"] == OK
+    fallback = evaluate_alerts(_snapshot(answer_modes={"fallback": 1}))
+    assert next(s for s in fallback["signals"] if s["name"] == "zero_success")["status"] == CRITICAL

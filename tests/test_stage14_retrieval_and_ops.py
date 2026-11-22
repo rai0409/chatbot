@@ -158,6 +158,8 @@ def test_production_refuses_chroma_with_several_workers(monkeypatch):
     monkeypatch.delenv("VECTOR_BACKEND", raising=False)
     assert any("WEB_CONCURRENCY" in p for p in production_guard.production_problems())
     monkeypatch.setenv("VECTOR_BACKEND", "qdrant")
+    assert any("RATE_LIMIT_BACKEND=redis" in p for p in production_guard.production_problems())
+    monkeypatch.setenv("RATE_LIMIT_BACKEND", "redis")
     assert not any("WEB_CONCURRENCY" in p for p in production_guard.production_problems())
     monkeypatch.setenv("ALLOWED_HOSTS", "*")
     assert any("ALLOWED_HOSTS must list" in p for p in production_guard.production_problems())

@@ -286,3 +286,28 @@ def test_product_preview_audit_write_failure_does_not_fail_endpoint(monkeypatch)
     assert response["answer_mode"] == "fallback_no_answer"
     assert response["decision"]["audit_persisted"] is False
     assert "product_preview_audit_logging_failed" in response["warnings"]
+
+
+@pytest.mark.parametrize("match_type,mode", [("canonical", "approved_exact_match"), ("alias", "approved_alias_match"), ("colloquial", "approved_colloquial_match")])
+def test_f13_preview_mode_matches_audit(monkeypatch, match_type, mode):
+    answer = ApprovedAnswer(qa_id="qa-f13", question="営業時間", normalized_question="営業時間", approved_answer="回答", approved_citations=(ApprovedCitation(source_doc="faq.pdf", source_pages=(1,)),), tenant_id="default", language="ja", match_type=match_type, matched_alias="別表現" if match_type == "alias" else None)
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: answer)
+    monkeypatch.setattr(chat_router, "_embedding_client", lambda *a, **k: pytest.fail("embedding used"))
+    monkeypatch.setattr(main.approved_similar, "search_approved_similar_candidates", lambda *a, **k: pytest.fail("retrieval used"))
+    audit = []
+    monkeypatch.setattr(chat_router, "append_product_preview_chat_audit_event", lambda event: audit.append(event) or True)
+    response = main.chat_product_preview(main.ProductPreviewChatRequest(query="営業時間"))
+    assert response["answer_mode"] == mode and response["confidence_route"] == "exact_match"
+    assert response["answer_text"] == "回答" and response["approved_qa_id"] == "qa-f13"
+    assert response["tenant_id"] == "default" and response["citations"][0]["source_doc"] == "faq.pdf"
+    assert response["retrieval_required"] is False and response["llm_used"] is False
+    assert audit[-1]["answer_mode"] == mode
+
+
+def test_f13_preview_rejects_unknown_match_type(monkeypatch):
+    answer = ApprovedAnswer(qa_id="bad", question="q", normalized_question="q", approved_answer="秘密回答", approved_citations=(), tenant_id="default", language="ja", match_type="unknown")
+    monkeypatch.setattr(chat_router, "_approved_qa_lookup", lambda *a, **k: answer)
+    with pytest.raises(HTTPException) as exc:
+        main.chat_product_preview(main.ProductPreviewChatRequest(query="q"))
+    assert exc.value.status_code == 500
+    assert "秘密回答" not in str(exc.value.detail)
