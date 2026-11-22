@@ -1365,7 +1365,7 @@ class LineEmbedder:
             self._load_cache(cache_path)
 
     def _cache_id(self) -> str:
-        return hashlib.sha256(f"{self.digest}\0{self.prefix}\0{EMB_MAX_CHARS}".encode()).hexdigest()
+        return hashlib.sha256(f"sha256-v2\0{self.digest}\0{self.prefix}\0{EMB_MAX_CHARS}".encode()).hexdigest()
 
     def _load_cache(self, path: Path) -> None:
         import numpy as np
@@ -1409,7 +1409,7 @@ class LineEmbedder:
         todo: dict[str, str] = {}
         for t in texts:
             norm = _emb_norm(t)
-            k = hashlib.sha1(norm.encode("utf-8")).hexdigest()
+            k = hashlib.sha256(norm.encode("utf-8")).hexdigest()
             keys.append(k)
             if k not in self.mem:
                 todo[k] = norm
