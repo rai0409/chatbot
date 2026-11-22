@@ -1149,7 +1149,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
                 tenant_id=tenant_id,
                 rag_profile_id=rag_profile_id,
             )
-            cache_key = (*cache_key, "profile-validation-v1")
+            cache_key = (*cache_key, "profile-validation-v1", "mail-quarantine-v1")
             cached = answer_cache.get(cache_key)
             if cached is not None and not _cache_validation_passed(cached):
                 cached = None
@@ -1365,7 +1365,7 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                     max_context_chars=effective_max_context_chars, tenant_id=tenant_id,
                     rag_profile_id=rag_profile_id,
                 )
-                cache_key = (*cache_key, "profile-validation-v1")
+                cache_key = (*cache_key, "profile-validation-v1", "mail-quarantine-v1")
                 cached = answer_cache.get(cache_key)
                 if cached is not None and not _cache_validation_passed(cached):
                     cached = None

@@ -234,15 +234,15 @@ def _vectorstore_has_collection(name: str) -> bool:
     if vector_backend.backend_name() == "qdrant":
         try:
             return vector_backend.QdrantCollection(name).exists()
-        except Exception:  # noqa: BLE001
-            return False
+        except Exception as exc:  # noqa: BLE001 - an outage is NOT non-existence
+            raise ConnectionError("cannot verify Qdrant collection existence") from exc
     try:
         import chromadb
 
         client = chromadb.PersistentClient(path=config.VECTORSTORE_DIR)
         collections = client.list_collections()
-    except Exception:  # noqa: BLE001
-        return False
+    except Exception as exc:  # noqa: BLE001 - an outage is NOT non-existence
+        raise ConnectionError("cannot verify Chroma collection existence") from exc
     for collection in collections:
         collection_name = collection if isinstance(collection, str) else getattr(collection, "name", "")
         if str(collection_name or "").strip() == name:

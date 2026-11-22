@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 import config
 from rag_core.approved_qa import load_approved_qa
 from rag_core.audit_log import set_audit_actor
+from rag_core.mail_access import is_private_mail_record
 from rag_core.retrieval import normalize_tenant_id
 from webapi.api_auth import ApiAuthContext, enforce_tenant_authorization
 from webapi.chat_support import _resolve_staging_collection
@@ -74,7 +75,7 @@ def chat_source(
     row = retrieval.chunk_row(chunk_id, staging) if staging else retrieval.chunk_row(chunk_id)
     if not row and not staging:
         row = _approved_source_row(chunk_id, tenant)
-    if not row or normalize_tenant_id(row.get("tenant_id")) != tenant:
+    if not row or normalize_tenant_id(row.get("tenant_id")) != tenant or is_private_mail_record(row):
         raise HTTPException(status_code=404, detail="source not found")
     text = str(row.get("display_text") or row.get("text") or "")
     limit = 1500
