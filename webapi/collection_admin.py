@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import config
+from rag_core.mail_access import is_private_mail_record
 from webapi import ingestion_jobs
 
 _BATCH = 256
@@ -134,11 +135,37 @@ def _promote_locked(collection: str, tenant: str, execute: bool) -> Dict[str, An
     if not all_ids:
         raise ValueError("the staging collection has no rows of this tenant")
     doc_ids: Dict[Tuple[str, str], set] = {}
+    batches = []
     for part in _chunks(all_ids, _BATCH):
-        res = source.get(ids=list(part), include=["metadatas"])
-        for chunk_id, meta in zip(res.get("ids") or [], res.get("metadatas") or []):
-            doc = str((meta or {}).get("source_doc") or (meta or {}).get("doc_id") or "").strip()
+        ids, embeddings, documents, metadatas = _rows(source, part)
+        if (len(ids) != len(part) or set(ids) != set(part) or len(set(ids)) != len(ids)
+                or len(embeddings) != len(ids) or len(documents) != len(ids) or len(metadatas) != len(ids)):
+            raise ValueError("promotion refused: incomplete staging records")
+        for chunk_id, meta in zip(ids, metadatas):
+            if not isinstance(meta, dict) or not isinstance(chunk_id, str) or not chunk_id.strip():
+                raise ValueError("promotion refused: incomplete staging metadata")
+            if is_private_mail_record(meta) or is_private_mail_record({"id": chunk_id}):
+                raise ValueError("promotion refused: private mail is quarantined")
+            fields = ("type", "source_type", "doc_type", "source_doc", "doc_id", "id", "tenant_id")
+            if any(k in meta and (not isinstance(meta[k], str) or not meta[k].strip()) for k in fields):
+                raise ValueError("promotion refused: incomplete staging metadata")
+            if (meta.get("tenant_id") != tenant or (meta.get("id") and meta["id"] != chunk_id)
+                    or not any(meta.get(k) for k in ("type", "source_type", "doc_type"))):
+                raise ValueError("promotion refused: inconsistent staging metadata")
+            doc = (meta.get("source_doc") or meta.get("doc_id") or "").strip()
+            if not doc:
+                raise ValueError("promotion refused: incomplete staging metadata")
             doc_ids.setdefault((tenant, doc), set()).add(chunk_id)
+        batches.append((ids, embeddings, documents, metadatas))
+    keyword_rows = read_keyword_documents(_keyword_path(collection), doc_ids.keys())
+    for row in keyword_rows:
+        doc = row.get("source_doc") or row.get("doc_id")
+        if (is_private_mail_record(row) or row.get("tenant_id") != tenant
+                or not any(isinstance(row.get(k), str) and row[k].strip()
+                           for k in ("type", "source_type", "doc_type"))
+                or not isinstance(row.get("id"), str) or not isinstance(doc, str)
+                or row["id"] not in doc_ids.get((tenant, doc), set())):
+            raise ValueError("promotion refused: unsafe staging keyword records")
     report: Dict[str, Any] = {
         "collection": collection, "tenant": tenant, "executed": bool(execute),
         "documents": len(doc_ids), "chunks": len(all_ids),
@@ -154,13 +181,11 @@ def _promote_locked(collection: str, tenant: str, execute: bool) -> Dict[str, An
         if not execute:
             return report
         generation = new_generation_id()
-        for part in _chunks(all_ids, _BATCH):
-            ids, embeddings, documents, metadatas = _rows(source, part)
+        for ids, embeddings, documents, metadatas in batches:
             for meta in metadatas:
                 meta["index_generation"] = generation
             target.upsert(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
         report["served_chunks_deleted"] = _delete_stale_document_rows(target, doc_ids)
-        keyword_rows = read_keyword_documents(_keyword_path(collection), doc_ids.keys())
         keyword = write_keyword_rows(_keyword_path(None), keyword_rows, generation_id=generation)
         report.update({"keyword_rows_written": keyword["written"], "index_generation": generation})
         _mark_stale(served)
