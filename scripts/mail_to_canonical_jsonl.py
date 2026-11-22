@@ -80,7 +80,6 @@ def _canonical_rows(result: Any, tenant: str, source: Path) -> tuple[list[dict[s
     from rag_core import mail_ingest as mail
 
     originals = [m for m in result.messages if not m.restored]
-    by_key = {m.key: m for m in result.messages}
     identities = {m.key: _identity(m, source) for m in originals}
     source_doc_for = {key: "mail:" + sha(tenant + "\n" + val)[:32] for key, val in identities.items()}
 

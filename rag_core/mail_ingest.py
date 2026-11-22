@@ -33,7 +33,7 @@ find_noise の設計（行頻度・正規表現・位置・署名ゾーン・前
   9. 埋め込みの重ね（--embed-model）: 小さな日本語の埋め込みモデル（cl-nagoya/ruri-v3-30m。Apache-2.0）で行を
      ベクトルにし（学習しない。接頭辞は分類用の「トピック: 」）、その上の小さな MLP（非線形）の 9 クラスの確率を、
      n-gram の LR と同じく、交差検証の予測（OOF）として LightGBM に重ねる。埋め込みは、正規化した行ごとに 1 回だけ
-     計算し、任意でファイルにキャッシュする（キーは SHA-1 で、行の文字列はファイルに書かない）
+     計算し、任意でファイルにキャッシュする（キーは SHA-256 で、行の文字列はファイルに書かない）
   10. 行の並びのモデル（--seq）: BiGRU（双方向 GRU。非線形）が、1 通の行の並び全体を見て、LightGBM の確率を補正する
      （LightGBM の対数確率に足す残差の形なので、学習が足りないときは LightGBM の判定に戻る）。前後平滑化の置き換え。
      学習は torch、推論は numpy だけで行う（重みは npz。pickle を使わない）
@@ -71,6 +71,7 @@ import argparse
 import csv
 import functools
 import hashlib
+import importlib
 import json
 import multiprocessing
 import os
@@ -2309,7 +2310,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
             if p.exists():
                 raise SystemExit(f"[中止] 出力が既にあります: {p}（上書きするなら --overwrite）")
     if args.seq:
-        import torch  # noqa: F401  （無ければ、長い計算の前に止める）
+        importlib.import_module("torch")  # 事前の依存確認
     t0 = time.time()
     if args.no_sudachi:
         set_sudachi("off")
@@ -2439,7 +2440,7 @@ def cmd_train(args: argparse.Namespace) -> None:
     if out.exists() and (not out.is_dir() or any(out.iterdir())) and not args.overwrite:
         raise SystemExit(f"[中止] 出力フォルダが空ではありません: {out}（上書きするなら --overwrite）")
     if args.seq:
-        import torch  # noqa: F401
+        importlib.import_module("torch")
     t0 = time.time()
     if args.no_sudachi:
         set_sudachi("off")

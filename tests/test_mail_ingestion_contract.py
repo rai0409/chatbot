@@ -1,7 +1,6 @@
 """Mail ingest integration: synthetic mail only; never touches a real vectorstore."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -99,8 +98,6 @@ def test_mail_jobs_dry_run_execute_and_backend_fail_closed(tmp_path, monkeypatch
 
 
 def test_backend_probe_outage_is_not_nonexistence(monkeypatch):
-    import sys
-    import types
     from webapi import ingestion_jobs as ij
     from rag_core import vector_backend
 
