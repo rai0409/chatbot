@@ -23,3 +23,9 @@ observed → classified → proposed → evaluated → approved → shadow → c
   別の更新と衝突したら（`rev` 不一致）拒否する。
 - 評価の流れ: `scripts/tenant_eval.py evaluate --proposal <id> ...` → 台帳の `seq` → `attach_evaluation(ledger_seq=)`。
 - 影子・カナリアの「根拠」には、2-7 の影子比較の結果（`shadow.compare_runs`）や監視の確認結果を書く。
+
+## 2026-11 note
+
+Source applies, document deletions and promotions are audited and recorded as operations; a tombstone created by a
+deletion is lifted only by ingesting the document again. `--tombstones ignore` on a generation switch is rejected
+in production; its non-production use still needs an approver.

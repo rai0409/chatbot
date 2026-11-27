@@ -1,0 +1,103 @@
+{
+  "name": "general_v1",
+  "benchmark_manifest": "eval/bench_data/general_v1/MANIFEST.json",
+  "eval_set": "data/bench/general_v1/eval_set.jsonl",
+  "corpus": {
+    "chunks_jsonl": "data/bench/general_v1/chunks.jsonl",
+    "documents_jsonl": null
+  },
+  "split": "dev",
+  "match_mode": "chunk",
+  "ks": [
+    1,
+    3,
+    5,
+    10,
+    20,
+    50,
+    100
+  ],
+  "ci_metrics": [
+    "ndcg@10",
+    "recall@20",
+    "mrr@10",
+    "hit@1",
+    "recall@100"
+  ],
+  "primary_metric": "ndcg@10",
+  "candidates": {
+    "dense_top": 100,
+    "lexical_top": 100,
+    "fused_top": 100
+  },
+  "chunking": {
+    "mode": "as_is"
+  },
+  "embedding": {
+    "model": "cl-nagoya/ruri-v3-310m",
+    "revision": "REPLACE_WITH_PINNED_MODEL_COMMIT_SHA",
+    "prefix": "auto",
+    "batch_size": 32
+  },
+  "dimension": "none",
+  "quantization": {
+    "type": "float32"
+  },
+  "dense_backend": {
+    "type": "exact"
+  },
+  "lexical": {
+    "tokenizer": "sudachi",
+    "split_mode": "A",
+    "k1": 1.2,
+    "b": 0.75,
+    "numeric_tokens": true
+  },
+  "fusion": [
+    {
+      "method": "dense_only"
+    },
+    {
+      "method": "lexical_only"
+    },
+    {
+      "method": "weighted_rrf",
+      "k": 60
+    }
+  ],
+  "rerank": [
+    {
+      "model": "cl-nagoya/ruri-v3-reranker-310m",
+      "revision": "REPLACE_WITH_PINNED_MODEL_COMMIT_SHA",
+      "max_length": 512,
+      "batch_size": 32,
+      "depths": [
+        30
+      ]
+    }
+  ],
+  "modes": {
+    "dense_only": {
+      "fusion": "dense_only",
+      "rerank": false
+    },
+    "lexical_only_bm25": {
+      "fusion": "lexical_only",
+      "rerank": false
+    },
+    "hybrid_weighted_rrf": {
+      "fusion": "weighted_rrf",
+      "rerank": false
+    },
+    "hybrid_weighted_rrf_cross_encoder": {
+      "fusion": "weighted_rrf",
+      "rerank": true
+    }
+  },
+  "bootstrap": {
+    "resamples": 2000,
+    "seed": 20261122
+  },
+  "query_latency_sample": 50,
+  "max_evaluations": 12
+}

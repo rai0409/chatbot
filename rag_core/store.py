@@ -39,6 +39,7 @@ def reset_vectorstore_clients() -> None:
 # Legacy collections without a fingerprint stamp already warned about, keyed by
 # collection name, so the warning is emitted once per process instead of per query.
 _UNSTAMPED_WARNED: set[str] = set()
+_MAX_SEQ_WARNED: set[str] = set()
 
 
 def _fingerprint_strict() -> bool:
@@ -140,6 +141,25 @@ def _verify_profile(meta, name: str, provider_name: Optional[str]) -> None:
                 f"embedding profile mismatch for collection '{name}': {key} collection={stamped} active={active[key]}. "
                 "Re-ingest the collection with the active embedding profile."
             )
+    # 2026-11-22: a pinned model revision is part of the profile. Two different
+    # pinned revisions give incomparable vectors; an unpinned side ("latest")
+    # cannot be proven different, so it is only reported (fingerprint_status).
+    stamped_revision = str(meta.get("embed_revision") or "").strip()
+    active_revision = embedding_provider.profile_value(active, "embed_revision")
+    if stamped_revision and active_revision and stamped_revision != active_revision:
+        raise RuntimeError(
+            f"embedding model revision mismatch for collection '{name}': collection={stamped_revision} "
+            f"active={active_revision}. Re-ingest the collection or set LOCAL_EMBED_MODEL_REVISION to match."
+        )
+    stamped_max_seq = str(meta.get("embed_max_seq_length") or "").strip()
+    active_max_seq = embedding_provider.profile_value(active, "embed_max_seq_length")
+    if stamped_max_seq and stamped_max_seq != active_max_seq and name not in _MAX_SEQ_WARNED:
+        _MAX_SEQ_WARNED.add(name)
+        logger.warning(
+            "embedding max_seq_length differs for collection '%s': collection=%s active=%s "
+            "(long texts were truncated differently; re-ingest to make them comparable)",
+            name, stamped_max_seq, active_max_seq,
+        )
     if _fingerprint_strict():
         missing = [
             key

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 import config
 from rag_core.question_normalization import exact_match_key
@@ -18,6 +19,8 @@ _ENABLED_VALUES = {"1", "true", "yes", "on"}
 _DEFAULT_TENANT_ID = "default"
 _NEAR_MATCH_MIN_CHARS = 18
 _NEAR_MATCH_MIN_LENGTH_RATIO = 0.8
+
+logger = logging.getLogger(__name__)
 
 _CACHE_LOCK = threading.Lock()
 _CACHE: dict[str, Any] = {"key": None, "data": {}}
@@ -78,6 +81,52 @@ def load_exact_index(path: str | Path) -> dict[str, list[dict]]:
     return data
 
 
+# --- live validation ---------------------------------------------------------------------------------------------
+# The exact index is an offline file. A record rejected, edited (edits return it to draft) or deleted in the
+# approved-QA store after the index was built must not be served from it, and neither must an answer whose cited
+# document is gone. Callers pass `live_validator(hit) -> bool` (the chat router checks the hit's qa_id against the
+# live approved-only index of the tenant); source documents are checked with the hook below.
+_SOURCE_DOC_EXISTS: Optional[Callable[[str, str], Optional[bool]]] = None
+
+
+def set_source_doc_exists_check(check: Optional[Callable[[str, str], Optional[bool]]]) -> None:
+    """Register `check(tenant_id, source_doc) -> True / False / None (unknown)`; None unregisters it.
+
+    False drops a hit that cites that document; None (or no check registered) keeps it. TODO: register a check
+    backed by the served corpus once retrieval exposes its document set per tenant (no cheap accessor yet)."""
+    global _SOURCE_DOC_EXISTS
+    _SOURCE_DOC_EXISTS = check
+
+
+def _hit_citation_docs(hit: dict) -> list[str]:
+    meta = hit.get("metadata") or {}
+    docs = []
+    citations = meta.get("approved_citations") or hit.get("approved_citations")
+    if isinstance(citations, list):
+        for citation in citations:
+            if isinstance(citation, dict) and str(citation.get("source_doc") or "").strip():
+                docs.append(str(citation["source_doc"]).strip())
+    if not docs and str(meta.get("source_doc") or "").strip():
+        docs.append(str(meta["source_doc"]).strip())
+    return docs
+
+
+def cited_sources_exist(tenant_id: str, source_docs: list[str]) -> bool:
+    """False when the registered check reports one of the documents as missing or raises; True otherwise
+    (also when no check is registered)."""
+    check = _SOURCE_DOC_EXISTS
+    if check is None:
+        return True
+    for doc in source_docs:
+        try:
+            if check(tenant_id, doc) is False:
+                return False
+        except Exception:  # noqa: BLE001 - fail closed: a hit whose source cannot be verified is not served
+            logger.warning("approved QA: source existence check failed for a cited document", exc_info=True)
+            return False
+    return True
+
+
 def clear_exact_index_cache() -> None:
     with _CACHE_LOCK:
         _CACHE["key"] = None
@@ -133,9 +182,37 @@ def lookup_approved_qa_exact(
     limit: int = 5,
     index_path: str | Path | None = None,
     allow_near_match: bool | None = None,
+    live_validator: Callable[[dict], bool] | None = None,
 ) -> list[dict]:
     # tenant_id は必須。インデックスの項目は tenant_id（無ければ default）が
     # 一致するものだけを返す。他テナントの承認回答は返さない。
+    # live_validator: 現在も承認済みの項目だけを通す判定（未指定なら判定しない）。
+    # 却下・編集・削除された項目と、出典文書が消えた項目は返さない。
+    hits = _lookup_approved_qa_exact(query, tenant_id=tenant_id, limit=limit, index_path=index_path, allow_near_match=allow_near_match)
+    tenant = _normalize_tenant(tenant_id)
+    out = []
+    for hit in hits:
+        if live_validator is not None:
+            try:
+                if not live_validator(hit):
+                    continue
+            except Exception:  # noqa: BLE001 - fail closed: an unverifiable hit is not served
+                logger.warning("approved QA: live validation failed; the hit is not served", exc_info=True)
+                continue
+        if not cited_sources_exist(tenant, _hit_citation_docs(hit)):
+            continue
+        out.append(hit)
+    return out
+
+
+def _lookup_approved_qa_exact(
+    query: str,
+    *,
+    tenant_id: str,
+    limit: int = 5,
+    index_path: str | Path | None = None,
+    allow_near_match: bool | None = None,
+) -> list[dict]:
     key = normalize_exact_question(query)
     if not key:
         return []

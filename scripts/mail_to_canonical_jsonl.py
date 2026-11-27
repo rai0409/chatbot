@@ -61,10 +61,15 @@ def _address_text(address: Any) -> str:
 
 
 def _identity(message: Any, source: Path) -> str:
-    """Stable within a fixed source naming scheme. Message-ID preferred."""
+    """Message-ID preferred; otherwise a content-based origin (EML bytes hash,
+    table bytes hash + row, or a long table id column). Never a file name alone:
+    two different uploads named e.g. mails.csv must not collide."""
     mid = str(message.meta.message_id or "").strip().strip("<>")
     if mid:
         return "message-id:" + mid
+    origin_id = str(getattr(message, "origin_id", "") or "")
+    if origin_id:
+        return "source:" + origin_id
     origin = str(message.source)
     if source.is_dir():
         try:
@@ -76,10 +81,46 @@ def _identity(message: Any, source: Path) -> str:
     return "source:" + origin.replace("\\", "/")
 
 
-def _canonical_rows(result: Any, tenant: str, source: Path) -> tuple[list[dict[str, Any]], dict[str, int]]:
+_SKETCH_DEFAULT = 512
+
+
+def _sketch(text: str, hasher: Any, cap: int) -> tuple[list[str], int]:
+    """Bottom-k sketch of the hashed 4-grams of a text (no plaintext)."""
+    from rag_core import mail_ingest as mail
+
+    hashed = sorted({hasher(x) for x in mail._shingles(text)})
+    return hashed[:cap], len(hashed)
+
+
+def _scrub(text: str, secrets: set[str]) -> str:
+    parts = [re.escape(x) for x in sorted(secrets, key=len, reverse=True) if x]
+    if not parts or not text:
+        return text
+    return re.sub("|".join(parts), "[非表示]", text, flags=re.IGNORECASE)
+
+
+def _canonical_rows(result: Any, tenant: str, source: Path, *, hasher: Any = None,
+                    keep_latest_only: bool = False, sketch_cap: int = _SKETCH_DEFAULT,
+                    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Rows carry private plaintext fields `_acl_addresses` / `_sender_address`
+    (and `_mail_state` when a hasher is given). They MUST be replaced by digests
+    with rag_core.mail_to_canonical.finalize_acl_rows() before a row is written."""
     from rag_core import mail_ingest as mail
 
     originals = [m for m in result.messages if not m.restored]
+    by_key = {m.key: m for m in result.messages}
+
+    def holder(key: str) -> str:
+        m = by_key.get(key)
+        while m is not None and m.restored and m.from_key in by_key:
+            m = by_key[m.from_key]
+        return m.key if m is not None else ""
+
+    bcc_by_key: dict[str, set[str]] = {}
+    for m in result.messages:
+        owner = holder(m.key) if m.restored else m.key
+        bcc_by_key.setdefault(owner, set()).update(
+            v for a in m.meta.bcc for v in (a.addr.strip().lower(),) if v)
     identities = {m.key: _identity(m, source) for m in originals}
     source_doc_for = {key: "mail:" + sha(tenant + "\n" + val)[:32] for key, val in identities.items()}
 
@@ -106,7 +147,20 @@ def _canonical_rows(result: Any, tenant: str, source: Path) -> tuple[list[dict[s
             quoted_parts.append("引用の追加情報（原本メール内）:\n" + str(m.quoted_extra))
         if quotes_by_key.get(m.key):
             quoted_parts.append("未照合の引用（原本メール内。原著者は未検証）:\n" + "\n".join(quotes_by_key[m.key]))
+        inline = [t for _status, t in getattr(m, "quoted_inline", []) if str(t).strip()]
+        if inline:
+            quoted_parts.append("照合済みの引用（原本メール内に保持）:\n" + "\n".join(inline))
+        quotes_dropped = bool(keep_latest_only and getattr(m, "superseded_by", "")
+                              and getattr(m, "quotes_redundant", False) and own_body and quoted_parts)
+        if quotes_dropped:
+            # The superseding (later) message holds this quoted text; the new
+            # content of this message is never dropped.
+            quoted_parts = []
         body = "\n\n".join([v for v in [own_body, *quoted_parts] if v]).strip()
+        visible = {a for a in getattr(m, "participants", frozenset())}
+        visible |= {a.addr.strip().lower() for a in [m.meta.sender, *m.meta.to, *m.meta.cc] if a.addr}
+        bcc_only = bcc_by_key.get(m.key, set()) - visible
+        body = _scrub(body, bcc_only)
         if not body:
             skipped_empty += 1
             continue
@@ -121,7 +175,7 @@ def _canonical_rows(result: Any, tenant: str, source: Path) -> tuple[list[dict[s
             continue
         seen_docs[doc] = digest
 
-        subject = str(m.meta.subject or "").strip()
+        subject = _scrub(str(m.meta.subject or "").strip(), bcc_only)
         sender = _address_text(m.meta.sender)
         date = str(m.meta.date_iso or m.meta.date_raw or "").strip()
         parent = source_doc_for.get(m.parent, "")
@@ -171,9 +225,36 @@ def _canonical_rows(result: Any, tenant: str, source: Path) -> tuple[list[dict[s
             "subject": subject,
             "restored": False,
             "content_sha256": digest,
+            "date_iso": str(m.meta.date_iso or ""),
+            "superseded_by": "",
+            "quote_refs": [],
+            "quoted_text_dropped": quotes_dropped,
+            "_key": m.key,
+            "_superseded_by_key": str(getattr(m, "superseded_by", "") or ""),
+            "_quote_ref_keys": list(getattr(m, "quote_refs", []) or []),
+            "_acl_addresses": sorted(a for a in getattr(m, "participants", frozenset()) if a),
+            "_sender_address": str(m.meta.sender.addr or "").strip().lower(),
         })
+        if hasher is not None:
+            sh, n = _sketch(own_body, hasher, sketch_cap)
+            rows[-1]["_mail_state"] = {
+                "sh": sh, "n": n,
+                "participants_h": sorted({hasher("addr:" + a) for a in rows[-1]["_acl_addresses"]}),
+            }
     if not rows:
         raise ValueError("no_indexable_original_messages")
+    # Batch keys -> stable source documents (a restored quote lives in the row
+    # of the message that quoted it; a prior import is referenced by its doc).
+    for row in rows:
+        sup = row.pop("_superseded_by_key")
+        row["superseded_by"] = source_doc_for.get(sup, "") if sup else ""
+        refs: list[str] = []
+        for ref in row.pop("_quote_ref_keys"):
+            doc = ref[len("prior:"):] if ref.startswith("prior:") else source_doc_for.get(holder(ref), "")
+            if doc and doc != row["source_doc"] and doc not in refs:
+                refs.append(doc)
+        row["quote_refs"] = refs
+        row.pop("_key", None)
     # A missing parent in current batch is preserved as an unresolved link,
     # never silently converted to a proven relationship.
     return rows, {
@@ -208,6 +289,21 @@ def _write_private_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             os.unlink(temp_name)
 
 
+def _convert_isolated(source: Path, tenant: str, overrides: dict[str, str], sheet: str):
+    """Parse in the isolated mail_batch worker (default for every entry point)."""
+    from rag_core.document_converters import isolated
+    from rag_core.mail_to_canonical import mail_convert_memory_bytes, mail_convert_timeout
+
+    payload = {"paths": [str(source)], "tenant_id": tenant, "mailbox_owner": "", "prior": [], "salt_hex": "",
+               "keep_latest_only": False, "overrides": overrides, "sheet": sheet,
+               "identity_root": str(source), "validate": False}
+    try:
+        return isolated.run_task("mail_batch", payload, timeout=mail_convert_timeout() or 300.0,
+                                 memory_limit=mail_convert_memory_bytes())
+    except isolated.ConversionFailed as exc:
+        raise ValueError(exc.error_type if exc.error_type != "ValueError" else str(exc)) from None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Mail to canonical JSONL (no vectorstore mutation)")
     parser.add_argument("--input", required=True, help="EML directory, .eml, email table .csv/.tsv/.xlsx/.xlsm")
@@ -217,6 +313,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--col", action="append", default=[], help="Column override, e.g. text=本文")
     parser.add_argument("--max-files", type=int, default=500)
     parser.add_argument("--max-total-mb", type=int, default=200)
+    parser.add_argument("--in-process", action="store_true",
+                        help="debugging only: parse in this process instead of the isolated worker "
+                             "(time/memory limited, secrets removed from its environment)")
     args = parser.parse_args(argv)
     try:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", args.tenant):
@@ -240,23 +339,31 @@ def main(argv: list[str] | None = None) -> int:
             if key not in mail.COLUMN_ALIASES or not value.strip():
                 raise ValueError("invalid_column_override")
             overrides[key] = value
-        raws = mail.iter_inputs(source, overrides, sheet=args.sheet, failures=failures)
-        if failures:
-            raise ValueError("read_failure")
-        result = mail.process(
-            raws,
-            model=None,
-            profile=mail.PROFILES["evidence"],
-            threshold=0.9,
-            smooth=0.0,
-            sentence_split=False,
-            match_threshold=0.6,
-            jobs=1,
-            failures=failures,
-        )
-        if result.failures:
-            raise ValueError("mail_processing_failure")
-        rows, counts = _canonical_rows(result, args.tenant, source)
+        if args.in_process:
+            raws = mail.iter_inputs(source, overrides, sheet=args.sheet, failures=failures)
+            if failures:
+                raise ValueError("read_failure")
+            result = mail.process(
+                raws,
+                model=None,
+                profile=mail.PROFILES["evidence"],
+                threshold=0.9,
+                smooth=0.0,
+                sentence_split=False,
+                match_threshold=0.6,
+                jobs=1,
+                failures=failures,
+            )
+            if result.failures:
+                raise ValueError("mail_processing_failure")
+            rows, counts = _canonical_rows(result, args.tenant, source)
+        else:
+            rows, counts = _convert_isolated(source, args.tenant, overrides, args.sheet)
+        from rag_core import mail_access
+        from rag_core.mail_to_canonical import finalize_acl_rows
+
+        key, key_id = mail_access.acl_key()
+        rows = finalize_acl_rows(rows, key, key_id)
         _write_private_jsonl(output, rows)
         reread = [json.loads(x) for x in output.read_text(encoding="utf-8").splitlines() if x.strip()]
         if len(reread) != len(rows) or [r["id"] for r in reread] != [r["id"] for r in rows]:

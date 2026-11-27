@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from eval.bench.report import load_per_query, load_summaries
-from eval.bench.stats import holm, mcnemar_from_hits, non_inferior, paired_bootstrap_diff, sign_flip_test
+from eval.bench.stats import resamples_arg, holm, mcnemar_from_hits, non_inferior, paired_bootstrap_diff, sign_flip_test
 
 OVERALL = "(all)"
 _MIN_SLICE_QUERIES = 10
@@ -260,7 +260,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--candidate-config", required=True)
     parser.add_argument("--metric", default="recall@10")
     parser.add_argument("--margin", type=float, default=0.02)
-    parser.add_argument("--resamples", type=int, default=2000)
+    parser.add_argument("--resamples", type=resamples_arg, default=2000)
     parser.add_argument("--min-slice-queries", type=int, default=_MIN_SLICE_QUERIES)
     parser.add_argument("--markdown", action="store_true")
     parser.add_argument("--out", default=None)

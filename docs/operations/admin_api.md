@@ -44,3 +44,32 @@
 
 評価（ゴールデン QA での測定、条件の比較）は、従来どおりコマンドラインで実行し、結果が評価台帳に記録されます。API は、その結果の閲覧と、提案への紐付けを受け持ちます。
 コンソールで作ったゴールデン QA は、`scripts/tenant_eval.py evaluate --golden-source console`（または `both`）で評価に使えます（`tenant_evaluation.md`）。
+
+## 2026-11 additions
+
+- `POST /admin/ingestion/mail`: `mailbox_owner` is passed to the job; a write (`execute=true`) is always queued (202).
+- `POST /admin/ingestion/mail/delete` (same admin auth and tenant scope): body `tenant_id`, `collection`, `source_doc`
+  or `message_id`, `execute`. Dry run returns the plan; execute deletes the chunks (vector and keyword), records a
+  tombstone, clears the tenant's cached answers and returns `chunks_deleted`, `dependent_source_docs` (mails that quote
+  it) and `superseded_source_docs`.
+- Document deletion and promotion are recorded as operations (running, done, failed; a crash leaves `interrupted`).
+- Conversation history follows deletions: `POST /chat/threads` accepts `source_docs` (the `source_doc` of each
+  citation of the chat response; metadata only). Deleting a document calls `conversation_store.redact_source_doc`
+  (`CONVERSATION_REDACT_ON_DELETE`, default on): the answer text of every turn citing it becomes
+  「（削除された文書に基づく回答のため非表示）」 and the turn is marked `redacted`; redacted turns are never used as
+  context for follow-up questions. Turns stored before `source_docs` existed cannot be matched: set
+  `CONVERSATION_RETENTION_DAYS` (default 0 = keep) to drop turns older than N days. Clients that save turns must send
+  `source_docs`.
+
+### Pilot / production settings to decide (no default changes)
+
+- `AUDIT_QUESTION_MODE=hash` is recommended for production and pilot customers. `mask` mode does not mask Japanese
+  personal names or addresses, so questions may still carry personal data into the audit log.
+- `CHAT_USE_TENANT_PROFILE=true` makes the shipped product profiles (`configs/product_profiles/*.json`, all of which
+  set `allow_llm_calls=false`) answer extractively, without the LLM. Check each tenant's profile and `chat_policy`
+  before enabling the flag.
+- Mail ingestion `execute=true` returns `202` with a job; poll `GET /admin/ingestion/jobs/{job_id}` until `status` is
+  `ok`, `issues_found` or `failed` (a dry run still answers directly). Clients and the console must poll, not read the 202 body
+  as the result.
+- Mail state is node-local (see `mail_ingestion.md`): with `INGESTION_REGISTRY_BACKEND=postgres` run mail ingestion
+  on one node only; a startup warning is logged otherwise.

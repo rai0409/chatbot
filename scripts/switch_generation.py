@@ -18,8 +18,8 @@ verified generation; the previous one is kept and can be restored with rollback.
   python scripts/switch_generation.py register --collection NAME [--derived-from OTHER [--reembedded]]
                                                 [--keyword-index PATH] [--source-jsonl PATH] [--chunking-schema TEXT] [--force]
   python scripts/switch_generation.py verify --collection NAME
-  python scripts/switch_generation.py activate --collection NAME
-  python scripts/switch_generation.py rollback
+  python scripts/switch_generation.py activate --collection NAME [--tombstones purge|refuse|ignore]
+  python scripts/switch_generation.py rollback [--tombstones purge|refuse|ignore]
   python scripts/switch_generation.py clear
 Exit code 1 when a check fails or the request is refused.
 """
@@ -46,7 +46,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     for name in ("verify", "activate"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--collection", required=True)
-    sub.add_parser("rollback")
+        if name == "activate":
+            cmd.add_argument("--tombstones", choices=index_generation.TOMBSTONE_MODES, default="purge",
+                             help="deleted documents in the generation: purge them (default), refuse, or ignore")
+    rb = sub.add_parser("rollback")
+    rb.add_argument("--tombstones", choices=index_generation.TOMBSTONE_MODES, default="purge")
     sub.add_parser("clear")
     args = parser.parse_args(argv)
 
@@ -69,9 +73,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif args.command == "verify":
             result = index_generation.verify_generation(args.collection)
         elif args.command == "activate":
-            result = index_generation.activate(args.collection)
+            result = index_generation.activate(args.collection, tombstones=args.tombstones)
         elif args.command == "rollback":
-            result = index_generation.rollback()
+            result = index_generation.rollback(tombstones=args.tombstones)
         else:
             result = index_generation.clear()
     except index_generation.GenerationError as exc:

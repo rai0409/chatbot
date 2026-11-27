@@ -172,14 +172,22 @@ def rerank_chunks(
     question: str,
     chunks: Sequence[RetrievedChunk],
     intent: str | None = None,
+    expansions: Sequence[str] = (),
 ) -> List[RetrievedChunk]:
+    """expansions: synonyms of the question's terms (query preprocessing). A
+    chunk that uses a synonym instead of the question's own word gets the same
+    lexical credit (2026-11-22; they used to count for nothing here)."""
     items = list(chunks)
     if len(items) <= 1 or not _heuristic_enabled():
         return items
 
     q = _build_query_signals(question)
     lexical_query_terms = _unique_preserve(q.alnum_terms + q.katakana_terms + q.kanji_terms)
-    if not (q.quoted_code_terms or q.quoted_text_terms or lexical_query_terms or q.short_lookup_terms):
+    expansion_terms = [
+        t for t in _unique_preserve([_normalize(str(e)) for e in expansions or ()])
+        if len(t) >= 2 and t not in lexical_query_terms and t not in _excluded_terms()
+    ]
+    if not (q.quoted_code_terms or q.quoted_text_terms or lexical_query_terms or q.short_lookup_terms or expansion_terms):
         return items
 
     scored = []
@@ -219,8 +227,10 @@ def rerank_chunks(
             1 for t in q.id_terms + q.quoted_code_terms if t and t in all_code_tokens
         )
 
+        expansion_hits = sum(1 for t in expansion_terms if t in norm_text)
+
         has_strong = quoted_hits > 0 or id_hits > 0
-        lexical_hits = alnum_hits + katakana_hits + kanji_hits
+        lexical_hits = alnum_hits + katakana_hits + kanji_hits + expansion_hits
 
         boost = 0
         if quoted_hits:
@@ -232,6 +242,8 @@ def rerank_chunks(
         if katakana_hits:
             boost += 2
         if kanji_hits:
+            boost += 2
+        if expansion_hits and not (katakana_hits or kanji_hits or alnum_hits):
             boost += 2
         if short_lookup_hits:
             boost += 1

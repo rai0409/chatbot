@@ -41,3 +41,38 @@ python scripts/alias_candidates.py mine --tenant ID --questions ファイル [--
 ## 口語一致との区別
 
 `coverage`はcanonicalおよび人が承認したformal aliasの一致を測定する。未登録の口語表現がruntimeで一致しても正式alias扱いにはならず、候補の登録にはoperatorの承認が必要。semantic similarityのみで承認回答を自動返却しない。
+
+## 承認状態の反映と追加照合（2026-11）
+
+- **完全一致インデックス（`APPROVED_QA_EXACT_INDEX_PATH`）の結果は、現在の承認済み QA で再確認する。**
+  ヒットの `qa_id` が承認済み QA のファイル（`APPROVED_QA_PATH`）で今も `status: approved` であり、回答本文が
+  同じときだけ返す。却下・下書きへの戻し（編集）・削除の直後から、インデックスを作り直す前でも返らない。
+  承認済み QA が無効（`APPROVED_QA_ENABLED=false`）なら完全一致も使わない（従来どおり）。
+- 出典文書の存在確認は `approved_qa_exact_lookup.set_source_doc_exists_check(check)` で差し込む
+  （`check(tenant_id, source_doc)` が `False` を返した文書を引用する回答は返さない）。既定では未登録
+  （確認しない）。配信中コーパスの文書一覧をテナント別に安く引ける関数ができたら登録する（TODO）。
+- **類似候補（approved_similar）** は `status: approved` のペア行だけを検索する
+  （`APPROVED_SIMILAR_REQUIRE_STATUS`、既定 `true`）。`scripts/approved_qa_to_pair_chunks.py` は各行に
+  `status: "approved"` を書く。**移行**: この欄がない既存のペア行は見つからなくなる（安全側）。
+  変換し直して取り込み直すまでの間だけ `APPROVED_SIMILAR_REQUIRE_STATUS=false` にできる。
+  承認済み QA が有効なら、候補は現在承認済みの `qa_id` に限る（取り込み後に却下・削除された行は出ない）。
+- 承認済み QA の保存・状態変更・削除・取り込みは、そのテナントの回答キャッシュを消す
+  （`answer_cache.clear_tenant`）。
+- **会話の続き**: 会話文脈で補完された質問（例「申請方法は？」→「有給 申請方法は？」）は、補完後の
+  質問で承認済み QA を引く。補完前の短い言い方で別の承認済み回答に当たることはない。
+- テナントの `answer_policy.allow_exact_answer=false`（製品プロファイル、またはテナント対応表の
+  `chat_policy`）なら、/chat・/chat/stream・/search で承認済み回答（完全一致・別名・口語一致）を使わない。
+
+## 表記ゆれ（長音）
+
+完全一致キー（`exact_match_key`）と回答キャッシュの質問キーは同じ長音の規則を使う。語末の「ー」は除き、
+カタカナが続く「ー」は残す。`サーバ`/`サーバー`、`ユーザ`/`ユーザー` は同じキー、`ビール`/`ビル` は別のキー。
+複合語の途中（`サーバーメンテ`/`サーバメンテ`）は語中の長音（`パスワード`）と区別できないため別のキーのまま。
+必要なら別名（`approved_aliases`）として登録する。回答キャッシュのキーはこの変更で一度だけ変わる（再計算されるだけ）。
+
+## 口語の定義質問
+
+`configs/query_rules/colloquial_ja.json` の `strip_suffix` に書き換え規則
+（`{"type": "rewrite", "pattern": ..., "replace": ...}`）を置き、「VPNってなに」を「VPNとは」にしてから
+「って」の除去規則が動く。書き換え規則に対応していない読み込み側は、この要素を読み飛ばす。
+「〜」と半角の「~」（全角「～」の NFKC）はどちらも伸ばし記号として扱う。

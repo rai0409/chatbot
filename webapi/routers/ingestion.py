@@ -166,7 +166,11 @@ class MailIngestionRequest(BaseModel):
     expected_tenant: str
     collection: str
     execute: bool = False
+    # Ignored when execute=true: a mail write is always queued (202; poll the job). A dry run answers directly.
     async_job: bool = False
+    # The mailbox the files were exported from (its address as the owner-side participant): used to tell the
+    # owner's own messages from other participants when the access labels are derived.
+    mailbox_owner: Optional[str] = Field(None, max_length=254)
 
 
 @router.post("/admin/ingestion/mail")
@@ -204,15 +208,73 @@ def ingestion_mail(
         mail_ingestion_jobs._validate(inputs, tenant, req.collection)
         if req.execute:
             _audit_admin(scope, "mail_ingestion_execute", tenant_id=tenant,
-                         collection=req.collection, files=len(inputs), async_job=bool(req.async_job))
-        if req.async_job:
+                         collection=req.collection, files=len(inputs), async_job=True)
+        owner = req.mailbox_owner or None
+        if req.execute or req.async_job:  # a write is always asynchronous: poll /admin/ingestion/jobs/{job_id}
             queued = mail_ingestion_jobs.submit_mail_job(
-                inputs, expected_tenant=tenant, collection=req.collection, execute=req.execute)
+                inputs, expected_tenant=tenant, collection=req.collection, execute=req.execute,
+                mailbox_owner=owner)
             return JSONResponse(status_code=202, content=queued)
         return mail_ingestion_jobs.run_mail_job(
-            inputs, expected_tenant=tenant, collection=req.collection, execute=req.execute)
+            inputs, expected_tenant=tenant, collection=req.collection, execute=False, mailbox_owner=owner)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+class MailDeleteRequest(BaseModel):
+    tenant_id: str = Field(..., max_length=128)
+    collection: str = Field(..., max_length=128)
+    source_doc: str = Field("", max_length=300)
+    message_id: str = Field("", max_length=998)
+    execute: bool = False
+
+
+@router.post("/admin/ingestion/mail/delete")
+def ingestion_mail_delete(req: MailDeleteRequest, request: Request = None,
+                          _admin_auth: None = Depends(require_admin_auth)):
+    """Delete one ingested mail (by source_doc or Message-ID) from a staging collection.
+
+    A dry run (default) returns the plan. execute=true deletes its chunks (vector + keyword, by source_doc),
+    records a tombstone, clears the tenant's cached answers, then makes the mail state forget the message.
+    The report lists the mails that quote it (dependent_source_docs) and those it superseded; re-ingest them."""
+    from webapi import collection_admin
+
+    scope = _request_scope(request)
+    tenant = str(req.tenant_id or "").strip()
+    require_scope(scope, tenant)
+    if not (req.source_doc.strip() or req.message_id.strip()):
+        raise HTTPException(status_code=400, detail="source_doc or message_id is required")
+    if ingestion_jobs.is_production_collection(req.collection):
+        raise HTTPException(status_code=400, detail="refusing production/default collection")
+    try:
+        plan = mail_ingestion_jobs.delete_mail(tenant, req.collection, source_doc=req.source_doc,
+                                               message_id=req.message_id, commit=False)
+        report: Dict[str, Any] = {
+            "executed": bool(req.execute), "tenant": tenant, "collection": req.collection,
+            "source_doc": plan["source_doc"], "found": plan["found"], "ids": len(plan["ids"]),
+            "dependent_source_docs": plan["dependent_source_docs"],
+            "superseded_source_docs": plan["superseded_source_docs"],
+        }
+        if req.execute:
+            deleted = collection_admin.delete_documents(req.collection, tenant=tenant,
+                                                        source_docs=[plan["source_doc"]], execute=True,
+                                                        reason="mail_delete")
+            committed = mail_ingestion_jobs.delete_mail(tenant, req.collection, source_doc=plan["source_doc"],
+                                                        commit=True)
+            report.update({"chunks_deleted": deleted["chunks"],
+                           "keyword_rows_removed": deleted.get("keyword_rows_removed", 0),
+                           "tombstoned": deleted.get("tombstoned", 0), "committed": committed["committed"]})
+            _audit_admin(scope, "mail_deleted", tenant_id=tenant, collection=req.collection,
+                         source_doc=plan["source_doc"], chunks=deleted["chunks"])
+        return report
+    except collection_admin.ConversationRedactionError as exc:
+        raise HTTPException(status_code=500, detail="conversation redaction failed") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -483,6 +545,8 @@ def ingestion_delete_documents(req: DocumentDeleteRequest, request: Request = No
     try:
         report = collection_admin.delete_documents(req.collection, tenant=tenant, source_docs=req.source_docs,
                                                    execute=req.execute)
+    except collection_admin.ConversationRedactionError as exc:
+        raise HTTPException(status_code=500, detail="conversation redaction failed") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except LookupError as exc:
@@ -505,6 +569,8 @@ def ingestion_promote(req: PromoteRequest, request: Request = None, _admin_auth:
     require_scope(scope, tenant)
     try:
         report = collection_admin.promote_staging(req.collection, tenant=tenant, execute=req.execute)
+    except collection_admin.ConversationRedactionError as exc:
+        raise HTTPException(status_code=500, detail="conversation redaction failed") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except LookupError as exc:

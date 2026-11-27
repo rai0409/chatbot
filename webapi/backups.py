@@ -61,8 +61,56 @@ def archives() -> List[Dict[str, Any]]:
     return sorted(rows, key=lambda r: r["modified"], reverse=True)
 
 
+def _lock_held_elsewhere() -> bool:
+    """True while a backup.sh run (cron, another worker, the console) holds <BACKUP_DIR>/.backup.lock."""
+    import fcntl
+
+    path = backup_dir() / ".backup.lock"
+    if not path.exists():
+        return False
+    try:
+        with open(path, "a+") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    except OSError:
+        return False
+    return False
+
+
 def running() -> Optional[str]:
-    return _RUNNING["id"]
+    if _RUNNING["id"] is not None:
+        return _RUNNING["id"]
+    return "external" if _lock_held_elsewhere() else None
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, "") or default)
+    except ValueError:
+        return default
+
+
+def status_summary(now: Optional[float] = None) -> Dict[str, Any]:
+    """For monitoring: the last result (backup_status.json written by backup.sh) and the newest archive's age.
+
+    {"last_status", "newest_age_hours", "max_age_hours", "too_old", "failed"}; no paths."""
+    import json
+
+    now = time.time() if now is None else now
+    rows = archives()
+    newest = rows[0]["modified"] if rows else None
+    last = None
+    try:
+        last = json.loads((backup_dir() / "backup_status.json").read_text(encoding="utf-8")).get("status")
+    except (OSError, ValueError, AttributeError):
+        last = None
+    max_age = _float_env("BACKUP_MAX_AGE_HOURS", 26)
+    age = round((now - newest) / 3600, 2) if newest else None
+    return {"last_status": last, "newest_age_hours": age, "max_age_hours": max_age,
+            "too_old": age is None or age > max_age, "failed": last == "error", "archives": len(rows)}
 
 
 def get(job_id: str) -> Optional[Dict[str, Any]]:
@@ -75,7 +123,7 @@ def start(*, actor: str) -> Dict[str, Any]:
     if not available():
         raise FileNotFoundError("the backup script or bash is not available on this server")
     with _LOCK:
-        if _RUNNING["id"] is not None:
+        if _RUNNING["id"] is not None or _lock_held_elsewhere():
             raise RuntimeError("busy")
         job_id = uuid.uuid4().hex[:12]
         job = {"job_id": job_id, "status": "running", "started_at": time.time(), "finished_at": None, "actor": actor, "output": "", "exit_code": None}
@@ -87,6 +135,23 @@ def start(*, actor: str) -> Dict[str, Any]:
     return dict(job)
 
 
+_PASSED_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "SOURCES_DIR", "ACTIVE_GENERATION_FILE",
+               "MAINTENANCE_LOCK_FILE", "BACKUP_LOCK_WAIT_SECONDS", "BACKUP_SKIP_OUTSIDE", "BACKUP_KEEP")
+
+
+def _script_env() -> Dict[str, str]:
+    # Only the settings the script needs (paths and locks), never keys or tokens.
+    env = {k: v for k, v in os.environ.items() if k in _PASSED_ENV}
+    if "MAINTENANCE_LOCK_FILE" not in env:
+        try:
+            from webapi import ingestion_jobs
+
+            env["MAINTENANCE_LOCK_FILE"] = str(ingestion_jobs.maintenance_lock_path())
+        except (ImportError, OSError, ValueError):  # the script's default applies
+            pass
+    return env
+
+
 def _run(job_id: str) -> None:
     job = _JOBS[job_id]
     try:
@@ -95,7 +160,7 @@ def _run(job_id: str) -> None:
         command = ["bash", str(script_path()), "--source-dir", str(config.BASE_DIR), "--output-dir", str(out)]
         done = subprocess.run(  # nosec B603 - fixed argv, no shell, no user input
             command, cwd=str(config.BASE_DIR), capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
-            env={k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")},
+            env=_script_env(),
         )
         text = _mask(((done.stdout or "") + (done.stderr or "")))
         job.update(exit_code=done.returncode, status="ok" if done.returncode == 0 else "error", output=text[-MAX_OUTPUT_CHARS:])

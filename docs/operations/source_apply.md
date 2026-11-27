@@ -47,3 +47,11 @@ python scripts/sources.py run-due [--apply]             # 時間が来たソー�
 ```
 
 cron からは `run-due --apply` を呼ぶ。反映の結果は台帳（`changes`）と、収集の状態（`/admin/ingestion`）で確認する。
+
+## 2026-11 hardening
+
+- A file moved between folders (`a/x.pdf` to `b/x.pdf`) keeps its document: the deletion of the old path does not
+  delete the rows that were just ingested under the same name.
+- A document deleted at the source is recorded as a tombstone (tenant, document, time) before its rows are removed, so
+  a later promotion or generation switch never brings it back. Cached answers of the tenant are cleared.
+- An apply failure is recorded in the ledger; a failing ledger write does not hide the original error.

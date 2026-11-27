@@ -26,3 +26,25 @@ the pointer, and `activate` refuses.
 
 All workers pick up a switch on their next request (the pointer file is re-read when it changes).
 A corrupt pointer file makes queries fail instead of serving another index.
+
+## 2026-11 hardening
+
+- Activation and rollback take the served lock, refuse a collection that is still `writing`, and re-apply the
+  tombstones (documents deleted at the source or by an administrator): `--tombstones purge` (default) removes them from
+  the generation's vectors and keyword rows first, `refuse` fails when any is present, `ignore` skips the check only outside production.
+  Both `purge` and a successful `refuse` establish conversation redaction markers for all tombstoned documents, even if no index rows remain. A redaction failure prevents the generation switch.
+- The pointer file is written with a unique temp file, an flock'd read-modify-write and fsync of the file and its
+  directory. `verify` refuses any private mail row (vector or keyword).
+- The served manifest is marked stale before the first write of a promotion or deletion; `verify` clears it.
+
+## Legacy rows without a type
+
+Promotion refuses rows that have none of `type` / `source_type` / `doc_type`. Preferred fix: stamp them once with a
+report, instead of `PROMOTION_ALLOW_UNTYPED=true` (which waives the check on every promotion):
+
+    python scripts/stamp_legacy_types.py --collection <name>            # dry run, writes a report
+    python scripts/stamp_legacy_types.py --collection <name> --execute  # vector rows + keyword corpus
+
+The type is inferred from the parser, the `source_doc` extension or the chunk id (pdf / docx / xlsx / csv / pptx /
+faq), else `document`. Mail-looking rows are reported and never changed. A production collection is refused unless
+`--allow-production`. The report (ids and document names only, default `reports/`) must not be committed.

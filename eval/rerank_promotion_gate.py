@@ -1,10 +1,45 @@
+"""Promotion gate for a reranker (or any retrieval change) from paired eval.bench comparisons.
+
+Default (statistical) gate: consumes the output of `python -m eval.bench.compare_runs` (two JSON files, or the run
+directories, in which case compare_runs is called here with --require-same-conditions) and promotes only when ALL hold:
+
+  conditions   both runs measured on the same eval set, corpus, split, match mode, embedding profile (compare_runs)
+  min_cases    at least 100 paired answerable queries (configurable, never below 100 without --allow-small)
+  ndcg         the paired cluster-bootstrap 95% CI of delta nDCG@10 (candidate - baseline) has a lower bound > 0
+  hit@1        exact McNemar on hit@1 does not show the candidate significantly worse (alpha 0.05)
+  latency      candidate total p95 (summary.jsonl of the candidate run) within --max-p95-ms, and the increase over
+               the baseline within --max-p95-increase-ms when given
+
+  python -m eval.bench.compare_runs --baseline-run runs/bench/<A> --baseline-config <id> \
+      --candidate-run runs/bench/<B> --candidate-config <id> --metric ndcg@10 --require-same-conditions --out ndcg.json
+  python -m eval.bench.compare_runs ... --metric hit@1 --require-same-conditions --out hit1.json
+  python -m eval.rerank_promotion_gate --compare-ndcg ndcg.json --compare-hit1 hit1.json --max-p95-ms 1500 \
+      --output artifacts/eval/rerank_promotion_decision.json
+  # or let the gate call compare_runs itself:
+  python -m eval.rerank_promotion_gate --baseline-run runs/bench/<A> --baseline-config <id> \
+      --candidate-run runs/bench/<B> --candidate-config <id> --max-p95-ms 1500
+
+Several candidates against ONE baseline (repeat --candidate-config): testing each at alpha 0.05 inflates the false
+promotion rate, so --primary <config_id> is required (the one pre-registered comparison, gated as above); the other
+candidates are reported as "exploratory" (never promotable, safe_to_promote=false) with their numbers for information.
+--resamples must be >= 1000.
+
+Exit 0 only for "promote_candidate". A single run directory holding both configs (one eval.bench grid) is fine:
+pass the same directory as baseline and candidate run.
+
+Legacy (--legacy-feedback-preview): the old feedback_preview approved_similar gate on top1/top3/top5 counts
+(evaluate_rerank_promotion_gate). Its defaults (1 case, 1 allowed regression) are not a statistical test; it is
+kept only for the offline feedback_preview profile workflow and must not be used to promote a reranker.
+"""
 from __future__ import annotations
 
 import argparse
 import json
+import sys
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 DEFAULT_COMPARISON = Path("artifacts/eval/feedback_preview_comparison.json")
@@ -237,10 +272,11 @@ def evaluate_rerank_promotion_gate(
     return report
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def legacy_main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Gate feedback_preview approved_similar rerank promotion using offline comparison metrics."
+        description="(legacy) Gate feedback_preview approved_similar rerank promotion using offline comparison metrics."
     )
+    parser.add_argument("--legacy-feedback-preview", action="store_true")
     parser.add_argument("--comparison", default=str(DEFAULT_COMPARISON))
     parser.add_argument("--profile", default=str(DEFAULT_PROFILE))
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
@@ -280,6 +316,223 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.strict and not report["safe_to_promote"]:
         return 1
     return 0
+
+
+# --- statistical gate (default) -------------------------------------------------------------------------------
+
+OVERALL = "(all)"
+STAT_MIN_CASES = 100
+
+
+@dataclass(frozen=True)
+class GatePolicy:
+    min_cases: int = STAT_MIN_CASES  # paired answerable queries; below 100 a CI on nDCG@10 is too wide to promote on
+    alpha: float = 0.05  # McNemar level; the nDCG CI level comes from compare_runs (its --alpha, default 0.05)
+    max_candidate_p95_ms: Optional[float] = None  # absolute budget of the candidate's total p95
+    max_p95_increase_ms: Optional[float] = None  # allowed increase of total p95 over the baseline
+    require_same_conditions: bool = True
+
+
+def _check(name: str, status: str, **detail: Any) -> Dict[str, Any]:
+    return {"name": name, "status": status, **detail}
+
+
+def _overall(comparison: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    return ((comparison or {}).get("results") or {}).get(OVERALL) or {}
+
+
+def _total_p95(run_dir: Optional[str], config_id: Optional[str]) -> Optional[float]:
+    if not run_dir or not config_id:
+        return None
+    try:
+        from eval.bench.report import load_summaries
+
+        for row in load_summaries(run_dir):
+            if row.get("config_id") == config_id:
+                value = row.get("total_p95_ms")
+                return float(value) if value is not None else None
+    except (FileNotFoundError, ValueError):
+        return None
+    return None
+
+
+def evaluate_statistical_gate(
+    ndcg_comparison: Optional[Dict[str, Any]],
+    hit1_comparison: Optional[Dict[str, Any]],
+    policy: GatePolicy = GatePolicy(),
+    *,
+    baseline_p95_ms: Optional[float] = None,
+    candidate_p95_ms: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Decision from two compare_runs reports (metric ndcg@10 and metric hit@1). Latencies default to the runs' summaries."""
+    checks: List[Dict[str, Any]] = []
+    if not ndcg_comparison or not hit1_comparison:
+        checks.append(_check("inputs", "insufficient", missing=[n for n, c in (("ndcg@10", ndcg_comparison), ("hit@1", hit1_comparison)) if not c]))
+    else:
+        metrics = (ndcg_comparison.get("metric"), hit1_comparison.get("metric"))
+        ok = metrics == ("ndcg@10", "hit@1")
+        same_pair = (ndcg_comparison.get("baseline"), ndcg_comparison.get("candidate")) == (
+            hit1_comparison.get("baseline"), hit1_comparison.get("candidate"))
+        checks.append(_check("inputs", "pass" if ok and same_pair else "fail", metrics=list(metrics), same_runs=same_pair))
+
+    conditions = (ndcg_comparison or {}).get("conditions") or {}
+    if policy.require_same_conditions:
+        if not conditions:
+            checks.append(_check("same_conditions", "insufficient", reason="comparison has no conditions block"))
+        else:
+            checks.append(_check("same_conditions", "pass" if conditions.get("comparable") else "fail",
+                                 differences=conditions.get("differences"), unknown=conditions.get("unknown")))
+
+    n = int((ndcg_comparison or {}).get("paired_queries") or 0)
+    checks.append(_check("min_cases", "pass" if n >= policy.min_cases else "insufficient", n=n, needed=policy.min_cases))
+
+    ndcg = _overall(ndcg_comparison)
+    if ndcg and n >= policy.min_cases:
+        low = ndcg.get("low")
+        checks.append(_check("ndcg_at_10_improves", "pass" if low is not None and low > 0 else "fail",
+                             diff=ndcg.get("diff"), low=low, high=ndcg.get("high"),
+                             baseline=ndcg.get("baseline_mean"), candidate=ndcg.get("candidate_mean")))
+    else:
+        checks.append(_check("ndcg_at_10_improves", "insufficient"))
+
+    hit = _overall(hit1_comparison)
+    mcnemar = hit.get("mcnemar") or {}
+    complete = all(mcnemar.get(k) is not None for k in ("baseline_only", "candidate_only", "p_value"))
+    if mcnemar and complete and n >= policy.min_cases:  # a missing p_value must never read as "not significant"
+        worse = float(mcnemar["baseline_only"]) > float(mcnemar["candidate_only"])
+        p_value = float(mcnemar["p_value"])
+        status = "fail" if worse and p_value < policy.alpha else "pass"
+        checks.append(_check("hit_at_1_not_worse", status, baseline_only=mcnemar.get("baseline_only"),
+                             candidate_only=mcnemar.get("candidate_only"), p_value=p_value, alpha=policy.alpha))
+    else:
+        checks.append(_check("hit_at_1_not_worse", "insufficient"))
+
+    if candidate_p95_ms is None and ndcg_comparison:
+        candidate_p95_ms = _total_p95(ndcg_comparison.get("candidate", {}).get("run"), ndcg_comparison.get("candidate", {}).get("config_id"))
+    if baseline_p95_ms is None and ndcg_comparison:
+        baseline_p95_ms = _total_p95(ndcg_comparison.get("baseline", {}).get("run"), ndcg_comparison.get("baseline", {}).get("config_id"))
+    if policy.max_candidate_p95_ms is None and policy.max_p95_increase_ms is None:
+        checks.append(_check("latency_p95", "fail", reason="no latency budget configured (--max-p95-ms / --max-p95-increase-ms)"))
+    elif candidate_p95_ms is None or (policy.max_p95_increase_ms is not None and baseline_p95_ms is None):
+        checks.append(_check("latency_p95", "insufficient", baseline_p95_ms=baseline_p95_ms, candidate_p95_ms=candidate_p95_ms))
+    else:
+        within = policy.max_candidate_p95_ms is None or candidate_p95_ms <= policy.max_candidate_p95_ms
+        increase = None if baseline_p95_ms is None else candidate_p95_ms - baseline_p95_ms
+        if policy.max_p95_increase_ms is not None and increase is not None and increase > policy.max_p95_increase_ms:
+            within = False
+        checks.append(_check("latency_p95", "pass" if within else "fail", baseline_p95_ms=baseline_p95_ms,
+                             candidate_p95_ms=candidate_p95_ms, increase_ms=increase,
+                             max_candidate_p95_ms=policy.max_candidate_p95_ms, max_p95_increase_ms=policy.max_p95_increase_ms))
+
+    statuses = {c["status"] for c in checks}
+    decision = "blocked" if "fail" in statuses else "insufficient_data" if "insufficient" in statuses else "promote_candidate"
+    verdict = (ndcg_comparison or {}).get("verdict") or {}
+    return {
+        "schema": "rerank-promotion-gate-v2",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "decision": decision,
+        "safe_to_promote": decision == "promote_candidate",
+        "reasons": [c["name"] for c in checks if c["status"] != "pass"] or ["promotion_gate_passed"],
+        "checks": checks,
+        "policy": asdict(policy),
+        "baseline": (ndcg_comparison or {}).get("baseline"),
+        "candidate": (ndcg_comparison or {}).get("candidate"),
+        "info": {"non_inferior_all_slices_ndcg": verdict.get("non_inferior_all_slices"),
+                 "slices_skipped_small": (ndcg_comparison or {}).get("slices_skipped_small")},
+    }
+
+
+def _resamples_arg(value: str) -> int:
+    from eval.bench.stats import resamples_arg
+
+    return resamples_arg(value)
+
+
+def mark_exploratory(report: Dict[str, Any]) -> Dict[str, Any]:
+    """A non-primary comparison: its numbers are kept, but it can never promote (multiple-comparison control)."""
+    out = dict(report)
+    out["raw_decision"] = out.get("decision")
+    out["decision"] = "exploratory"
+    out["safe_to_promote"] = False
+    out["reasons"] = ["exploratory_not_primary"]
+    return out
+
+
+def _load_optional(path: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not path:
+        return None
+    payload, error = _safe_load_json(path)
+    if error:
+        raise SystemExit(f"cannot read {path}: {error}")
+    return payload
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--legacy-feedback-preview" in argv:
+        return legacy_main(argv)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--legacy-feedback-preview", action="store_true", help="the old feedback_preview count gate")
+    parser.add_argument("--compare-ndcg", help="compare_runs JSON with --metric ndcg@10")
+    parser.add_argument("--compare-hit1", help="compare_runs JSON with --metric hit@1")
+    parser.add_argument("--baseline-run")
+    parser.add_argument("--baseline-config")
+    parser.add_argument("--candidate-run")
+    parser.add_argument("--candidate-config", action="append", default=None,
+                        help="repeat for several candidates against the one baseline (then --primary is required)")
+    parser.add_argument("--primary", default=None,
+                        help="the pre-registered candidate config id when several are compared; the others are exploratory")
+    parser.add_argument("--resamples", type=_resamples_arg, default=2000, help="bootstrap resamples, at least 1000")
+    parser.add_argument("--min-cases", type=int, default=STAT_MIN_CASES)
+    parser.add_argument("--allow-small", action="store_true", help="tests only: accept --min-cases below 100")
+    parser.add_argument("--alpha", type=float, default=0.05)
+    parser.add_argument("--max-p95-ms", type=float, default=None)
+    parser.add_argument("--max-p95-increase-ms", type=float, default=None)
+    parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    args = parser.parse_args(argv)
+    if not 0 < args.alpha < 1:
+        parser.error("--alpha must be in (0, 1)")
+    if args.min_cases < STAT_MIN_CASES and not args.allow_small:
+        parser.error(f"--min-cases below {STAT_MIN_CASES} needs --allow-small")
+    policy = GatePolicy(min_cases=args.min_cases, alpha=args.alpha, max_candidate_p95_ms=args.max_p95_ms,
+                        max_p95_increase_ms=args.max_p95_increase_ms)
+    exploratory: Dict[str, Any] = {}
+    if args.baseline_run:
+        from eval.bench.compare_runs import compare_runs
+
+        candidates = list(args.candidate_config or [])
+        if not (args.baseline_config and args.candidate_run and candidates):
+            parser.error("--baseline-run/--baseline-config/--candidate-run/--candidate-config go together")
+        primary = args.primary
+        if len(candidates) > 1:
+            if not primary:
+                parser.error("several --candidate-config need --primary (the pre-registered comparison); the others are exploratory")
+        elif primary is None:
+            primary = candidates[0]
+        if primary not in candidates:
+            parser.error("--primary must be one of the --candidate-config values")
+        report = None
+        for candidate in candidates:
+            pair = (args.baseline_run, args.baseline_config, args.candidate_run, candidate)
+            ndcg = compare_runs(*pair, metric="ndcg@10", resamples=args.resamples, require_same_conditions=True)
+            hit1 = compare_runs(*pair, metric="hit@1", resamples=args.resamples, require_same_conditions=True)
+            result = evaluate_statistical_gate(ndcg, hit1, policy)
+            if candidate == primary:
+                report = result
+            else:
+                exploratory[candidate] = mark_exploratory(result)
+        if exploratory:
+            report["primary"] = primary
+            report["exploratory"] = exploratory
+            report["multiple_comparison_note"] = "one primary comparison is gated; the others are exploratory and cannot promote"
+    else:
+        ndcg, hit1 = _load_optional(args.compare_ndcg), _load_optional(args.compare_hit1)
+        report = evaluate_statistical_gate(ndcg, hit1, policy)
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    print(json.dumps({"output_path": str(output), "decision": report["decision"], "reasons": report["reasons"]}, ensure_ascii=False, indent=2))
+    return 0 if report["safe_to_promote"] else 1
 
 
 if __name__ == "__main__":

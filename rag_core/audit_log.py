@@ -13,7 +13,12 @@ so deleting or editing a line breaks the chain
 
 Question text: AUDIT_QUESTION_MODE = plain | mask (digits and e-mail
 addresses masked) | hash (sha256 only) | drop. Unset: mask in production
-(APP_ENV=production), plain otherwise (stage 14). Free text written by users
+(APP_ENV=production), plain otherwise (stage 14; documented in .env.example and
+docs/operations; set hash explicitly for the stricter policy).
+Retention: AUDIT_RETENTION_DAYS (default 0 = keep everything) deletes rotated
+files older than that, oldest first; the hash of the last record deleted is
+kept in <name>.anchor.json so the chain still verifies from the first file
+left (verify_chain starts from the anchor). Free text written by users
 (search queries, feedback comments, review notes, rewritten questions) is
 treated like the question.
 Write failures are counted (write_failure_count) for metrics and alerts.
@@ -166,7 +171,7 @@ def _tail_hash(path: Path) -> str:
                 continue
             if value:
                 return str(value)
-    return _GENESIS
+    return _read_anchor(path)
 
 
 def _max_bytes() -> int:
@@ -176,10 +181,76 @@ def _max_bytes() -> int:
         return _DEFAULT_MAX_BYTES
 
 
+def _retention_days() -> int:
+    try:
+        return max(0, int(str(os.getenv("AUDIT_RETENTION_DAYS", "")).strip() or 0))
+    except ValueError:
+        return 0
+
+
+def _anchor_path(path: Path) -> Path:
+    return path.with_name(f"{path.stem}.anchor.json")
+
+
+def _read_anchor(path: Path) -> str:
+    try:
+        value = json.loads(_anchor_path(path).read_text(encoding="utf-8")).get("prev_hash")
+        return str(value) if value else _GENESIS
+    except (OSError, ValueError, AttributeError):
+        return _GENESIS
+
+
+def _last_hash_of(file: Path) -> Optional[str]:
+    last = None
+    with file.open("r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                try:
+                    last = json.loads(line).get("hash") or last
+                except ValueError:
+                    continue
+    return last
+
+
+def prune_retention(path: Path, *, now: Optional[float] = None) -> int:
+    """Delete rotated files older than AUDIT_RETENTION_DAYS (oldest first, stopping at the first file that is
+    young enough), after storing the hash of the last deleted record as the chain anchor. Returns files deleted.
+    The caller holds the file lock."""
+    days = _retention_days()
+    if days <= 0:
+        return 0
+    import time
+
+    cutoff = (now if now is not None else time.time()) - days * 86400
+    rotated = sorted(path.parent.glob(f"{path.stem}.*{path.suffix}"))
+    doomed = []
+    for file in rotated:
+        if file.stat().st_mtime >= cutoff:
+            break
+        doomed.append(file)
+    if not doomed:
+        return 0
+    anchor = _last_hash_of(doomed[-1]) or _read_anchor(path)
+    target = _anchor_path(path)
+    tmp = target.with_name(target.name + f".{os.getpid()}.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump({"prev_hash": anchor, "pruned_through": doomed[-1].name, "pruned_files": len(doomed)}, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, target)  # the anchor first: a crash before the deletes leaves a chain that still verifies
+    for file in doomed:
+        file.unlink()
+    return len(doomed)
+
+
 def _rotate_if_needed(path: Path) -> None:
     if path.exists() and path.stat().st_size >= _max_bytes():
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         path.rename(path.with_name(f"{path.stem}.{stamp}{path.suffix}"))
+        try:
+            prune_retention(path)
+        except Exception:  # noqa: BLE001 - retention must never stop an audit write
+            _record_failure()
 
 
 class _FileLock:
@@ -285,7 +356,7 @@ def verify_chain(path: str | Path) -> Dict[str, Any]:
     """Recompute the chain of one file family (rotated files, then current)."""
     current = Path(path)
     files = sorted(current.parent.glob(f"{current.stem}.*{current.suffix}")) + ([current] if current.exists() else [])
-    prev = _GENESIS
+    prev = _read_anchor(current)
     checked = 0
     for file in files:
         with file.open("r", encoding="utf-8") as f:

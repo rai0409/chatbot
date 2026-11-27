@@ -1,0 +1,59 @@
+{
+  "schema": "general-benchmark-manifest-v1",
+  "name": "general_v1_smoke_v2",
+  "version": "2.0.0",
+  "status": "pinned",
+  "description": "New synthetic smoke inputs (not a recovery of v1). Pipeline verification only; not a retrieval measurement. FAQ examples are fictional; canonical cases are selected from the committed synthetic multiformat corpus.",
+  "seed": 20261122,
+  "split": "dev",
+  "match_mode": "chunk",
+  "sources": {
+    "jagov_like": {
+      "kind": "jagovfaqs",
+      "license": "repository (synthetic)",
+      "input": "eval/bench_data/general_v1/smoke_v2/jagov_like.jsonl",
+      "input_sha256": {
+        "jagov_like.jsonl": "92ccef6e4f6a5788cea14a95f327368f81289cc572fa4e774d8c57e41d39393e"
+      },
+      "question_chars": [
+        5,
+        120
+      ],
+      "answer_chars": [
+        10,
+        600
+      ],
+      "n_docs": 12,
+      "n_queries": 10
+    },
+    "synthetic_multiformat": {
+      "kind": "canonical_cases",
+      "license": "repository (synthetic)",
+      "cases": "eval/bench_data/general_v1/smoke_v2/multiformat_cases.jsonl",
+      "chunks": "eval/bench_data/general_v1/smoke_v2/multiformat_chunks.jsonl",
+      "input_sha256": {
+        "multiformat_cases.jsonl": "224817e19d595caa7faa0554c4f46aacfdccfa2ddd373bb2fa20c40ae093e6f5",
+        "multiformat_chunks.jsonl": "23b32ebfd2e8a5dc781d099506e63ebabbcba51f6c3919195965a0b7eb5ce2a5"
+      }
+    }
+  },
+  "outputs": {
+    "dir": "data/bench/general_v1_smoke_v2"
+  },
+  "expected_sha256": {
+    "eval_set": "75bedad73815860dcda40d9cc79feb5700a411729d73e4b03cad95f346944c7d",
+    "chunks": "8f9adebf0b48b243a65b263903d107a7db16960eef00ff7c741320c2b6abe359"
+  },
+  "composition_built": {
+    "jagov_like": {
+      "queries": 10,
+      "answerable": 10,
+      "chunks": 12
+    },
+    "synthetic_multiformat": {
+      "queries": 6,
+      "answerable": 5,
+      "chunks": 5
+    }
+  }
+}

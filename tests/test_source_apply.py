@@ -307,8 +307,9 @@ def test_the_default_executors_use_the_ingestion_job_and_the_collection_admin(en
         seen["job"] = (inputs, expected_tenant, collection, execute)
         return {"status": "ok", "job_id": "j1", "warnings": [], "errors": []}
 
-    def delete(collection, *, tenant, source_docs, execute):
+    def delete(collection, *, tenant, source_docs, execute, reason="admin_delete"):
         seen["delete"] = (collection, tenant, source_docs, execute)
+        assert reason == "source_delete"
         raise LookupError("no such collection")
 
     monkeypatch.setattr(ingestion_jobs, "run_raw_document_job", job)

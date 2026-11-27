@@ -26,7 +26,9 @@ from typing import Dict, List, Sequence
 
 SCHEMA_VERSION = "guard_distance_calibration.v1"
 
-DEFAULT_SWEEP_START = 0.50
+# 2026-11-22: from 0.05 (was 0.50). ruri-v3 puts answerable questions well
+# below 0.5, so a sweep starting at 0.5 could not find its thresholds.
+DEFAULT_SWEEP_START = 0.05
 DEFAULT_SWEEP_STOP = 1.00
 DEFAULT_SWEEP_STEP = 0.05
 

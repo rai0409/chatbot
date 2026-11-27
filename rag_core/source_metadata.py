@@ -27,7 +27,11 @@ _STRING_FIELDS = {
     "doc_type",
     "chunk_type",
     "title",
+    "authority",
 }
+# Optional document-priority fields (see rag_core/canonical_metadata.normalize_priority_metadata).
+_INT_FIELDS = {"doc_priority"}
+_DATE_FIELDS = {"effective_from"}
 
 _SOURCE_METADATA_FIELDS = (
     "source_id",
@@ -48,6 +52,9 @@ _SOURCE_METADATA_FIELDS = (
     "doc_version",
     "doc_type",
     "chunk_type",
+    "doc_priority",
+    "authority",
+    "effective_from",
 )
 
 _CITATION_FIELDS = (
@@ -66,6 +73,8 @@ _CITATION_FIELDS = (
     "doc_version",
     "doc_type",
     "chunk_type",
+    "authority",
+    "effective_from",
 )
 
 
@@ -113,6 +122,9 @@ def build_source_metadata_from_manifest_record(record: dict) -> dict:
         "doc_version": record.get("doc_version"),
         "doc_type": record.get("doc_type"),
         "chunk_type": record.get("chunk_type"),
+        "doc_priority": record.get("doc_priority"),
+        "authority": record.get("authority"),
+        "effective_from": record.get("effective_from"),
     }
     return _normalize_known_fields(raw, _SOURCE_METADATA_FIELDS)
 
@@ -152,6 +164,21 @@ def _normalize_known_fields(raw: dict, allowed_fields: Iterable[str]) -> dict:
         value = raw.get(key)
         if key == "source_pages":
             out[key] = normalize_source_pages(value)
+            continue
+        if key in _INT_FIELDS:
+            if isinstance(value, bool) or value is None or value == "":
+                continue
+            try:
+                out[key] = max(-1000, min(1000, int(str(value).strip())))
+            except (TypeError, ValueError):
+                pass
+            continue
+        if key in _DATE_FIELDS:
+            from rag_core.canonical_metadata import _iso_date
+
+            text = _iso_date(value)
+            if text:
+                out[key] = text
             continue
         if key in _STRING_FIELDS:
             if isinstance(value, (dict, list, tuple, set)):

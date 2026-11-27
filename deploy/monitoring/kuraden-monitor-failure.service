@@ -1,0 +1,12 @@
+# Notifies when the monitoring runner unit itself failed (2026-11 ops hardening).
+# Started by OnFailure= of kuraden-monitor.service. Install next to it.
+[Unit]
+Description=KuraDen monitoring runner failed: send a notification
+
+[Service]
+Type=oneshot
+User=kuraden
+WorkingDirectory=/opt/kuraden
+Environment=KURADEN_MONITOR_DIR=/var/lib/kuraden/monitoring
+EnvironmentFile=-/etc/kuraden/monitor.env
+ExecStart=/opt/kuraden/.venv/bin/python scripts/alert_notify.py --failure monitor_unit_failed --state-dir ${KURADEN_MONITOR_DIR}

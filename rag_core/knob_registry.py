@@ -53,10 +53,15 @@ REGISTRY: Tuple[Knob, ...] = (
     Knob("CROSS_ENCODER_TOP_N", "int", "rerank", lo=1, hi=100, description="candidates the cross-encoder reorders"),
     Knob("MAX_PARENT_EXPANDED_CHUNKS", "int", "context", lo=1, hi=50, description="parent chunks in the context"),
     Knob("MAX_PARENT_CONTEXT_CHARS", "int", "context", lo=200, hi=20000, description="characters of parent context"),
-    Knob("RAG_HARD_MAX_DIST", "float", "guard", "high", 0.3, 1.5, "distance above which the bot does not answer"),
-    Knob("RAG_SOFT_DIST_OTHER", "float", "guard", "high", 0.3, 1.5, "soft distance guard, general questions"),
-    Knob("RAG_SOFT_DIST_RESET", "float", "guard", "high", 0.3, 1.5, "soft distance guard, reset questions"),
-    Knob("RAG_SOFT_DIST_CHANGE", "float", "guard", "high", 0.3, 1.5, "soft distance guard, change questions"),
+    # 2026-11-22: floors lowered from 0.3 to 0.05: ruri-v3 places answerable
+    # questions at much smaller cosine distances than MiniLM did.
+    Knob("RAG_HARD_MAX_DIST", "float", "guard", "high", 0.05, 1.5, "distance above which the bot does not answer"),
+    Knob("RAG_SOFT_DIST_OTHER", "float", "guard", "high", 0.05, 1.5, "soft distance guard, general questions"),
+    Knob("RAG_SOFT_DIST_RESET", "float", "guard", "high", 0.05, 1.5, "soft distance guard, reset questions"),
+    Knob("RAG_SOFT_DIST_CHANGE", "float", "guard", "high", 0.05, 1.5, "soft distance guard, change questions"),
+    Knob("RAG_SOFT_DIST_PROCEDURE", "float", "guard", "high", 0.05, 1.5, "soft distance guard, procedure questions"),
+    Knob("RAG_HARD_MAX_DIST_PROCEDURE_DELTA", "float", "guard", "high", 0.0, 0.3,
+         "hard guard allowance for procedure questions with page evidence"),
 )
 
 _BY_NAME: Dict[str, Knob] = {knob.name: knob for knob in REGISTRY}
@@ -108,7 +113,12 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 def read(name: str) -> Any:
-    """The value in force: the config attribute, or for an env knob without one the environment (as a bool)."""
+    """The value in force: the config attribute, or for an env knob without one the environment (as a bool).
+
+    QUERY_PREPROCESS_ENABLED goes through config.query_preprocess_enabled(), the
+    same function qa.py uses (default ON when nothing is set)."""
+    if name == "QUERY_PREPROCESS_ENABLED" and hasattr(config, "query_preprocess_enabled"):
+        return bool(config.query_preprocess_enabled())
     if hasattr(config, name):
         return getattr(config, name)
     if name in ENV_KNOBS:

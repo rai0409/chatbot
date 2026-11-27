@@ -65,7 +65,22 @@ def parse_case(row: Any) -> Tuple[Optional[Case], List[str]]:
         errors.append("'priority' must be an integer")
         priority = 0
     case["priority"] = priority
+    # Retrieval and abstention labels (optional). Kept so tenant_eval can compute nDCG/Recall and the
+    # should_abstain confusion matrix from profile cases, not only from raw dict cases.
+    for field in ("gold_chunk_ids", "gold_doc_ids"):
+        if field in row:
+            case[field] = _strings(row.get(field), field, errors)
+    if "should_abstain" in row:
+        value = row.get("should_abstain")
+        if not isinstance(value, bool):
+            errors.append("'should_abstain' must be true or false")
+        else:
+            case["should_abstain"] = value
     if not errors and not (
+        case.get("gold_chunk_ids")
+        or case.get("gold_doc_ids")
+        or "should_abstain" in case
+    ) and not (
         case["expected_all"]
         or case["expected_any"]
         or case["forbidden_any"]

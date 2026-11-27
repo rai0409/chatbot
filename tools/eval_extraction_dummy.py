@@ -7,7 +7,9 @@ Purpose : measure, against known ground truth, how well PDFs, CSVs and Excel fil
           HEAD and the working tree) to see what a change did.
 Usage   : .venv/bin/python tools/eval_extraction_dummy.py [--root PATH] [--docs data/external/dummy_docs] [--json OUT]
             --root  the code tree to test (default: this repository); e.g. a `git archive HEAD` copy for "before"
-Input   : data/external/dummy_docs/ (create it with tools/make_dummy_docs.py) and truth.json inside it
+Input   : data/external/dummy_docs/ (create it with tools/make_dummy_docs.py) and truth.json inside it;
+          also tests/fixtures/conversion/ (docx/pptx/xlsx/csv with *.truth.json, committed) scored with
+          eval/conversion against eval/conversion/thresholds_v1.json (metrics: python -m eval.conversion run)
 Output  : a table of checks on stdout (PASS/FAIL per check) and an optional JSON file inside the repository.
 Cleanup : data/external/ is git-ignored; move it to 即削除/ when no longer needed.
 Synthetic data only.
@@ -128,6 +130,22 @@ def main() -> int:
     check(g, "percent", "10.0%" in blob or "10%" in blob)
     check(g, "hidden sheet not extracted", "非公開" not in blob)
     check(g, "merged title is not the header of the table", "経費明細:" not in blob)
+
+    # ---- docx / pptx / xlsx edge cases / csv without BOM: the conversion-accuracy fixtures -----------------------------
+    # Scored by eval/conversion (CER, table F1, reading order, ...); here only pass/fail against thresholds_v1.json.
+    fixtures = HERE / "tests" / "fixtures" / "conversion"
+    if fixtures.is_dir():
+        from eval.conversion import harness
+
+        conv = harness.run(fixtures, code_root=root)
+        thresholds = json.loads((HERE / "eval" / "conversion" / "thresholds_v1.json").read_text(encoding="utf-8"))
+        violations = harness.check_thresholds(conv, thresholds)
+        for doc in conv["documents"]:
+            mine = [v for v in violations if v.startswith(doc["document"] + ":")]
+            check(f"conversion:{doc['document']}", "meets eval/conversion/thresholds_v1.json", not mine, "; ".join(mine)[:160])
+        names = tuple(doc["document"] + ":" for doc in conv["documents"])
+        stray = [v for v in violations if not v.startswith(names)]  # misconfigured thresholds must not pass silently
+        check("conversion:thresholds", "thresholds_v1.json is consistent with the fixtures", not stray, "; ".join(stray)[:160])
 
     width = max(len(r[1]) for r in results) + 2
     current = None

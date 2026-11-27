@@ -5,3 +5,5 @@
 qdrant-client>=1.10
 # JQaRA candidate-limited evaluator reads the published dev Parquet directly.
 pyarrow>=14
+# Lint guard (CI: scripts/lint_changed_broad_except.py); not part of the runtime image.
+ruff==0.8.6

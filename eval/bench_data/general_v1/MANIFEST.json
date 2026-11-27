@@ -1,0 +1,80 @@
+{
+  "schema": "general-benchmark-manifest-v1",
+  "name": "general_v1",
+  "version": "1.0.0",
+  "status": "unpinned",
+  "description": "Frozen general Japanese retrieval benchmark: JQaRA dev subset (open corpus of the sampled queries' candidate passages) + JaGovFaqs-22k subset + committed synthetic multi-format cases. Large public data is not committed; build it deterministically with scripts/run_general_benchmark.py build, then pin once with --pin and commit this file.",
+  "seed": 20261122,
+  "split": "dev",
+  "match_mode": "chunk",
+  "sources": {
+    "jqara_dev": {
+      "kind": "jqara",
+      "license": "CC-BY-SA-4.0 (JQaRA, hotchpotch/JQaRA; passages from Japanese Wikipedia). Do not commit the data; reports may quote aggregate numbers.",
+      "fetch": {
+        "dataset": "hotchpotch/JQaRA",
+        "split": "dev",
+        "revision": "REPLACE_WITH_PINNED_DATASET_COMMIT_SHA",
+        "command": "huggingface-cli download hotchpotch/JQaRA --repo-type dataset --revision <revision> --local-dir data/external/jqara  # then point 'input' at the dev parquet file of that revision"
+      },
+      "input": "data/external/jqara/dev.parquet",
+      "input_sha256": null,
+      "expected_candidates": 50,
+      "n_queries": 500
+    },
+    "jagovfaqs": {
+      "kind": "jagovfaqs",
+      "license": "CC-BY-4.0 (JaGovFaqs-22k, matsuxr/JaGovFaqs-22k; Japanese government FAQ pages). Do not commit the data.",
+      "fetch": {
+        "dataset": "matsuxr/JaGovFaqs-22k",
+        "revision": "REPLACE_WITH_PINNED_DATASET_COMMIT_SHA",
+        "command": "huggingface-cli download matsuxr/JaGovFaqs-22k --repo-type dataset --revision <revision> --local-dir data/external/jagovfaqs  # data.jsonl with Question / Answer"
+      },
+      "input": "data/external/jagovfaqs/data.jsonl",
+      "input_sha256": null,
+      "question_chars": [
+        10,
+        120
+      ],
+      "answer_chars": [
+        20,
+        600
+      ],
+      "n_docs": 5000,
+      "n_queries": 500
+    },
+    "synthetic_multiformat": {
+      "kind": "canonical_cases",
+      "license": "repository (synthetic; fixed example values only)",
+      "cases": "eval/cases/multiformat_cases.jsonl",
+      "chunks": "eval/cases/multiformat_chunks.jsonl",
+      "input_sha256": {
+        "multiformat_cases.jsonl": "83dfb8c35d83891c2991a4bc7504df2ddd9a3a7c7bd80a5e8ab0e53fe3217ca3",
+        "multiformat_chunks.jsonl": "c71037510848418235581ae617f2608d26c249e682f4109a183f887f0aaa2f18"
+      }
+    }
+  },
+  "outputs": {
+    "dir": "data/bench/general_v1"
+  },
+  "expected_sha256": {
+    "eval_set": null,
+    "chunks": null
+  },
+  "composition_expected": {
+    "jqara_dev": {
+      "queries": 500,
+      "note": "answerable only (q_ids without a label-1 passage are dropped before sampling)"
+    },
+    "jagovfaqs": {
+      "queries": 500,
+      "chunks": 5000
+    },
+    "synthetic_multiformat": {
+      "queries": 12,
+      "answerable": 10,
+      "chunks": 10
+    }
+  },
+  "pinning": "On the measurement PC: fetch both datasets at the pinned revisions, run `python scripts/run_general_benchmark.py build --pin`, review the printed sha256/composition, commit MANIFEST.json. After that, build/run refuse any input or output whose sha256 differs."
+}

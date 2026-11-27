@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -87,7 +88,49 @@ def normalize_source_metadata(metadata: Mapping[str, Any] | None) -> dict[str, A
         out["parser"] = _clean_string(out.get("source_parser")) or _clean_string(out.get("type")) or "unknown"
     if not _clean_string(out.get("tenant_id")):
         out["tenant_id"] = "default"
+    return normalize_priority_metadata(out)
+
+
+# Optional document-priority fields (2026-11). Absent fields stay absent; readers use the defaults:
+#   doc_priority   int, default 0   - larger = preferred when documents disagree (profile_engine.apply_doc_priority)
+#   authority      str              - who issued the document (e.g. "人事部", "規程", "通達"); matched by doc_boost_rules
+#   effective_from ISO date         - the date the document takes effect (YYYY-MM-DD); invalid values are dropped
+DOC_PRIORITY_DEFAULT = 0
+_DOC_PRIORITY_LIMIT = 1000
+
+
+def normalize_priority_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    out = dict(metadata or {})
+    if "doc_priority" in out:
+        priority = _coerce_int(out.get("doc_priority"))
+        if priority is None:
+            out.pop("doc_priority", None)
+        else:
+            out["doc_priority"] = max(-_DOC_PRIORITY_LIMIT, min(_DOC_PRIORITY_LIMIT, int(priority)))
+    if "authority" in out:
+        authority = _clean_string(out.get("authority"))[:200]
+        if authority:
+            out["authority"] = authority
+        else:
+            out.pop("authority", None)
+    if "effective_from" in out:
+        effective = _iso_date(out.get("effective_from"))
+        if effective:
+            out["effective_from"] = effective
+        else:
+            out.pop("effective_from", None)
     return out
+
+
+def _iso_date(value: Any) -> str:
+    text = _clean_string(value)
+    if not text:
+        return ""
+    candidate = text[:10].replace("/", "-")
+    try:
+        return date.fromisoformat(candidate).isoformat()
+    except ValueError:
+        return ""
 
 
 def validate_required_retrieval_metadata(metadata: Mapping[str, Any] | None) -> list[str]:

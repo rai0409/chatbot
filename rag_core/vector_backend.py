@@ -10,6 +10,10 @@ quantization). Vectors are cosine; the collection is created on the first
 upsert with the vector size of that batch.
 Tuning (measured with eval.bench): QDRANT_HNSW_M, QDRANT_HNSW_EF_CONSTRUCT,
 QDRANT_SEARCH_EF, QDRANT_QUANTIZATION=int8 (scalar, rescored).
+2026-11-22: hnsw_ef = max(QDRANT_SEARCH_EF, limit); QDRANT_SEARCH_EXACT=true
+(exact search), QDRANT_OVERSAMPLING (default 2.0, int8 rescoring). HNSW and
+quantization settings only apply at creation: a collection created with other
+values is reported once per process (warning in the log).
 
 Ids: Qdrant needs UUIDs, so each string id becomes uuid5(id); the original id
 is kept in the payload (_id). Chroma-style where clauses ($and, $or, equality,
@@ -60,10 +64,21 @@ _TRANSIENT_NAMES = {
 logger = logging.getLogger(__name__)
 
 
+_ENV_WARNED: set = set()
+
+
+def _warn_invalid_env(name: str, raw: str, default) -> None:
+    if (name, raw) not in _ENV_WARNED:
+        _ENV_WARNED.add((name, raw))
+        logger.warning("invalid %s=%r; using %s", name, raw, default)
+
+
 def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name, "")).strip()
     try:
-        return int(str(os.getenv(name, "")).strip() or default)
+        return int(raw or default)
     except ValueError:
+        _warn_invalid_env(name, raw, default)
         return default
 
 
@@ -221,6 +236,86 @@ def translate_where(where: Optional[Dict[str, Any]]):
     return _node(where)
 
 
+# --- search and collection settings -----------------------------------------------------
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = str(os.getenv(name, "")).strip()
+    try:
+        return float(raw or default)
+    except ValueError:
+        _warn_invalid_env(name, raw, default)
+        return default
+
+
+def _env_bool(name: str) -> bool:
+    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def search_params(limit: int):
+    """SearchParams of one query.
+
+    hnsw_ef is max(QDRANT_SEARCH_EF, limit): an ef below the number of results
+    asked for cannot return that many good neighbours. QDRANT_SEARCH_EXACT=true
+    searches without the HNSW index (exact; for measuring recall or small
+    collections). With QDRANT_QUANTIZATION=int8 the quantized search is
+    rescored with the full vectors, oversampled QDRANT_OVERSAMPLING (2.0) times."""
+    from qdrant_client import models
+
+    quantized = str(os.getenv("QDRANT_QUANTIZATION", "")).strip().lower() == "int8"
+    oversampling = max(1.0, _env_float("QDRANT_OVERSAMPLING", 2.0))
+    return models.SearchParams(
+        hnsw_ef=max(_env_int("QDRANT_SEARCH_EF", 128), int(limit)),
+        exact=_env_bool("QDRANT_SEARCH_EXACT"),
+        quantization=models.QuantizationSearchParams(rescore=True, oversampling=oversampling) if quantized else None,
+    )
+
+
+def _desired_collection_settings() -> Dict[str, Any]:
+    return {
+        "hnsw_m": _env_int("QDRANT_HNSW_M", 16),
+        "hnsw_ef_construct": _env_int("QDRANT_HNSW_EF_CONSTRUCT", 128),
+        "quantization": "int8" if str(os.getenv("QDRANT_QUANTIZATION", "")).strip().lower() == "int8" else "",
+    }
+
+
+def _actual_collection_settings(info) -> Dict[str, Any]:
+    config_ = getattr(info, "config", None)
+    hnsw = getattr(config_, "hnsw_config", None)
+    quant = getattr(config_, "quantization_config", None)
+    quant_name = ""
+    if quant is not None:
+        scalar = getattr(quant, "scalar", None)
+        kind = str(getattr(scalar, "type", "") or "").lower()
+        quant_name = "int8" if "int8" in kind else (type(quant).__name__ or "other")
+    return {
+        "hnsw_m": getattr(hnsw, "m", None),
+        "hnsw_ef_construct": getattr(hnsw, "ef_construct", None),
+        "quantization": quant_name,
+    }
+
+
+def collection_settings_drift(info) -> Dict[str, Dict[str, Any]]:
+    """{setting: {"env": ..., "collection": ...}} for settings that differ.
+
+    QDRANT_HNSW_M / QDRANT_HNSW_EF_CONSTRUCT / QDRANT_QUANTIZATION only apply
+    when a collection is created; changing them later does nothing until the
+    collection is rebuilt (or updated with update_collection)."""
+    desired = _desired_collection_settings()
+    actual = _actual_collection_settings(info)
+    drift: Dict[str, Dict[str, Any]] = {}
+    for key, wanted in desired.items():
+        have = actual.get(key)
+        if have is None:  # the server did not report it
+            continue
+        if have != wanted:
+            drift[key] = {"env": wanted, "collection": have}
+    return drift
+
+
+_DRIFT_WARNED: set = set()
+
+
 # --- collection --------------------------------------------------------------------------
 
 
@@ -346,6 +441,23 @@ class QdrantCollection:
         for field in _INDEXED_INTEGER_FIELDS:
             self._client.create_payload_index(self.name, field_name=field, field_schema=models.PayloadSchemaType.INTEGER)
 
+    def _warn_config_drift_once(self) -> None:
+        if self._cache_key in _DRIFT_WARNED:
+            return
+        _DRIFT_WARNED.add(self._cache_key)
+        try:
+            info = with_retry(self._client.get_collection, self.name)
+            drift = collection_settings_drift(info)
+        except Exception as exc:  # noqa: BLE001 - only a diagnostic (external call), logged
+            logger.warning("qdrant collection %s: index settings drift check skipped: %s", self.name, type(exc).__name__)
+            return
+        if drift:
+            logger.warning(
+                "qdrant collection %s was created with other index settings than the environment %s; "
+                "they only apply at creation (rebuild the collection to change them)",
+                self.name, json.dumps(drift, ensure_ascii=False, default=str),
+            )
+
     def count(self) -> int:
         if not self.exists():
             return 0
@@ -440,12 +552,8 @@ class QdrantCollection:
             for key in out:
                 out[key] = [[] for _ in query_embeddings]
             return out
-        quantized = str(os.getenv("QDRANT_QUANTIZATION", "")).strip().lower() == "int8"
-        params = models.SearchParams(
-            hnsw_ef=int(os.getenv("QDRANT_SEARCH_EF", "128")),
-            # int8 search is rescored with the full vectors (oversampled 2x).
-            quantization=models.QuantizationSearchParams(rescore=True, oversampling=2.0) if quantized else None,
-        )
+        self._warn_config_drift_once()
+        params = search_params(int(n_results))
         query_filter = translate_where(where)
         vectors = [list(map(float, v)) for v in query_embeddings]
         responses = None

@@ -100,3 +100,8 @@ artifacts/
 vectorstore/
 runs/
 backups/
+
+# Explicit synthetic smoke v2 inputs; keep the global JSONL ignore for real data.
+!/eval/bench_data/general_v1/smoke_v2/jagov_like.jsonl
+!/eval/bench_data/general_v1/smoke_v2/multiformat_cases.jsonl
+!/eval/bench_data/general_v1/smoke_v2/multiformat_chunks.jsonl

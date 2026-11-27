@@ -186,7 +186,7 @@ def test_neighbours_are_fetched_in_one_batch(monkeypatch):
         def get(self, where=None):
             calls.append(where)
             return {
-                "documents": ["前", "後"],
+                "ids": ["n0", "n3"], "documents": ["前", "後"],
                 "metadatas": [
                     {"id": "n0", "doc_id": "d", "chunk_index": 0, "tenant_id": "default"},
                     {"id": "n3", "doc_id": "d", "chunk_index": 3, "tenant_id": "default"},

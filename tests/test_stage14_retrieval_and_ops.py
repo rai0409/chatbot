@@ -136,10 +136,10 @@ def test_default_tenant_is_requeried_when_crowded_out(monkeypatch):
         def query(self, query_embeddings, n_results, where=None):
             calls.append(where)
             if where and "tenant_id" in json.dumps(where):
-                return {"documents": [["自社の本文"]], "metadatas": [[{"id": "d1", "tenant_id": "default"}]],
+                return {"ids": [["d1"]], "documents": [["自社の本文"]], "metadatas": [[{"id": "d1", "tenant_id": "default"}]],
                         "distances": [[0.2]]}
             n = n_results
-            return {"documents": [["他社"] * n], "metadatas": [[{"id": f"o{i}", "tenant_id": "tenant_b"} for i in range(n)]],
+            return {"ids": [[f"o{i}" for i in range(n)]], "documents": [["他社"] * n], "metadatas": [[{"id": f"o{i}", "tenant_id": "tenant_b"} for i in range(n)]],
                     "distances": [[0.1] * n]}
 
     monkeypatch.setattr(store, "get_vectorstore", lambda **kwargs: _Collection())

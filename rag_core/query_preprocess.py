@@ -1,15 +1,19 @@
 """Query preprocessing pipeline (N5). Fixed order, every step is traced.
 
 1. normalization (ja_text.normalize_for_index, the same as the index)
-2. colloquial cleanup: fillers at the start and request/question endings
-   ("〜なんだけど", "教えてください", "〜ですか") are removed. Rules live in
-   configs/query_rules/colloquial_ja.json; a tenant may add rules in
-   configs/query_rules/tenants/<tenant_id>.json
+2. colloquial cleanup: rewrite rules first ("rewrite" key, re.sub pairs, and
+   a built-in definition rewrite "Xってなに" -> "Xとは"), then fillers at the
+   start and request/question endings ("〜なんだけど", "教えてください",
+   "〜ですか") are removed. Rules live in configs/query_rules/colloquial_ja.json;
+   a tenant may add rules in configs/query_rules/tenants/<tenant_id>.json.
+   Every rule written with 〜 also matches ~ (NORMALIZATION_PROFILE=index)
 3. numeric tokens: handled by the keyword lane (KEYWORD_NUMERIC_TOKENS)
 4. synonym expansion from the tenant's approved RAG profile dictionary only
-   (config/rag_profiles/<id>/exported/synonyms.json, enabled entries)
+   (config/rag_profiles/<id>/exported/synonyms.json, enabled entries); terms
+   of up to 3 characters must be a whole query term, not a substring
 5. dictionary typo correction: a query token that is not in the keyword
-   index vocabulary gets index terms at edit distance 1 (2 for long tokens)
+   index vocabulary OF THE TENANT gets that tenant's index terms at edit
+   distance 1 (2 for long tokens)
    as expansions. Identifiers (letters+digits), quoted text and short tokens
    are never corrected
 6. reading lane: not implemented (needs a separate reading index)
@@ -18,13 +22,15 @@ The cleaned query replaces the question for retrieval; synonyms and typo
 candidates are appended once as expansions (the original terms stay, so
 expansions weigh less in BM25 and in the embedding).
 
-Enable with QUERY_PREPROCESS_ENABLED=true (qa.py). Measure on the bench
-slices colloquial / typo / short before enabling in production.
+On by default; config.query_preprocess_enabled() is the single switch
+(QUERY_PREPROCESS_ENABLED=false restores the raw query). Measure on the bench
+slices colloquial / typo / short when changing the rules.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -36,6 +42,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import config
 from rag_core.ja_text import normalize_for_index
 
+logger = logging.getLogger(__name__)
 RULES_DIR = Path(config.BASE_DIR) / "configs" / "query_rules"
 _TENANT_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _QUOTED_RE = re.compile(r"「([^」]+)」|\"([^\"]+)\"")
@@ -73,15 +80,66 @@ def _flag(name: str, default: bool) -> bool:
 # --- 2. colloquial cleanup ---------------------------------------------------------
 
 
+def _tilde_variants(pattern: str) -> List[str]:
+    """The pattern, plus a copy that matches "~" where it matches "〜".
+
+    NORMALIZATION_PROFILE=index turns 〜 into ~ before the rules run, so a rule
+    written with 〜 would otherwise never fire there."""
+    out = [pattern]
+    if "〜" in pattern:
+        out.append(pattern.replace("〜", "~"))
+    return out
+
+
+def _compile_all(patterns) -> Tuple[re.Pattern, ...]:
+    compiled: List[re.Pattern] = []
+    for pattern in patterns:
+        if not isinstance(pattern, str):
+            continue
+        for variant in _tilde_variants(pattern):
+            try:
+                compiled.append(re.compile(variant))
+            except re.error as exc:  # a broken tenant rule must not break every query; the rule files are cached, so this logs once
+                logger.warning("query rule skipped (invalid regex %r): %s", variant, exc)
+                continue
+    return tuple(compiled)
+
+
+def _rewrite_rules(raw) -> Tuple[Tuple[re.Pattern, str], ...]:
+    """"rewrite": [{"pattern": regex, "replace": template}] or [[regex, template]] (re.sub syntax, \\1 / \\g<name>)."""
+    out: List[Tuple[re.Pattern, str]] = []
+    for rule in raw or []:
+        if isinstance(rule, dict):
+            pattern = rule.get("pattern")
+            replace = rule.get("replace", rule.get("replacement", rule.get("repl")))
+        elif isinstance(rule, (list, tuple)) and len(rule) == 2:
+            pattern, replace = rule
+        else:
+            continue
+        if not isinstance(pattern, str) or not isinstance(replace, str):
+            continue
+        for variant in _tilde_variants(pattern):
+            try:
+                out.append((re.compile(variant), replace))
+            except re.error as exc:
+                logger.warning("query rewrite rule skipped (invalid regex %r): %s", variant, exc)
+                continue
+    return tuple(out)
+
+
 @lru_cache(maxsize=32)
-def _load_rules(path: str) -> Tuple[Tuple[re.Pattern, ...], Tuple[re.Pattern, ...]]:
+def _load_rules(path: str) -> Tuple[Tuple[re.Pattern, ...], Tuple[re.Pattern, ...], Tuple[Tuple[re.Pattern, str], ...]]:
+    """(strip_prefix, strip_suffix, rewrite) rules of one file. Rule types:
+    strip_prefix / strip_suffix: patterns whose match is removed;
+    rewrite: {"pattern", "replace"} pairs applied with re.sub (before stripping)."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return (), ()
-    prefixes = tuple(re.compile(p) for p in data.get("strip_prefix", []) if isinstance(p, str))
-    suffixes = tuple(re.compile(p) for p in data.get("strip_suffix", []) if isinstance(p, str))
-    return prefixes, suffixes
+        return (), (), ()
+    prefixes = _compile_all(data.get("strip_prefix", []))
+    suffixes = _compile_all(data.get("strip_suffix", []))
+    rewrites = _rewrite_rules(data.get("rewrite", []))
+    return prefixes, suffixes, rewrites
 
 
 def _rule_files(tenant_id: str) -> List[str]:
@@ -92,11 +150,56 @@ def _rule_files(tenant_id: str) -> List[str]:
     return files
 
 
-def strip_colloquial(text: str, *, tenant_id: str = "default") -> Tuple[str, List[str]]:
+# Built-in definition rewrite (works without any rule file): "XってなにX" style
+# questions become "Xとは", so the colloquial cleanup no longer leaves "vpnなに"
+# and the question keeps its definition form for retrieval.
+_TAIL = r"(?:ですか|でしょうか|だっけ|でしたっけ|なの|なのか|なんですか|なんでしょう|か)?[?？。!！~〜\s]*$"
+_BUILTIN_REWRITES: Tuple[Tuple[re.Pattern, str], ...] = (
+    (re.compile(r"^(?P<x>\S.*?)\s*って(?:なに|何|なん|どういう(?:意味|こと)|どんな(?:もの|意味))" + _TAIL), r"\g<x>とは"),
+    (re.compile(r"^(?P<x>\S.*?)\s*とは(?:なに|何|なん)" + _TAIL), r"\g<x>とは"),
+)
+
+
+def rewrite_definition(text: str) -> Tuple[str, List[str]]:
+    """The built-in definition rewrite; (text, applied rule names)."""
+    for pattern, replace in _BUILTIN_REWRITES:
+        new = pattern.sub(replace, text, count=1)
+        if new != text and new.strip() and new.strip() != "とは":
+            return new.strip(), [f"rewrite:builtin:{pattern.pattern[:40]}"]
+    return text, []
+
+
+def apply_rewrites(text: str, *, tenant_id: str = "default") -> Tuple[str, List[str]]:
+    """Rule-file rewrites (global, then tenant), then the built-in definition rewrite."""
     applied: List[str] = []
     out = text
     for path in _rule_files(tenant_id):
-        prefixes, suffixes = _load_rules(path)
+        _prefixes, _suffixes, rewrites = _load_rules(path)
+        for pattern, replace in rewrites:
+            try:
+                new = pattern.sub(replace, out, count=1)
+            except (re.error, IndexError):
+                continue
+            if new != out and new.strip():
+                applied.append(f"rewrite:{pattern.pattern}")
+                out = new
+    out, builtin = rewrite_definition(out)
+    return out, applied + builtin
+
+
+def strip_colloquial(text: str, *, tenant_id: str = "default", rewrite: bool = False) -> Tuple[str, List[str]]:
+    """Remove filler prefixes and request / question endings.
+
+    rewrite=True first applies the rewrite rules (rule files and the built-in
+    definition rewrite: "vpnってなに" -> "vpnとは"). Callers that need the
+    result to be a substring of the input (approved QA matching) keep the
+    default False."""
+    applied: List[str] = []
+    out = text
+    if rewrite:
+        out, applied = apply_rewrites(out, tenant_id=tenant_id)
+    for path in _rule_files(tenant_id):
+        prefixes, suffixes, _rewrites = _load_rules(path)
         for _ in range(3):  # fillers can repeat: "あの、えっと、"
             changed = False
             for pattern in prefixes:
@@ -134,10 +237,40 @@ def _synonym_groups(rag_profile_id: Optional[str]) -> List[List[str]]:
     return groups
 
 
+_SHORT_TERM_MAX_CHARS = 3
+
+
+def _query_term_set(query: str) -> Set[str]:
+    from rag_core import ja_terms
+
+    norm = normalize_for_index(query or "")
+    terms = set(ja_terms.content_terms(norm, "auto"))
+    terms.update(re.findall(r"[a-z0-9][a-z0-9._:/-]*", norm))
+    return terms
+
+
+def term_in_query(term: str, query: str, tokens: Optional[Set[str]] = None) -> bool:
+    """Whether a synonym term occurs in the query.
+
+    Terms of up to 3 characters must be a whole query term (content term or
+    alphanumeric token): a substring test let "it" match "edit" and "pc" match
+    "npc". Longer terms keep the substring test."""
+    if not term:
+        return False
+    if len(term) > _SHORT_TERM_MAX_CHARS:
+        return term in query
+    if term not in query:
+        return False
+    return term in (tokens if tokens is not None else _query_term_set(query))
+
+
 def expand_synonyms(query: str, *, rag_profile_id: Optional[str] = None) -> List[str]:
     expansions: List[str] = []
+    tokens: Optional[Set[str]] = None
     for group in _synonym_groups(rag_profile_id):
-        if not any(term and term in query for term in group):
+        if any(t and len(t) <= _SHORT_TERM_MAX_CHARS for t in group) and tokens is None:
+            tokens = _query_term_set(query)
+        if not any(term_in_query(term, query, tokens) for term in group):
             continue
         for term in group:
             if term not in query and term not in expansions:
@@ -207,29 +340,43 @@ class _Vocabulary:
 
 
 _VOCAB_LOCK = Lock()
-_VOCAB_CACHE: Dict[int, Tuple[Any, _Vocabulary]] = {}
+_VOCAB_CACHE: Dict[Tuple[int, str], Tuple[Any, _Vocabulary]] = {}
+_VOCAB_CACHE_MAX = 16
 
 
-def _vocabulary(collection_name: Optional[str]) -> Tuple[Any, _Vocabulary]:
+def _tenant_words(index, tenant: str):
+    # 2026-11-22: only the tenant's own rows. The whole collection's vocabulary
+    # let another tenant's terms become "corrections" (query and trace leak).
+    getter = getattr(index, "tenant_vocabulary", None)
+    if callable(getter):
+        return getter(tenant)
+    return index.vocabulary  # an index object without tenant data (test doubles)
+
+
+def _vocabulary(collection_name: Optional[str], tenant_id: str = "default") -> Tuple[Any, _Vocabulary]:
     from rag_core import retrieval
 
     index = retrieval._index_for_collection(collection_name)
-    key = id(index)
+    tenant = retrieval.normalize_tenant_id(tenant_id)
+    key = (id(index), tenant)
     with _VOCAB_LOCK:
         cached = _VOCAB_CACHE.get(key)
         if cached is not None and cached[0] is index:
             return cached
-        vocab = _Vocabulary.from_words(index.vocabulary)
-        if len(_VOCAB_CACHE) >= 4:
+    vocab = _Vocabulary.from_words(_tenant_words(index, tenant))
+    with _VOCAB_LOCK:
+        if key not in _VOCAB_CACHE and len(_VOCAB_CACHE) >= _VOCAB_CACHE_MAX:
             _VOCAB_CACHE.pop(next(iter(_VOCAB_CACHE)))
         _VOCAB_CACHE[key] = (index, vocab)
-        return index, vocab
+    return index, vocab
 
 
-def correct_typos(query: str, *, collection_name: Optional[str] = None) -> List[Dict[str, Any]]:
+def correct_typos(
+    query: str, *, collection_name: Optional[str] = None, tenant_id: str = "default"
+) -> List[Dict[str, Any]]:
     from rag_core import retrieval
 
-    index, vocab = _vocabulary(collection_name)
+    index, vocab = _vocabulary(collection_name, tenant_id)
     if not vocab.words:
         return []
     quoted = " ".join(a or b for a, b in _QUOTED_RE.findall(query))
@@ -262,7 +409,7 @@ def preprocess_query(
     result = QueryPreprocessResult(original=question or "", query=normalized)
     result.steps.append({"step": "normalize", "changed": normalized != (question or "")})
 
-    cleaned, applied = strip_colloquial(normalized, tenant_id=tenant_id)
+    cleaned, applied = strip_colloquial(normalized, tenant_id=tenant_id, rewrite=True)
     result.query = cleaned or normalized
     result.steps.append({"step": "colloquial", "rules": applied[:10]})
 
@@ -277,7 +424,7 @@ def preprocess_query(
 
     if _flag("QUERY_TYPO_CORRECTION", True):
         try:
-            corrections = correct_typos(result.query, collection_name=collection_name)
+            corrections = correct_typos(result.query, collection_name=collection_name, tenant_id=tenant_id)
         except Exception as exc:  # noqa: BLE001 - preprocessing must never fail a query
             corrections = []
             result.steps.append({"step": "typo", "error": type(exc).__name__})

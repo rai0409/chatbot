@@ -21,6 +21,21 @@ from typing import Any, Dict, List, Optional, Sequence
 
 _NAN = float("nan")
 
+MIN_CLI_RESAMPLES = 1000
+
+
+def resamples_arg(value: str) -> int:
+    """argparse `type=` for --resamples: fewer than 1000 bootstrap resamples gives an unstable CI, so it is an error."""
+    import argparse
+
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--resamples must be an integer, got {value!r}") from None
+    if n < MIN_CLI_RESAMPLES:
+        raise argparse.ArgumentTypeError(f"--resamples must be >= {MIN_CLI_RESAMPLES} (got {n}); fewer resamples give an unstable CI")
+    return n
+
 
 def mean(values: Sequence[float]) -> float:
     return sum(values) / len(values) if values else _NAN

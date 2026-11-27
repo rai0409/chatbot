@@ -26,6 +26,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the broad-except guard diffs against origin/main
 
       - uses: actions/setup-python@v5
         with:
@@ -123,6 +125,16 @@ jobs:
         run: |
           python -m pip install pyflakes
           python -m pyflakes rag_core webapi scripts eval tools tests libs config.py rag_grounded.py
+
+      - name: Broad-except guard (ruff BLE001,S110 on changed lines only; legacy code is not linted)
+        id: ruff_broad_except
+        continue-on-error: true
+        run: |
+          python -m pip install ruff==0.8.6
+          git fetch --no-tags origin main
+          # = ruff check --select BLE001,S110 on the .py files of `git diff --name-only --diff-filter=AM origin/main...HEAD`,
+          # keeping only findings on added lines. Keep a deliberate broad except with `# noqa: BLE001  <reason>`.
+          python scripts/lint_changed_broad_except.py --base origin/main
 
       - uses: actions/setup-node@v4
         with:
@@ -228,7 +240,7 @@ jobs:
           import sys
 
           steps = json.loads(os.environ['CI_STEPS_JSON'])
-          ids = ['product_readiness', 'normalization', 'stage_regression', 'hardening', 'dependency_audit', 'bandit', 'secret_scan', 'production_guard', 'retrieval_gate', 'stage8', 'pyflakes', 'node_unit', 'postgres', 'full_suite', 'webui_install', 'webui_typecheck', 'webui_tests', 'webui_build', 'webui_audit', 'playwright_package', 'playwright_browser', 'playwright_e2e', 'stage10_install', 'stage10_tests', 'stage10_check']
+          ids = ['product_readiness', 'normalization', 'stage_regression', 'hardening', 'dependency_audit', 'bandit', 'secret_scan', 'production_guard', 'retrieval_gate', 'stage8', 'pyflakes', 'ruff_broad_except', 'node_unit', 'postgres', 'full_suite', 'webui_install', 'webui_typecheck', 'webui_tests', 'webui_build', 'webui_audit', 'playwright_package', 'playwright_browser', 'playwright_e2e', 'stage10_install', 'stage10_tests', 'stage10_check']
           rows = ['| Check | Outcome |', '|---|---|']
           failed = []
           for key in ids:

@@ -1,0 +1,6 @@
+# Lint guard for broad excepts. Legacy code is not linted: CI runs
+#   ruff check --select BLE001,S110
+# only on Python files changed against origin/main (see .github/workflows/ci.yml).
+# A broad except that is kept on purpose carries `# noqa: BLE001  <reason>`.
+target-version = "py312"
+line-length = 120

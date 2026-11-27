@@ -167,9 +167,11 @@ def test_ready_reports_unreachable_services(admin_env, monkeypatch):
     monkeypatch.setattr(state_backend, "health", lambda: {"redis": {"ok": False, "error": "ConnectionError"}})
     monkeypatch.setattr(vector_backend, "health", lambda: {})
     resp = TestClient(admin_env.app).get("/ready")
-    assert resp.status_code == 503 and resp.json() == {"status": "not_ready", "failing": ["redis"]}
+    body = resp.json()
+    assert resp.status_code == 503 and body["status"] == "not_ready" and body["failing"] == ["redis"]
+    assert "fingerprint" in body
     monkeypatch.setattr(state_backend, "health", lambda: {"redis": {"ok": True, "ms": 1.0}})
-    assert TestClient(admin_env.app).get("/ready").json() == {"status": "ready"}
+    assert TestClient(admin_env.app).get("/ready").json()["status"] == "ready"
 
 
 def test_state_backend_unavailable_maps_to_503(admin_env, monkeypatch):
@@ -412,3 +414,19 @@ def test_chat_ui_product_features():
     assert 'class="cite"' in (ROOT / "webapi/static/js/render.js").read_text(encoding="utf-8")
     ingestion = (ROOT / "webapi/static/ingestion.html").read_text(encoding="utf-8")
     assert "/admin/ingestion/upload" in ingestion and "<!--admin-nav-->" in ingestion
+
+
+def test_previous_quarantine_keyword_cache_is_not_opened(tmp_path, monkeypatch):
+    from rag_core import retrieval
+
+    corpus = tmp_path / "chunks.jsonl"
+    corpus.write_text('{"id":"p","text":"public"}\n', encoding="utf-8")
+    monkeypatch.setattr(config, "INDEX_DIR", tmp_path)
+    monkeypatch.setenv("KEYWORD_INDEX_PERSIST", "true")
+    with monkeypatch.context() as old:
+        old.setattr(retrieval, "_KEYWORD_CACHE_FORMAT", "kwcache-mail-quarantine-v3")
+        retrieval._build_keyword_index(str(corpus), "heuristic", "inverted", 1.5, 0.75)
+    monkeypatch.setattr(retrieval, "_read_signed_cache", lambda *args: pytest.fail("old cache opened"))
+    index = retrieval._build_keyword_index(str(corpus), "heuristic", "inverted", 1.5, 0.75)
+    assert index.row("p")["text"] == "public"
+    assert len(list((tmp_path / ".keyword_cache").glob("*.pkl"))) == 2

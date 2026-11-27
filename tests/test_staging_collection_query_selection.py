@@ -191,7 +191,7 @@ def test_staging_retrieval_uses_existing_selected_vectorstore(monkeypatch):
     class _Collection:
         def query(self, **kwargs):
             return {
-                "documents": [["staging text"]],
+                "ids": [["c1"]], "documents": [["staging text"]],
                 "metadatas": [[{"id": "c1", "source_doc": "stage.pdf", "tenant_id": "tenant_a"}]],
                 "distances": [[0.12]],
             }

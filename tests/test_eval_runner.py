@@ -860,7 +860,7 @@ def test_real_vector_collection_rejects_missing_gold_and_production_collection(t
 def test_eval_runtime_uses_stub_by_default_and_isolated_real_collection(monkeypatch):
     class _Collection:
         def query(self, **kwargs):
-            return {"documents": [["本文"]], "metadatas": [[{"id": "c1", "tenant_id": "default"}]], "distances": [[0.1]]}
+            return {"ids": [["c1"]], "documents": [["本文"]], "metadatas": [[{"id": "c1", "tenant_id": "default"}]], "distances": [[0.1]]}
 
     seen = []
     monkeypatch.setattr(runner.retrieval.embedder, "embed_queries", lambda texts, client=None: [[0.1] for _ in texts])

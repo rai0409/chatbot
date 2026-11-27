@@ -45,3 +45,11 @@ as assumptions in the SLA, not guarantees.
 
 - Daily backup; keep 7 daily + 4 weekly off-host; **verify one restore per
   month** (staging mode is non-destructive) via `scripts/dr_drill.sh` patterns.
+
+## Restore procedure (2026-11)
+
+`scripts/restore.sh ARCHIVE --in-place --source-dir DIR` refuses while the API answers `RESTORE_HEALTH_URL` or an
+API process runs (override: `--force`). It extracts into a temporary directory next to the archive, verifies the
+manifest, drops stale `-wal` / `-shm` files, moves the current directories aside (never deleted: remove them yourself
+after the check) and swaps the restored ones in. Afterwards: start the API, check `/ready`, flush the answer cache,
+run `scripts/deploy_smoke.sh`. Record the time in the drill report.

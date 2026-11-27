@@ -18,7 +18,7 @@ def _store_root(monkeypatch, tmp_path):
 
 def test_append_and_get_round_trip(monkeypatch, tmp_path):
     _store_root(monkeypatch, tmp_path)
-    conversation_store.append_turn("tenant_a", "fp1", "t1", question="手順は？", answer_text="A", citations_count=2)
+    conversation_store.append_turn("tenant_a", "fp1", "t1", question="手順は？", answer_text="A", citations_count=2, source_docs=["a.pdf"])
     turns = conversation_store.get_thread("tenant_a", "fp1", "t1")
     assert len(turns) == 1
     assert turns[0]["question"] == "手順は？" and turns[0]["answer_text"] == "A"
@@ -45,7 +45,7 @@ def test_path_traversal_is_sanitized(monkeypatch, tmp_path):
     _store_root(monkeypatch, tmp_path)
     conversation_store.append_turn("tenant_a", "fp1", "../../escape", question="q", answer_text="a")
     # the thread is stored under the owner dir with a sanitized name, not outside
-    owner = tmp_path / "runs" / "conversations" / "tenant_a" / "fp1"
+    owner = conversation_store._owner_dir("tenant_a", "fp1")
     files = list(owner.glob("*.jsonl"))
     assert files and all(".." not in f.name for f in files)
 
@@ -62,7 +62,7 @@ def test_retention_max_age(monkeypatch, tmp_path):
     _store_root(monkeypatch, tmp_path)
     conversation_store.append_turn("tenant_a", "fp1", "old", question="q", answer_text="a")
     import os, time
-    p = tmp_path / "runs" / "conversations" / "tenant_a" / "fp1" / "old.jsonl"
+    p = conversation_store._thread_path("tenant_a", "fp1", "old")
     old = time.time() - 200 * 86400
     os.utime(p, (old, old))
     conversation_store.purge("tenant_a", "fp1", max_age_days=90)
@@ -144,3 +144,52 @@ def test_endpoint_threads_isolated_by_identity_fingerprint(monkeypatch, tmp_path
     # raw key never leaks in responses
     blob = json.dumps(other)
     assert "key-a" not in blob and "key-b" not in blob
+
+
+def test_v2_keys_isolate_colliding_identifiers_and_preserve_legacy(monkeypatch, tmp_path):
+    _store_root(monkeypatch, tmp_path)
+    legacy = tmp_path / "runs" / "conversations" / "tenant_a" / "fp1" / "t1.jsonl"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"thread_id":"t1","answer_text":"legacy"}\n', encoding="utf-8")
+    for tenant, identity, thread in [("tenant_a", "fp1", "t1"), ("_tenant_a", "fp1", "t1"),
+                                     ("tenant_a", "_fp1", "t1"), ("tenant_a", "fp1", "_t1")]:
+        conversation_store.append_turn(tenant, identity, thread, question=thread, answer_text=tenant + identity)
+        assert conversation_store.get_thread(tenant, identity, thread)[0]["answer_text"] == tenant + identity
+    assert {t["thread_id"] for t in conversation_store.list_threads("tenant_a", "fp1")} == {"t1", "_t1"}
+    assert "legacy" in legacy.read_text(encoding="utf-8")
+
+
+def test_redaction_marker_blocks_late_append_and_failed_rewrite(monkeypatch, tmp_path):
+    _store_root(monkeypatch, tmp_path)
+    cs = conversation_store
+    cs.append_turn("t", "u", "th", question="q", answer_text="private", source_docs=["x"])
+    rewrite = cs._rewrite_lines
+    def fail_record(path, lines):
+        if path.suffix == ".jsonl":
+            raise OSError("synthetic failure")
+        return rewrite(path, lines)
+    import pytest
+    with monkeypatch.context() as patch:
+        patch.setattr(cs, "_rewrite_lines", fail_record)
+        with pytest.raises(OSError):
+            cs.redact_source_doc("t", "x")
+    assert cs.get_thread("t", "u", "th")[0]["answer_text"] == cs.REDACTED_NOTICE
+    cs.append_turn("t", "u", "th", question="late", answer_text="private", source_docs=["x"])
+    assert cs.get_thread("t", "u", "th")[-1]["answer_text"] == cs.REDACTED_NOTICE
+
+
+def test_public_thread_identifier_validation():
+    import pytest
+    from fastapi import HTTPException
+    from webapi.routers.conversations import validate_thread_id
+    from webapi.routers.chat import ChatRequest
+    from pydantic import ValidationError
+
+    for value in ("a", "abc-123_X", "x" * 128):
+        assert validate_thread_id(value) == value
+        assert ChatRequest(question="q", thread_id=value).thread_id == value
+    for value in ("", ".", "..", "../x", "a/b", "x" * 129):
+        with pytest.raises(HTTPException):
+            validate_thread_id(value)
+        with pytest.raises(ValidationError):
+            ChatRequest(question="q", thread_id=value)

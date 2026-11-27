@@ -1,5 +1,14 @@
 # Retrieval Mode Evaluation Report
 
+> **Historical report (2026-04-12).** The case and corpus files it used were later replaced by
+> `eval/cases/retrieval_v2_cases.jsonl` and `eval/cases/smoke_v2_chunks.jsonl`, and the run outputs
+> were written outside the repository at the time (no longer available). The numbers below are not
+> reproducible from the current tree and must not be compared with current runs. For current
+> measurements use the frozen general benchmark (`scripts/run_general_benchmark.py`,
+> `reports/bench/general_v1/`) and the CI gate (`scripts/eval_regression_gate.py`,
+> baseline `eval/baselines/retrieval_gate_baseline_v2.json`); see
+> `docs/operations/benchmark_governance.md`.
+
 ## Scope
 
 This report compares retrieval behavior across:
@@ -9,10 +18,10 @@ This report compares retrieval behavior across:
 - `hybrid`
 - `hybrid_rerank`
 
-Dataset:
+Dataset (at the time; since replaced by `eval/cases/retrieval_v2_cases.jsonl`):
 - `eval/cases/retrieval_cases.jsonl` (25 cases)
 
-Corpus:
+Corpus (at the time; since replaced by `eval/cases/smoke_v2_chunks.jsonl`):
 - `eval/cases/smoke_chunks.jsonl`
 
 Evaluation:
@@ -21,22 +30,21 @@ Evaluation:
 ## Evidence sources
 
 1. Runner implementation: `eval/runner.py` (`run_retrieval_aware_eval`)
-2. Local run output (deterministic, stub-vector):
-   - `/tmp/chatbot_phase2_rows.jsonl`
-   - `/tmp/chatbot_phase2_summary.json`
-3. Local aggregation over `/tmp/chatbot_phase2_rows.jsonl`
+2. Local run output (deterministic, stub-vector), written at the time to a temporary
+   directory outside the repository (`chatbot_phase2_rows.jsonl`, `chatbot_phase2_summary.json`); not kept.
+3. Local aggregation over those rows.
 
-Command used:
+Equivalent command on the current tree (outputs stay inside the repository, under the git-ignored `runs/`):
 
 ```bash
-cd /home/rai/chatbot && \
-PYTHONPATH=/home/rai/chatbot .venv/bin/python -m eval.runner \
+cd <repository root> && \
+PYTHONPATH=. .venv/bin/python -m eval.runner \
   --retrieval-aware \
-  --cases eval/cases/retrieval_cases.jsonl \
-  --chunks-jsonl eval/cases/smoke_chunks.jsonl \
+  --cases eval/cases/retrieval_v2_cases.jsonl \
+  --chunks-jsonl eval/cases/smoke_v2_chunks.jsonl \
   --modes bm25_only,dense_only,hybrid,hybrid_rerank \
-  --per-query-output /tmp/chatbot_phase2_rows.jsonl \
-  --summary-output /tmp/chatbot_phase2_summary.json \
+  --per-query-output runs/retrieval_mode_report/rows.jsonl \
+  --summary-output runs/retrieval_mode_report/summary.json \
   --eval-k 5 \
   --quiet
 ```

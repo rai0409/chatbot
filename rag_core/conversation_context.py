@@ -68,7 +68,9 @@ def complete_question(question: str, previous_questions: Sequence[str]) -> Dict[
 
 
 def previous_questions_from_turns(turns: Sequence[Dict[str, Any]], limit: int = _MAX_PREVIOUS) -> List[str]:
-    out = [str(t.get("question") or "") for t in turns if str(t.get("question") or "").strip()]
+    # Turns redacted after their source document was deleted are never reused as context.
+    out = [str(t.get("question") or "") for t in turns
+           if not t.get("redacted") and str(t.get("question") or "").strip()]
     return out[-limit:]
 
 

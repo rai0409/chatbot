@@ -225,3 +225,13 @@ def test_missing_validation_trace_is_skipped_and_not_cached(monkeypatch, tmp_pat
     assert first["profile_validation"]["passed"] is False
     assert first["profile_validation"]["skipped"] is True
     assert len(calls) == 2 and answer_cache.size() == 0
+
+
+def test_old_mail_quarantine_key_is_not_served(monkeypatch, tmp_path):
+    calls, _ = _setup_chat(monkeypatch, tmp_path, enabled=True)
+    key = answer_cache.build_key("質問です", top_k=config.TOP_K, max_context_chars=config.MAX_CONTEXT_CHARS,
+                                 tenant_id="default", rag_profile_id="default")
+    old_key = (*key, "profile-validation-v1", "mail-quarantine-v1")
+    answer_cache.put(old_key, {"answer_text": "private", "profile_validation": {"passed": True}})
+    assert main.chat(main.ChatRequest(question="質問です"))["answer_text"] != "private"
+    assert len(calls) == 1 and answer_cache.get(old_key)["answer_text"] == "private"

@@ -2497,6 +2497,7 @@ class RawMail:
     meta: Meta
     body: str
     origin: str          # eml / columns
+    origin_id: str = ""  # 内容に基づく出所の識別子（eml のバイト列のハッシュ / 表のハッシュ＋行・ID 列）。ファイル名だけにしない
 
 
 _RE_JA_COMMON = re.compile(r"[\t\n\r\x20-\x7eぁ-んァ-ヶー一-龥々　-〿！-～]")
@@ -2600,8 +2601,33 @@ def html_to_text(markup: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(p.lines)).strip()
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name, "") or "").strip()
+    try:
+        value = int(raw or default)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        import warnings
+
+        warnings.warn(f"{name}={raw!r} is not a positive integer; using default {default}", RuntimeWarning, stacklevel=2)
+        return default
+    return value
+
+
+def max_mime_parts() -> int:
+    """MAIL_MAX_MIME_PARTS（既定 200）: 1 通の MIME パートの数の上限。超えたら読まない。"""
+    return _env_int("MAIL_MAX_MIME_PARTS", 200)
+
+
+def max_mime_depth() -> int:
+    """MAIL_MAX_MIME_DEPTH（既定 20）: MIME の入れ子の深さの上限。超えたら読まない。"""
+    return _env_int("MAIL_MAX_MIME_DEPTH", 20)
+
+
 def read_eml(path: Path) -> RawMail:
-    msg = BytesParser(policy=policy.compat32).parsebytes(path.read_bytes())
+    data_all = path.read_bytes()
+    msg = BytesParser(policy=policy.compat32).parsebytes(data_all)
 
     def hdr(name: str) -> str:
         return " ".join(_decode_header_value(v) for v in msg.get_all(name, []))
@@ -2620,31 +2646,44 @@ def read_eml(path: Path) -> RawMail:
     plain: list[str] = []
     markup: list[str] = []
 
-    def walk(part: Any) -> None:
+    part_cap, depth_cap = max_mime_parts(), max_mime_depth()
+    # 再帰しない（深い入れ子でスタックを使い切らない）。順序は深さ優先・左から（従来どおり）
+    stack: list[tuple[Any, int]] = [(msg, 0)]
+    n_parts = 0
+    while stack:
+        part, depth = stack.pop()
+        n_parts += 1
+        if n_parts > part_cap:
+            raise ValueError(f"mime_part_limit（上限 {part_cap}）")
+        if depth > depth_cap:
+            raise ValueError(f"mime_depth_limit（上限 {depth_cap}）")
         ctype = part.get_content_type()
         if ctype == "message/rfc822":
             inner = part.get_payload()
             subj = _decode_header_value(inner[0].get("Subject")) if isinstance(inner, list) and inner else ""
             meta.attachments.append(f"(添付メール) {subj}".strip())
-            return
+            continue
         if part.is_multipart():
-            for sub in part.get_payload():
-                walk(sub)
-            return
+            subs = part.get_payload()
+            if isinstance(subs, list):
+                if n_parts + len(stack) + len(subs) > part_cap:
+                    raise ValueError(f"mime_part_limit（上限 {part_cap}）")
+                stack.extend((sub, depth + 1) for sub in reversed(subs))
+            continue
         filename = _decode_header_value(part.get_filename()) if part.get_filename() else ""
         disp = (part.get("Content-Disposition") or "").lower()
         if filename or disp.startswith("attachment"):
             meta.attachments.append(filename or "(名前なし)")
-            return
+            continue
         data = part.get_payload(decode=True) or b""
         if ctype == "text/plain":
             plain.append(_decode_bytes(data, part.get_content_charset()))
         elif ctype == "text/html":
             markup.append(_decode_bytes(data, part.get_content_charset()))
 
-    walk(msg)
     body = "\n".join(plain) if plain else html_to_text("\n".join(markup))
-    return RawMail(key=path.stem, source=str(path), meta=meta, body=body, origin="eml")
+    return RawMail(key=path.stem, source=str(path), meta=meta, body=body, origin="eml",
+                   origin_id="eml-sha256:" + hashlib.sha256(data_all).hexdigest()[:16])
 
 
 COLUMN_ALIASES = {
@@ -2715,6 +2754,7 @@ def _read_xlsx(path: Path, sheet: str) -> list[list[str]]:
 
 def read_table(path: Path, overrides: dict[str, str], sheet: str = "") -> list[RawMail]:
     rows = _read_xlsx(path, sheet) if path.suffix.lower() in (".xlsx", ".xlsm") else _read_csv(path)
+    file_hash = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
     if not rows:
         return []
     header = [nfkc(str(h)).strip().lower() for h in rows[0]]
@@ -2747,7 +2787,17 @@ def read_table(path: Path, overrides: dict[str, str], sheet: str = "") -> list[R
         meta.in_reply_to = get("in_reply_to").strip("<> ")
         meta.references = [x.strip("<>") for x in get("references").split() if x.strip("<>")]
         key = get("id") or f"{path.stem}#{r_i}"
-        out.append(RawMail(key=key, source=f"{path.name}:{r_i}", meta=meta, body=get("text"), origin="columns"))
+        # 出所の識別子: ファイル名だけでは別の同名ファイルと衝突する。十分長い ID 列はそのまま（並べ替えに強い）、
+        # 短い ID 列はファイルの内容のハッシュと組にする。ID 列が無ければ、内容のハッシュ＋行番号
+        row_id = get("id")
+        if len(row_id) >= 8:
+            origin_id = "table-id:" + row_id
+        elif row_id:
+            origin_id = f"table-sha256:{file_hash}:id:{row_id}"
+        else:
+            origin_id = f"table-sha256:{file_hash}:row{r_i}"
+        out.append(RawMail(key=key, source=f"{path.name}:{r_i}", meta=meta, body=get("text"), origin="columns",
+                           origin_id=origin_id))
     return out
 
 
@@ -2809,6 +2859,12 @@ class Message:
     quoted_extra: str = ""       # 引用が手元のメールと重複したが、引用側にだけあった記述（duplicate_extra）
     status: str = "ok"           # ok / segment_failed（引用の分割に失敗。全体を 1 通として扱った）/
                                  # noise_failed（分類に失敗。何も消していない）/ noise_skipped（長すぎて分類しない）
+    origin_id: str = ""          # RawMail.origin_id（原本の出所。復元したメールは空）
+    participants: frozenset = frozenset()   # From/To/Cc（＋メールボックスの持ち主）の正規化アドレス。BCC は入れない
+    quote_refs: list = field(default_factory=list)   # 引用を参照に置き換えた先（キー、または prior:<source_doc>）
+    quoted_inline: list = field(default_factory=list)  # 照合できたが、参照に置き換えず本文に残した引用（(状態, 本文)）
+    superseded_by: str = ""      # この通の内容を丸ごと引用し、参加者が同じかそれ以上の、後のメールのキー
+    quotes_redundant: bool = False   # この通の引用部分が、superseded_by の通の引用に含まれる
 
 
 _RE_REPLY_PREFIX = re.compile(r"^\s*((re|fw|fwd|返信|転送)\s*(\[\d+\])?\s*[:：]\s*)+", re.I)
@@ -2892,6 +2948,63 @@ def _merge_meta(base: Meta, extra: Meta | None) -> Meta:
     return base
 
 
+def _norm_addr(addr: str) -> str:
+    # One normalization for participants and ACL digests (a mismatch would let
+    # the reference-visibility check and the ACL disagree about who is who).
+    from rag_core.mail_access import normalize_address
+
+    return normalize_address(addr)
+
+
+def participants_of(meta: Meta, extra: Iterable[str] = ()) -> frozenset:
+    """アクセス権の判定に使う参加者（From/To/Cc の正規化アドレス＋ extra）。BCC は入れない。"""
+    out = {_norm_addr(a.addr) for a in [meta.sender, *meta.to, *meta.cc]}
+    out.update(_norm_addr(a) for a in extra)
+    out.discard("")
+    return frozenset(out)
+
+
+SUPERSEDE_COVER = 0.9      # 後のメールの引用が、前のメールの内容をこの割合以上含むとき「丸ごと引用した」とみなす
+
+
+class PriorIndex:
+    """過去の取り込みのメール（ハッシュした 4-gram と参加者）。本文は持たない。
+
+    各項目: {"source_doc", "participants_h": [...], "sh": [ハッシュ...（昇順・下位 k 個）], "n": 元の個数}。
+    下位 k 個だけを持つとき、包含率は「k 個目の値以下」の範囲で推定する（bottom-k sketch）。"""
+
+    def __init__(self, entries: Iterable[dict]) -> None:
+        self.items: list[tuple[str, frozenset, frozenset, str]] = []
+        self.post: dict[str, list[int]] = defaultdict(list)
+        for e in entries or ():
+            sh = [str(x) for x in (e.get("sh") or [])]
+            doc = str(e.get("source_doc") or "")
+            if len(sh) < 8 or not doc:
+                continue
+            tau = sh[-1] if int(e.get("n") or len(sh)) > len(sh) else ""
+            i = len(self.items)
+            self.items.append((doc, frozenset(str(x) for x in e.get("participants_h") or ()), frozenset(sh), tau))
+            for h in sh:
+                self.post[h].append(i)
+
+    def best(self, hsh: set[str]) -> tuple[int, float, float, set[str]]:
+        """(項目の番号, 引用側の包含率の推定, 候補側の包含率の推定, 比較した範囲の引用のハッシュ)。無ければ (-1, 0, 0, ∅)。"""
+        counts: Counter[int] = Counter()
+        for h in hsh:
+            counts.update(self.post.get(h, ()))
+        best: tuple[int, float, float, set[str]] = (-1, 0.0, 0.0, set())
+        for i, _ in counts.most_common(20):
+            doc, _parts, sh, tau = self.items[i]
+            domain = {h for h in hsh if not tau or h <= tau}
+            if len(domain) < 8:
+                continue
+            common = len(domain & sh)
+            cand = (i, common / len(domain), common / len(sh), domain)
+            if (cand[1], cand[2]) > (best[1], best[2]):
+                best = cand
+        return best
+
+
 @dataclass
 class RunResult:
     messages: list[Message]
@@ -2937,7 +3050,15 @@ def _run_feat_worker(i: int) -> tuple[str, str, Feats | None, tuple[str, str] | 
 
 def process(raws: Sequence[RawMail], *, model: NoiseModel | None, profile: Profile, threshold: float,
             smooth: float, sentence_split: bool, match_threshold: float, jobs: int = 1, chunk: int = 500,
-            max_lines: int = 5000, failures: list[dict] | None = None) -> RunResult:
+            max_lines: int = 5000, failures: list[dict] | None = None,
+            participants_extra: Iterable[str] = (), prior: Iterable[dict] | None = None,
+            hasher: Any = None, keep_latest_only: bool = False) -> RunResult:
+    """participants_extra: 全メールの参加者に足すアドレス（メールボックスの持ち主）。
+    prior/hasher: 過去の取り込みのメール（PriorIndex の項目）と、4-gram・アドレスのハッシュ関数。
+    引用が過去のメールと一致し、参加者の条件を満たせば、未照合の引用にせず参照にする。
+    keep_latest_only: 後のメールが前のメールを丸ごと引用し、参加者が同じかそれ以上なら、引用を参照に置き換えず
+    後のメールに残す（前のメールの引用部分は、後のメールに含まれるなら、行を作るときに省ける）。"""
+    participants_extra = tuple(participants_extra or ())
     # 同じキーが重なったら、番号を足す（照合と親子の取り違えを防ぐ）。足した名前が、元から有る別のキーや、
     # 既に使った名前とぶつからないよう、空きが見つかるまで番号を進める
     original = {r.key for r in raws}
@@ -3031,7 +3152,8 @@ def process(raws: Sequence[RawMail], *, model: NoiseModel | None, profile: Profi
                                   context="\n".join("> " + t for t in ctx.split("\n") if t),
                                   n_lines=len(lines), n_removed=sum(1 for d in ds if not d.keep),
                                   status="+".join(x for x in (seg_status.get(r.key), noise_status.get(r.key)) if x)
-                                  or "ok")
+                                  or "ok", origin_id=r.origin_id,
+                                  participants=participants_of(meta, participants_extra))
         seg_rows[(r.key, 0, "new")] = {"key": r.key, "unit": 0, "kind": "new", "status": "new", "ref": "",
                                        "score": "", "from": meta.sender.label(), "date": meta.date_iso,
                                        "subject": meta.subject, "text": messages[r.key].text}
@@ -3042,10 +3164,22 @@ def process(raws: Sequence[RawMail], *, model: NoiseModel | None, profile: Profi
         for u_i, u in enumerate(units[1:], 1):
             quoted[r.key].append((u_i, u, kept(u.lines)))
 
-    # 引用の照合: 手元のメールと重複 → 参照に置き換える。無い → 復元したメールとして残す
+    # 引用の照合: 手元のメールと重複 → 参照に置き換える。無い → 復元したメールとして残す。
+    # 参照に置き換えるのは、参照先の本文を見られる人（参照先の参加者）が、引用した側の参加者を全部含むときだけ。
+    # 含まないとき（返信には入ったが、元のメールの宛先には無い人がいる）は、引用を本文に残す（文脈を失わず、
+    # 参照先をつないで見せることによる漏えいもしない）
     index = ShingleIndex()
     for m in messages.values():
         index.add(m.key, _shingles(m.text))
+    prior_index = PriorIndex(prior) if (prior and hasher is not None) else None
+
+    def holder_participants(ref: str) -> frozenset:
+        """参照先の本文を収めている行の参加者（復元したメールは、それを引用したメールの行に入る）。"""
+        h = messages[ref]
+        while h.restored and h.from_key and h.from_key in messages:
+            h = messages[h.from_key]
+        return h.participants
+
     order = sorted(messages.values(), key=lambda m: (time_key(m.meta), m.key))
     resolved: dict[str, list[str]] = defaultdict(list)
     for m in order:
@@ -3062,20 +3196,59 @@ def process(raws: Sequence[RawMail], *, model: NoiseModel | None, profile: Profi
             #     候補が十分長く（4-gram が MIN_REF_SHINGLES 以上）、引用側の包含率も MIN_QUOTE_COVER 以上のときだけ
             matched = bool(ref) and (cov_q >= match_threshold or (
                 cov_c >= match_threshold and cov_q >= MIN_QUOTE_COVER and len(ref_sh) >= MIN_REF_SHINGLES))
+            acl_ok = matched and holder_participants(ref) >= m.participants
+            # 後のメールが前の原本を丸ごと引用し、参加者が同じかそれ以上 → 前のメールは後のメールに置き換えられる
+            supersedes = (matched and not messages[ref].restored and cov_c >= SUPERSEDE_COVER
+                          and m.participants >= messages[ref].participants
+                          and is_before(messages[ref].meta, m.meta) is True)
+            if supersedes:
+                messages[ref].superseded_by = m.key       # 時刻順に回すので、最後に残るのが最新
             # 一致しても、引用にしか無い行（手元のメールに無い記述）は、必ず求めて残す（黙って消さない）
             extra = _extra_lines(text, ref_sh) if matched else ""
+            prior_hit = None
+            if not matched and prior_index is not None and len(sh) >= 8:
+                hsh = {hasher(x) for x in sh}
+                i, p_cov_q, _p_cov_c, domain = prior_index.best(hsh)
+                if i >= 0 and p_cov_q >= match_threshold:
+                    doc, parts_h, p_sh, _tau = prior_index.items[i]
+                    mine_h = {hasher("addr:" + a) for a in m.participants}
+                    if parts_h >= mine_h:
+                        lines = []
+                        for line in text.split("\n"):
+                            lsh = {hasher(x) for x in _shingles(line)} & domain
+                            if not lsh or len(lsh - p_sh) / len(lsh) >= 0.5:
+                                lines.append(line)
+                        prior_hit = ("prior:" + doc, "\n".join(lines))
             if len(sh) < 8:
                 row.update(status="empty", ref="", text=text)
                 resolved[m.key].append("")
+            elif matched and (not acl_ok or (keep_latest_only and supersedes)):
+                # 一致したが、参照に置き換えない（参加者が違う / 最新のメールに残す）→ 本文に残す
+                status = "kept_latest" if (keep_latest_only and supersedes and acl_ok) else "kept_acl"
+                row.update(status=status, ref=ref, text=text)
+                resolved[m.key].append(ref)
+                m.quoted_inline.append((status, text))
             elif matched and len(fold_for_match(extra)) < MIN_EXTRA_CHARS:
                 # 引用の内容は、手元のメールで全部わかる → 参照に置き換える
                 row.update(status="duplicate", ref=ref, text="")
                 resolved[m.key].append(ref)
+                m.quote_refs.append(ref)
             elif matched:
                 # 引用側にしか無い記述がある → 参照に置き換え、その行だけを残す
                 row.update(status="duplicate_extra", ref=ref, text=extra)
                 resolved[m.key].append(ref)
+                m.quote_refs.append(ref)
                 m.quoted_extra = "\n".join(x for x in (m.quoted_extra, f"[{ref} の引用にだけある記述]\n{extra}") if x)
+            elif prior_hit is not None:
+                # 過去の取り込みのメールと一致（参加者の条件も満たす）→ 参照に置き換える（未照合の引用にしない）
+                pref, pextra = prior_hit
+                resolved[m.key].append("")
+                m.quote_refs.append(pref)
+                if len(fold_for_match(pextra)) >= MIN_EXTRA_CHARS:
+                    row.update(status="duplicate_prior_extra", ref=pref, text=pextra)
+                    m.quoted_extra = "\n".join(x for x in (m.quoted_extra, f"[過去に取り込んだメールの引用にだけある記述]\n{pextra}") if x)
+                else:
+                    row.update(status="duplicate_prior", ref=pref, text="")
             else:
                 rkey = f"{m.key}#q{u_i}"
                 messages[rkey] = Message(key=rkey, source=f"{m.source}（引用 {u_i}）", meta=u.meta, text=text,
@@ -3084,6 +3257,21 @@ def process(raws: Sequence[RawMail], *, model: NoiseModel | None, profile: Profi
                 row.update(status="restored", ref=rkey, text=text)
                 resolved[m.key].append(rkey)
             seg_rows[(m.key, u_i, "quoted")] = row
+
+    # 置き換えられたメールの引用部分が、置き換えたメールの引用に含まれるか（含まれれば、行を作るときに省ける）
+    def quote_shingles(key: str) -> set[str]:
+        out: set[str] = set()
+        for _u_i, _u, text in quoted.get(key, []):
+            out |= _shingles(text)
+        out |= _shingles(messages[key].context)
+        return out
+
+    for m in list(messages.values()):
+        if m.superseded_by and m.superseded_by in messages:
+            mine = quote_shingles(m.key) | _shingles(m.quoted_extra)
+            if mine:
+                theirs = quote_shingles(m.superseded_by)
+                m.quotes_redundant = len(mine & theirs) / len(mine) >= SUPERSEDE_COVER
     segments = sorted(seg_rows.values(), key=lambda s: (s["key"], s["unit"], s["kind"] != "new"))
 
     def set_parent(child: str, parent: str, basis: str) -> None:

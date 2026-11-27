@@ -398,9 +398,14 @@ def _run_reranks(cfg, rerank_cfgs, scorers, cache_dir, chunks, queries, writer, 
     for rr in rerank_cfgs:
         if not rr.get("model"):
             continue
-        key = (rr["model"], int(rr.get("max_length", 512)))
+        key = (rr["model"], int(rr.get("max_length", 512)), rr.get("revision"), rr.get("local_model_path"))
         if key not in scorers:
-            scorers[key] = CrossEncoderScorer(rr["model"], cache_dir, max_length=key[1], batch_size=int(rr.get("batch_size", 32)))
+            # revision / local_model_path pin the cross-encoder like EmbeddingSpec pins the embedder
+            # (configs/bench/general_v1.json); older configs without them behave as before.
+            scorers[key] = CrossEncoderScorer(
+                rr["model"], cache_dir, max_length=key[1], batch_size=int(rr.get("batch_size", 32)),
+                revision=rr.get("revision"), local_model_path=rr.get("local_model_path"),
+            )
         scorer = scorers[key]
         depths = sorted({int(d) for d in _as_list(rr.get("depths", [30]))})
         rerank_scores = {

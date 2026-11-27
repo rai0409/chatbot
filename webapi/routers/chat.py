@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 import config
 from rag_core import answer_cache
@@ -59,7 +59,7 @@ from rag_core.qa import (
 from rag_core.question_normalization import normalize_question_for_exact_match
 from rag_core.retrieval import RetrievedChunk, normalize_tenant_id
 from rag_core.source_metadata import normalize_citation
-from rag_core.tenant_profile import resolve_tenant_product_profile
+from rag_core.tenant_profile import resolve_tenant_product_profile, tenant_chat_policy
 from rag_core.utils import ensure_openai_client
 from webapi import conversation_store
 from webapi import metrics_registry
@@ -86,6 +86,7 @@ from rag_core.audit_log import set_audit_actor
 
 
 router = APIRouter()
+_ANSWER_CACHE_NAMESPACE = ("profile-validation-v1", "mail-quarantine-v2")
 
 # Approved-QA indexes by (file path, tenant, file version). One dict under one
 # lock: the former pair of module globals was written in two steps, so a
@@ -127,6 +128,17 @@ class ChatRequest(BaseModel):
     thread_id: Optional[str] = Field(None, max_length=128)
     # "Look deeper": more candidates, multi-query on for this request, no answer cache.
     deep: bool = False
+
+    @validator("thread_id")
+    def _validate_thread_id(cls, value):
+        if value is not None:
+            from webapi.routers.conversations import validate_thread_id
+
+            try:
+                validate_thread_id(value)
+            except HTTPException as exc:
+                raise ValueError("invalid thread_id") from exc
+        return value
 
 
 class SearchRequest(BaseModel):
@@ -321,6 +333,11 @@ def _embedding_client():
 
 
 def _generation_error_payload(exc: Exception) -> tuple[int, Dict[str, str]] | None:
+    if isinstance(exc, LlmNotAllowedForTenant):
+        return 503, {
+            "detail": "chat generation unavailable",
+            "error_type": "llm_not_allowed_for_tenant",
+        }
     status_code = getattr(exc, "status_code", None)
     code = str(getattr(exc, "code", "") or "").lower()
     message = str(exc).lower()
@@ -346,7 +363,11 @@ def _approved_qa_lookup(question: str, tenant_id: str = "default") -> ApprovedAn
     index = _approved_qa_index_for(tenant_id)
     if index is None:
         return None
-    return lookup_approved_answer(index, question, tenant_id=normalize_tenant_id(tenant_id))
+    answer = lookup_approved_answer(index, question, tenant_id=normalize_tenant_id(tenant_id))
+    if answer is not None and not _approved_answer_sources_exist(answer):
+        metrics_registry.increment("chat_approved_dropped_total", "source_missing")
+        return None
+    return answer
 
 
 def _approved_qa_index_for(tenant_id: str = "default"):
@@ -511,10 +532,71 @@ def _approved_exact_hit_to_chat_payload(hit: dict, question: str, tenant_id: str
     }
 
 
+# index object -> (index, {qa_id: record}, frozenset(qa_id)); the approved-QA index is cached per file version
+# (_approved_qa_index_for), so this view is built once per version instead of once per request.
+_LIVE_VIEW_CACHE: Dict[int, tuple] = {}
+_LIVE_VIEW_CACHE_MAX = 64
+_LIVE_VIEW_LOCK = threading.Lock()
+
+
+def _live_view(index) -> tuple:
+    key = id(index)
+    with _LIVE_VIEW_LOCK:
+        entry = _LIVE_VIEW_CACHE.get(key)
+        if entry is not None and entry[0] is index:  # `is`: a reused id() of a collected index never matches
+            return entry
+        records = {record.qa_id: record for record in index.records}
+        entry = (index, records, frozenset(records))
+        if len(_LIVE_VIEW_CACHE) >= _LIVE_VIEW_CACHE_MAX:
+            _LIVE_VIEW_CACHE.clear()
+        _LIVE_VIEW_CACHE[key] = entry
+        return entry
+
+
+def _live_approved_validator(tenant_id: str):
+    """hit -> bool: the exact-index hit is still an approved record of the live approved-QA file, with the same
+    answer (an edit returns a record to draft; a re-approved edit changes the answer). Fail closed: without a live
+    index nothing passes."""
+    index = _approved_qa_index_for(tenant_id)
+    live = _live_view(index)[1] if index is not None else {}
+
+    def check(hit: dict) -> bool:
+        meta = hit.get("metadata") or {}
+        qa_id = str(meta.get("qa_id") or meta.get("approved_qa_id") or "").strip()
+        record = live.get(qa_id)
+        if record is None:
+            return False
+        answer = str(meta.get("approved_answer") or meta.get("answer_text") or hit.get("answer_text") or "").strip()
+        return answer == str(record.approved_answer or "").strip()
+
+    return check
+
+
+def _live_approved_qa_ids(tenant_id: str):
+    """qa_ids approved right now for the tenant, or None when approved QA is off (nothing to check against)."""
+    index = _approved_qa_index_for(tenant_id)
+    if index is None:
+        return None
+    return _live_view(index)[2]
+
+
+def _live_similar_kwargs(tenant_id: str) -> Dict[str, Any]:
+    """live_qa_ids for the similar-candidate search when the live approved-QA file is on (rows of records that
+    were rejected, edited back to draft or deleted after ingest are dropped); nothing otherwise."""
+    live = _live_approved_qa_ids(tenant_id)
+    return {} if live is None else {"live_qa_ids": live}
+
+
+def _approved_answer_sources_exist(answer: ApprovedAnswer) -> bool:
+    from rag_core.approved_qa_exact_lookup import cited_sources_exist
+
+    return cited_sources_exist(answer.tenant_id, [c.source_doc for c in answer.approved_citations if c.source_doc])
+
+
 def _approved_exact_chat_lookup(question: str, tenant_id: str) -> Optional[Dict[str, Any]]:
     if not getattr(config, "APPROVED_QA_ENABLED", False):
         return None
-    hits = lookup_approved_qa_exact(question, tenant_id=tenant_id, limit=1)
+    hits = lookup_approved_qa_exact(question, tenant_id=tenant_id, limit=1, live_validator=_live_approved_validator(tenant_id))
     if not hits:
         return None
     return _approved_exact_hit_to_chat_payload(hits[0], question, tenant_id)
@@ -1039,6 +1121,225 @@ def _annotate_chat_profile(event: Dict[str, Any], runtime_profile: Optional[Dict
 
 
 
+# --- /chat answer policy (2026-11) -------------------------------------------------------------------------------
+# The tenant's answer policy is enforced on /chat, /chat/stream and /search WITHOUT an opt-in flag:
+#   * tenant status disabled, or an unknown tenant under unknown_tenant_policy=reject  -> 403
+#   * answer_policy.allow_exact_answer=false (product profile, or the tenant's chat_policy) -> no approved-QA answer
+#   * human_review_on_low_confidence=true -> a guarded / fallback / unvalidated answer is marked review_required
+#   * allow_llm_calls=false in the tenant's chat_policy -> extractive answer, no LLM call
+# CHAT_USE_TENANT_PROFILE (default false) still gates what it always gated (the candidate clamp) and, in addition,
+# the product profile's cost_policy.allow_llm_calls: every shipped product profile says false (they were written for
+# the approved-similar preview), so enforcing it unconditionally would silently switch LLM generation off for every
+# tenant of an LLM deployment. A tenant that must never reach an LLM gets "chat_policy": {"allow_llm_calls": false}
+# in configs/product_tenants/default.json, which is enforced regardless of the flag. See docs/operations/profile_engine.md.
+_POLICY_DEFAULTS: Dict[str, Any] = {
+    "allow_exact_answer": True,
+    "allow_llm_calls": True,
+    "human_review_on_low_confidence": False,
+    "fallback_to_no_answer": True,
+}
+
+
+def _profile_answer_policy(profile_name: str) -> Optional[Dict[str, Any]]:
+    """(answer_policy, cost_policy) of a product profile that loads as itself, else None."""
+    try:
+        policy = build_route_policy(load_product_profile(profile_name))
+    except Exception:  # noqa: BLE001  profile load failure is logged; no profile applied
+        logging.exception("chat answer policy: product profile %s failed to load", profile_name)
+        return None
+    if str(policy.get("profile_name") or "") != profile_name:
+        return None
+    return {"answer_policy": dict(policy.get("answer_policy") or {}), "cost_policy": dict(policy.get("cost_policy") or {})}
+
+
+def resolve_chat_answer_policy(tenant_id, *, customer_id=None) -> Dict[str, Any]:
+    """The answer policy of a tenant for /chat (see the block comment above). Never raises.
+
+    Fails CLOSED: a tenant mapping (or chat_policy block) that cannot be read blocks the request
+    (block_reason policy_unavailable -> 503; logged and counted in chat_answer_policy_error_total), and a product
+    profile that cannot be loaded turns approved answers off. A missing mapping file is not an error (the
+    resolution falls back to the default tenant behaviour); a mapping that disables the tenant always blocks."""
+    tenant = str(tenant_id or "").strip() or "default"
+    policy: Dict[str, Any] = {**_POLICY_DEFAULTS, "blocked": False, "block_reason": None, "decision": None,
+                              "tenant_status": None, "profile_name": None, "sources": []}
+    try:
+        resolution = resolve_tenant_product_profile(tenant, customer_id=customer_id, strict=False)
+    except Exception:  # noqa: BLE001  fail closed: policy_unavailable blocks the answer, logged
+        logging.exception("chat answer policy: tenant profile resolution failed")
+        metrics_registry.increment("chat_answer_policy_error_total", "resolution")
+        policy.update(decision="resolution_error", blocked=True, block_reason="policy_unavailable")
+        return policy
+    decision = str(resolution.get("decision") or "") or "resolved"
+    policy["decision"] = decision
+    policy["tenant_status"] = resolution.get("tenant_status")
+    if decision in {"disabled", "rejected"}:
+        policy["blocked"] = True
+        policy["block_reason"] = "tenant_disabled" if decision == "disabled" else "tenant_rejected"
+        return policy
+
+    profile_name = str(resolution.get("resolved_profile") or resolution.get("default_profile") or _CHAT_SAFE_PROFILE).strip()
+    loaded = _profile_answer_policy(profile_name)
+    if loaded is None and profile_name != _CHAT_SAFE_PROFILE:
+        profile_name = _CHAT_SAFE_PROFILE  # fail closed to the safest profile, as resolve_chat_runtime_profile does
+        loaded = _profile_answer_policy(profile_name)
+    if loaded is None:
+        # No usable profile at all: nothing says exact answers are allowed (fail closed).
+        metrics_registry.increment("chat_answer_policy_error_total", "profile")
+        policy["allow_exact_answer"] = False
+    else:
+        answer, cost = loaded["answer_policy"], loaded["cost_policy"]
+        policy["profile_name"] = profile_name
+        policy["sources"].append("product_profile")
+        policy["allow_exact_answer"] = answer.get("allow_exact_answer") is not False
+        policy["human_review_on_low_confidence"] = answer.get("human_review_on_low_confidence") is True
+        policy["fallback_to_no_answer"] = answer.get("fallback_to_no_answer") is not False
+        if config.CHAT_USE_TENANT_PROFILE:
+            policy["allow_llm_calls"] = cost.get("allow_llm_calls") is True
+    try:
+        explicit = tenant_chat_policy(tenant)
+    except Exception:  # noqa: BLE001  fail closed: policy_unavailable blocks the answer, logged
+        logging.exception("chat answer policy: tenant chat_policy unreadable")
+        metrics_registry.increment("chat_answer_policy_error_total", "chat_policy")
+        policy.update(blocked=True, block_reason="policy_unavailable")
+        return policy
+    if explicit:
+        policy["sources"].append("tenant_chat_policy")
+        # A tenant block narrows only: it can switch answers/LLM off and review on, never the reverse.
+        if explicit.get("allow_exact_answer") is False:
+            policy["allow_exact_answer"] = False
+        if explicit.get("allow_llm_calls") is False:
+            policy["allow_llm_calls"] = False
+        if explicit.get("human_review_on_low_confidence") is True:
+            policy["human_review_on_low_confidence"] = True
+    return policy
+
+
+def _enforce_chat_answer_policy(policy: Dict[str, Any], *, tenant_id: str, endpoint: str, req_question: str = "",
+                                trace_id: Optional[str] = None) -> None:
+    if not policy.get("blocked"):
+        return
+    reason = str(policy.get("block_reason") or "tenant_blocked")
+    metrics_registry.increment("chat_tenant_blocked_total", reason)
+    append_audit_event(endpoint, {
+        "request_id": None, "trace_id": trace_id, "tenant_id": tenant_id, "question": req_question,
+        "error": "tenant blocked by answer policy", "error_type": reason,
+    })
+    if reason == "policy_unavailable":
+        raise HTTPException(status_code=503, detail="tenant policy unavailable")
+    detail = "tenant is disabled" if reason == "tenant_disabled" else "tenant is not allowed"
+    raise HTTPException(status_code=403, detail=detail)
+
+
+def _llm_mode_for(tenant_id: str) -> str:
+    try:
+        from rag_core import llm
+
+        return llm.generation_mode(tenant_id)
+    except Exception:  # noqa: BLE001  only picks between llm / extractive; "llm" then fails closed in the caller
+        logging.warning("generation mode of tenant could not be resolved; using the configured mode", exc_info=True)
+        return config.resolve_chat_generation_mode()
+
+
+_MISSING_HOOK_LOGGED = threading.Event()
+
+
+def _log_missing_extractive_hook() -> None:
+    if not _MISSING_HOOK_LOGGED.is_set():
+        _MISSING_HOOK_LOGGED.set()
+        logging.warning("rag_core.llm.extractive_only is not available: tenants with allow_llm_calls=false are "
+                        "refused (503) instead of being answered extractively when the LLM mode is on")
+
+
+class LlmNotAllowedForTenant(RuntimeError):
+    """The tenant policy forbids LLM calls and this build cannot force an extractive answer per request."""
+
+
+def _extractive_only_context(policy: Dict[str, Any], tenant_id: str):
+    """A context-manager factory that keeps the request free of LLM calls when the policy says so.
+
+    Uses rag_core.llm.extractive_only() (request-scoped) when available. Without it, a request that would use the
+    LLM is refused (fail closed: LlmNotAllowedForTenant -> 503) rather than calling a model the tenant forbids."""
+    from contextlib import nullcontext
+
+    if policy.get("allow_llm_calls", True):
+        return nullcontext
+    from rag_core import llm
+
+    # rag_core.llm has no request-scoped extractive_only() yet: say so once instead of falling back silently.
+    forced = getattr(llm, "extractive_only", None)
+    if callable(forced):
+        return forced
+    _log_missing_extractive_hook()
+    if _llm_mode_for(tenant_id) == "llm":
+        raise LlmNotAllowedForTenant("LLM calls are not allowed for this tenant")
+    return nullcontext
+
+
+def _iterate_in_context(context_factory, iterator):
+    """Re-enter a context manager around each step of a generator (a streamed response runs each step in a
+    worker thread with a fresh context, so a ContextVar set once would not stay set)."""
+    while True:
+        with context_factory():
+            try:
+                item = next(iterator)
+            except StopIteration:
+                return
+        yield item
+
+
+def _is_low_confidence(payload: Dict[str, Any]) -> bool:
+    mode = str(payload.get("answer_mode") or "")
+    if payload.get("guard_reason") or payload.get("used_fallback") or payload.get("abstained"):
+        return True
+    if "fallback" in mode or "no_answer" in mode:
+        return True
+    validation = payload.get("profile_validation")
+    return isinstance(validation, dict) and validation.get("passed") is False and not validation.get("skipped")
+
+
+def _mark_for_review(payload: Dict[str, Any], event: Optional[Dict[str, Any]], policy: Dict[str, Any]) -> bool:
+    """human_review_on_low_confidence: mark the answer (response and audit event) for the review queue.
+
+    The review queue is built offline from audit events (rag_core/review_queue.py), so the mark is the
+    review_required / review_reason fields of the chat event."""
+    if not policy.get("human_review_on_low_confidence") or not _is_low_confidence(payload):
+        return False
+    payload["review_required"] = True
+    payload["review_reason"] = "low_confidence"
+    if event is not None:
+        event["review_required"] = True
+        event["review_reason"] = "low_confidence"
+    metrics_registry.increment("chat_review_required_total", "low_confidence")
+    return True
+
+
+def _approved_lookups_allowed(policy: Dict[str, Any], staging_collection: Optional[str]) -> bool:
+    return not staging_collection and bool(policy.get("allow_exact_answer", True))
+
+
+def _keyword_index_refreshing() -> bool:
+    """True while the served keyword index is rebuilt in the background (the previous index is still answering,
+    but the cache key already names the new corpus file): such an answer must not be cached under that key."""
+    from rag_core.retrieval import keyword_index_refreshing
+
+    try:
+        return bool(keyword_index_refreshing())
+    except Exception:  # noqa: BLE001  unknown refresh state: the answer is not cached, logged
+        logging.warning("keyword index refresh state unknown; the answer is not cached", exc_info=True)
+        return True  # unknown: do not cache
+
+
+def _cacheable(payload: Dict[str, Any], guard_reason: Any, used_fallback: Any) -> bool:
+    if guard_reason is not None or used_fallback or not _cache_validation_passed(payload):
+        return False
+    if payload.get("review_required"):
+        return False
+    if _keyword_index_refreshing():
+        metrics_registry.increment("chat_cache_skip_total", "keyword_index_refreshing")
+        return False
+    return True
+
+
 def _rag_profiles_allowed_for_tenant(tenant_id: str) -> frozenset:
     # RAG_PROFILE_TENANT_MAP: tenant_a=profile1|profile2,tenant_b=profile3
     allowed: frozenset = frozenset()
@@ -1090,11 +1391,17 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
     tenant_id = normalize_tenant_id(req.tenant_id)
     enforce_tenant_authorization(api_auth, tenant_id)
     set_audit_actor(api_auth)
+    answer_policy = resolve_chat_answer_policy(tenant_id)
+    _enforce_chat_answer_policy(answer_policy, tenant_id=tenant_id, endpoint="chat", req_question=req.question,
+                                trace_id=req.trace_id)
     staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
     rag_profile_id = _resolve_rag_profile_id(req, staging_collection, tenant_id)
     question_for_answer, conversation_trace = _conversation_question(req, api_auth, tenant_id)
+    # Approved answers are looked up with the question that is answered: a follow-up completed from the
+    # conversation (申請方法は？ -> 有給 申請方法は？) must not hit an unrelated approved QA by its bare wording.
+    approved_allowed = _approved_lookups_allowed(answer_policy, staging_collection)
     try:
-        approved = None if staging_collection else _approved_qa_lookup(req.question, tenant_id=tenant_id)
+        approved = _approved_qa_lookup(question_for_answer, tenant_id=tenant_id) if approved_allowed else None
         if approved is not None:
             payload = _approved_chat_payload(approved)
             approved_mode = _approved_answer_mode(approved)
@@ -1114,7 +1421,9 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
             _record_chat_outcome_metrics(answer_mode=approved_mode)
             return payload
 
-        approved_exact_payload = None if staging_collection else _approved_exact_chat_lookup(req.question, tenant_id)
+        approved_exact_payload = (
+            _approved_exact_chat_lookup(question_for_answer, tenant_id) if approved_allowed else None
+        )
         if approved_exact_payload is not None:
             approved_exact_payload.update(_collection_meta(staging_collection))
             append_audit_event(
@@ -1141,7 +1450,8 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         if req.deep:
             effective_top_k = min(effective_top_k * 2, _MAX_TOP_K)
         cache_key = None
-        if answer_cache.enabled() and not staging_collection and rag_profile_id == "default" and not req.deep:
+        # Any rag profile is cacheable: its files are part of the key (answer_cache._profile_state).
+        if answer_cache.enabled() and not staging_collection and not req.deep:
             cache_key = answer_cache.build_key(
                 question_for_answer,
                 top_k=effective_top_k,
@@ -1149,7 +1459,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
                 tenant_id=tenant_id,
                 rag_profile_id=rag_profile_id,
             )
-            cache_key = (*cache_key, "profile-validation-v1", "mail-quarantine-v1")
+            cache_key = (*cache_key, *_ANSWER_CACHE_NAMESPACE)
             cached = answer_cache.get(cache_key)
             if cached is not None and not _cache_validation_passed(cached):
                 cached = None
@@ -1182,9 +1492,10 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
                                          trace_id=req.trace_id, source="cache")
                 return hit
 
+        llm_context = _extractive_only_context(answer_policy, tenant_id)
         client = (
             ensure_openai_client(base_url=config.OPENAI_BASE_URL)
-            if config.resolve_chat_generation_mode() == "llm"
+            if config.resolve_chat_generation_mode() == "llm" and answer_policy.get("allow_llm_calls", True)
             else None
         )
         answer_kwargs: Dict[str, Any] = {
@@ -1196,7 +1507,7 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         if staging_collection:
             answer_kwargs["collection_name"] = staging_collection
         answer_kwargs["rag_profile_id"] = rag_profile_id
-        with search_mode.deep_mode(bool(req.deep)):
+        with search_mode.deep_mode(bool(req.deep)), llm_context():
             ans, trace = answer_query_with_trace(question_for_answer, **answer_kwargs)
         chat_event = {
             "request_id": trace.get("request_id"),
@@ -1214,7 +1525,8 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         }
         _annotate_collection_event(chat_event, staging_collection)
         _annotate_chat_profile(chat_event, runtime_profile)
-        append_audit_event("chat", chat_event)
+        if not answer_policy.get("allow_llm_calls", True):
+            chat_event["llm_allowed"] = False
         _record_stage_latency_metrics(trace, citations_count=len(ans.citations or []), guard_reason=ans.guard_reason)
         _record_chat_outcome_metrics(
             answer_mode=trace.get("answer_mode")
@@ -1238,7 +1550,9 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         # The screen says "the AI is unavailable, this is the text of the documents" for this answer (S3/S5).
         payload["service_notice"] = records_hook.service_notice(trace)
         payload["profile_validation"] = _profile_validation_or_skipped(trace)
-        if cache_key is not None and ans.guard_reason is None and not ans.used_fallback and _cache_validation_passed(payload):
+        _mark_for_review(payload, chat_event, answer_policy)
+        append_audit_event("chat", chat_event)
+        if cache_key is not None and _cacheable(payload, ans.guard_reason, ans.used_fallback):
             # Only clean grounded answers are cacheable; guard/no-answer and
             # extractive-fallback responses are never cached.
             # Stage 14: without the caller's conversation context (it holds that
@@ -1300,15 +1614,20 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
     # tenant gets a plain 403 and no stream ever starts.
     enforce_tenant_authorization(api_auth, tenant_id)
     set_audit_actor(api_auth)
+    # The tenant answer policy of /chat; a blocked tenant gets a plain 403 before the stream starts.
+    answer_policy = resolve_chat_answer_policy(tenant_id)
+    _enforce_chat_answer_policy(answer_policy, tenant_id=tenant_id, endpoint="chat", req_question=req.question,
+                                trace_id=req.trace_id)
     staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
     # Stage 14: the same profile resolution as /chat (400/403 before the stream starts).
     rag_profile_id = _resolve_rag_profile_id(req, staging_collection, tenant_id)
     question_for_answer, conversation_trace = _conversation_question(req, api_auth, tenant_id)
+    approved_allowed = _approved_lookups_allowed(answer_policy, staging_collection)
 
     def _events():
         set_audit_actor(api_auth)
         try:
-            approved = None if staging_collection else _approved_qa_lookup(req.question, tenant_id=tenant_id)
+            approved = _approved_qa_lookup(question_for_answer, tenant_id=tenant_id) if approved_allowed else None
             if approved is not None:
                 payload = _approved_chat_payload(approved)
                 approved_mode = _approved_answer_mode(approved)
@@ -1329,7 +1648,9 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                 yield _sse_event("approved", payload)
                 return
 
-            approved_exact_payload = None if staging_collection else _approved_exact_chat_lookup(req.question, tenant_id)
+            approved_exact_payload = (
+                _approved_exact_chat_lookup(question_for_answer, tenant_id) if approved_allowed else None
+            )
             if approved_exact_payload is not None:
                 approved_exact_payload.update(_collection_meta(staging_collection))
                 append_audit_event(
@@ -1359,13 +1680,13 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                 effective_top_k = min(effective_top_k * 2, _MAX_TOP_K)
             # Stage 14: the answer cache of /chat (same key, same rules); a deep request never uses it.
             cache_key = None
-            if answer_cache.enabled() and not staging_collection and rag_profile_id == "default" and not req.deep:
+            if answer_cache.enabled() and not staging_collection and not req.deep:
                 cache_key = answer_cache.build_key(
                     question_for_answer, top_k=effective_top_k,
                     max_context_chars=effective_max_context_chars, tenant_id=tenant_id,
                     rag_profile_id=rag_profile_id,
                 )
-                cache_key = (*cache_key, "profile-validation-v1", "mail-quarantine-v1")
+                cache_key = (*cache_key, *_ANSWER_CACHE_NAMESPACE)
                 cached = answer_cache.get(cache_key)
                 if cached is not None and not _cache_validation_passed(cached):
                     cached = None
@@ -1388,9 +1709,10 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                                              payload=hit, trace_id=req.trace_id, source="cache")
                     yield _sse_event("final", hit)
                     return
+            llm_context = _extractive_only_context(answer_policy, tenant_id)
             client = (
                 ensure_openai_client(base_url=config.OPENAI_BASE_URL)
-                if config.resolve_chat_generation_mode() == "llm"
+                if config.resolve_chat_generation_mode() == "llm" and answer_policy.get("allow_llm_calls", True)
                 else None
             )
             result = None
@@ -1404,9 +1726,9 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
             }
             if staging_collection:
                 stream_kwargs["collection_name"] = staging_collection
-            for name, payload in search_mode.iterate_in_mode(
+            for name, payload in _iterate_in_context(llm_context, search_mode.iterate_in_mode(
                 bool(req.deep), answer_query_stream(question_for_answer, **stream_kwargs)
-            ):
+            )):
                 if name == "final":
                     result, trace = payload
                     final_payload = result.to_dict()
@@ -1422,7 +1744,8 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                     final_payload["interpretation"] = trace.get("interpretation")
                     final_payload["service_notice"] = records_hook.service_notice(trace)
                     final_payload["profile_validation"] = _profile_validation_or_skipped(trace)
-                    if cache_key is not None and result.guard_reason is None and not result.used_fallback and _cache_validation_passed(final_payload):
+                    _mark_for_review(final_payload, None, answer_policy)
+                    if cache_key is not None and _cacheable(final_payload, result.guard_reason, result.used_fallback):
                         answer_cache.put(cache_key, {
                             k: v for k, v in final_payload.items()
                             if k not in {"conversation_context", "trace_id", "request_id", "feedback_token"}
@@ -1448,6 +1771,11 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                 }
                 _annotate_collection_event(stream_event, staging_collection)
                 _annotate_chat_profile(stream_event, runtime_profile)
+                if final_payload.get("review_required"):
+                    stream_event["review_required"] = True
+                    stream_event["review_reason"] = final_payload.get("review_reason")
+                if not answer_policy.get("allow_llm_calls", True):
+                    stream_event["llm_allowed"] = False
                 append_audit_event("chat", stream_event)
                 _record_stage_latency_metrics(
                     trace,
@@ -1714,6 +2042,7 @@ def chat_product_preview(req: ProductPreviewChatRequest, api_auth: ApiAuthContex
                 client=client,
                 tenant_id=tenant_id,
                 top_k=effective_top_k,
+                **_live_similar_kwargs(tenant_id),
             )
             preview_candidates, feedback_preview_meta, feedback_preview_warnings = apply_feedback_preview_rerank(
                 raw_candidates[:effective_top_k],
@@ -1901,6 +2230,9 @@ def search(req: SearchRequest, api_auth: ApiAuthContext = Depends(require_api_au
     tenant_id = normalize_tenant_id(req.tenant_id)
     enforce_tenant_authorization(api_auth, tenant_id)
     set_audit_actor(api_auth)
+    search_policy = resolve_chat_answer_policy(tenant_id)
+    _enforce_chat_answer_policy(search_policy, tenant_id=tenant_id, endpoint="search", req_question=req.query,
+                                trace_id=req.trace_id)
     staging_collection = _resolve_staging_collection(req.staging_collection, tenant_id=tenant_id)
     try:
         top_k = req.top_k or config.TOP_K
@@ -1908,8 +2240,10 @@ def search(req: SearchRequest, api_auth: ApiAuthContext = Depends(require_api_au
         # Approved QA exact lookup:
         # 確定QAと質問が完全一致する場合は、vector検索より前に必ず返す。
         # staging_collection指定時はステージング検証を優先するため exact bypass はしない。
-        if not staging_collection and getattr(config, "APPROVED_QA_ENABLED", False):
-            exact_hits = lookup_approved_qa_exact(req.query, tenant_id=tenant_id, limit=top_k)
+        # テナントの answer_policy.allow_exact_answer=false なら使わない。現在も承認済みの項目だけを返す。
+        if _approved_lookups_allowed(search_policy, staging_collection) and getattr(config, "APPROVED_QA_ENABLED", False):
+            exact_hits = lookup_approved_qa_exact(req.query, tenant_id=tenant_id, limit=top_k,
+                                                  live_validator=_live_approved_validator(tenant_id))
             if exact_hits:
                 return {
                     **_collection_meta(staging_collection),
@@ -1997,6 +2331,7 @@ def search_debug(req: SearchDebugRequest, api_auth: ApiAuthContext = Depends(req
                 tenant_id=tenant_id,
                 top_k=req.approved_similar_top_k
                 or getattr(config, "APPROVED_SIMILAR_CANDIDATES_TOP_K", 5),
+                **_live_similar_kwargs(tenant_id),
             )
         response = {
             "request_id": trace.get("request_id"),

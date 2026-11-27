@@ -368,12 +368,46 @@ def load_approved_qa(path: str | Path, tenant_id: str = "default") -> ApprovedQA
     )
 
 
-# The query-rule loader caches by path. Serialize colloquial lookups and clear
-# that cache before building the map, so edits to global or tenant rules take
-# effect even when the ApprovedQAIndex itself is unchanged.
+# The query-rule loader caches by path. The strong-key map of an index is built
+# once per (index object, tenant, rule-file states) and reused; when a rule file
+# changes (path, mtime, ctime, size) the loader cache is cleared and the map is
+# rebuilt, so edits to global or tenant rules still take effect for an unchanged
+# ApprovedQAIndex — without clearing caches and rebuilding on every request.
 from threading import RLock
 
 _COLLOQUIAL_LOCK = RLock()
+# (id(index), tenant) -> (index, rule_states, map). The index object itself is kept
+# so a reused id() of a collected index can never return another index's map.
+_STRONG_MAP_CACHE: Dict[Tuple[int, str], Tuple[Any, Tuple, Dict[Tuple[str, str], Any]]] = {}
+_STRONG_MAP_CACHE_MAX = 64
+_LAST_RULE_STATES: Dict[str, Tuple] = {}
+
+
+def _rule_file_states(tenant_id: str) -> Tuple:
+    from rag_core import query_preprocess
+
+    states = []
+    for path in query_preprocess._rule_files(tenant_id):
+        try:
+            st = os.stat(path)
+            states.append((path, st.st_mtime_ns, st.st_ctime_ns, st.st_size))
+        except OSError:
+            states.append((path, "missing"))
+    return tuple(states)
+
+
+def _cached_strong_key_map(index: "ApprovedQAIndex", tenant_id: str, rule_states: Tuple) -> Dict[Tuple[str, str], Any]:
+    key = (id(index), tenant_id)
+    entry = _STRONG_MAP_CACHE.get(key)
+    if entry is not None and entry[0] is index and entry[1] == rule_states:
+        return entry[2]
+    built = _strong_key_map(index)
+    if len(_STRONG_MAP_CACHE) >= _STRONG_MAP_CACHE_MAX:
+        _STRONG_MAP_CACHE.clear()
+    _STRONG_MAP_CACHE[key] = (index, rule_states, built)
+    return built
+
+
 _SAFE_PREFIX = re.compile(r"^(?:(?:あの|あのー|えっと|えーと|ええと|すみません|すいません|こんにちは|こんばんは|お疲れ様です|お疲れさまです|おつかれさまです)[、,。\s]*)*$")
 _SAFE_SUFFIX = re.compile(r"^(?:(?:を|が)?教えて(?:ください|下さい|ほしい|欲しい)?|おしえて(?:ー|〜)?|(?:なんですけど|なんだけど|んですけど|んだけど)|[?？。!！、,\s])*$")
 
@@ -424,17 +458,23 @@ def _lookup_colloquial(index: ApprovedQAIndex, question: str, tenant_id: str) ->
     from rag_core.question_normalization import exact_match_key
 
     with _COLLOQUIAL_LOCK:
-        query_preprocess._load_rules.cache_clear()
-        core = _colloquial_core(question or "", tenant_id)
-        strong = exact_match_key(core)
-        if not core or not strong:
-            return None
-        hit = _strong_key_map(index).get((tenant_id, strong))
-        if hit is None or hit[3] != core:
-            return None
-        # An unregistered variation is colloquial even if its source is a
-        # formal alias. Only a direct formal alias has match_type="alias".
-        return replace(hit[0], match_type="colloquial", matched_alias=None)
+        rule_states = _rule_file_states(tenant_id)
+        if _LAST_RULE_STATES.get(tenant_id) != rule_states:
+            # A rule file changed (or first use): drop the loader's per-path cache once.
+            query_preprocess._load_rules.cache_clear()
+            _STRONG_MAP_CACHE.clear()
+            _LAST_RULE_STATES[tenant_id] = rule_states
+        strong_map = _cached_strong_key_map(index, tenant_id, rule_states)
+    core = _colloquial_core(question or "", tenant_id)
+    strong = exact_match_key(core)
+    if not core or not strong:
+        return None
+    hit = strong_map.get((tenant_id, strong))
+    if hit is None or hit[3] != core:
+        return None
+    # An unregistered variation is colloquial even if its source is a
+    # formal alias. Only a direct formal alias has match_type="alias".
+    return replace(hit[0], match_type="colloquial", matched_alias=None)
 
 
 def lookup_approved_answer(

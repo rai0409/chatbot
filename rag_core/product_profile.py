@@ -70,12 +70,28 @@ def _safe_profile_name(profile_name: str | None) -> str | None:
     return name
 
 
+# Parsed files by (path, mtime_ns, size): /chat resolves the tenant policy on every request. A copy is returned,
+# so callers may change it; an edited file is read again on the next call.
+_FILE_CACHE: Dict[tuple, Dict[str, Any]] = {}
+
+
 def load_product_profile_from_path(path: Path | str) -> Dict[str, Any]:
     profile_path = Path(path)
+    try:
+        st = profile_path.stat()
+        key = (str(profile_path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is not None and key in _FILE_CACHE:
+        return copy.deepcopy(_FILE_CACHE[key])
     with profile_path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
     if not isinstance(payload, dict):
         raise ValueError(f"product profile must be a JSON object: {profile_path}")
+    if key is not None:
+        if len(_FILE_CACHE) > 64:
+            _FILE_CACHE.clear()
+        _FILE_CACHE[key] = copy.deepcopy(payload)
     return copy.deepcopy(payload)
 
 

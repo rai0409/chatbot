@@ -1,6 +1,7 @@
 """Rule-based variants of a question and the reciprocal rank fusion of their results (step 3-2)."""
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Sequence
 
 import config
@@ -39,19 +40,29 @@ def build_variants(
             out.append({"query": query.strip(), "kind": kind})
 
     normalized = normalize_for_index(base)
-    cleaned, _applied = query_preprocess.strip_colloquial(normalized, tenant_id=tenant_id)
+    cleaned, _applied = query_preprocess.strip_colloquial(normalized, tenant_id=tenant_id, rewrite=True)
     add(cleaned, "cleaned")
     terms = extract_salient_terms_ja(base)
     if terms:
         add(" ".join(terms), "core_terms")
+    tokens = None
     for group in query_preprocess._synonym_groups(profile_id):
-        present = next((term for term in group if term and term in normalized), None)
+        if tokens is None and any(t and len(t) <= query_preprocess._SHORT_TERM_MAX_CHARS for t in group):
+            tokens = query_preprocess._query_term_set(normalized)
+        present = next((term for term in group if query_preprocess.term_in_query(term, normalized, tokens)), None)
         if present is None:
             continue
         for other in group:
             if other != present:
-                add(normalized.replace(present, other, 1), "synonym")
+                add(_replace_term(normalized, present, other), "synonym")
     return out[: max(1, limit)]
+
+
+def _replace_term(text: str, term: str, other: str) -> str:
+    """Replace the first occurrence; a short alphanumeric term only as a whole token."""
+    if len(term) <= query_preprocess._SHORT_TERM_MAX_CHARS and re.fullmatch(r"[a-z0-9._:/-]+", term):
+        return re.sub(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", lambda _m: other, text, count=1)
+    return text.replace(term, other, 1)
 
 
 def _key(chunk: RetrievedChunk) -> str:

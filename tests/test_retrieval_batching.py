@@ -13,7 +13,7 @@ class FakeQueryCollection:
     def query(self, query_embeddings, n_results, where=None):
         self.queries.append(list(query_embeddings))
         return {
-            "documents": [["パスワード変更の手順"]],
+            "ids": [["c1"]], "documents": [["パスワード変更の手順"]],
             "metadatas": [[{"id": "c1", "source_doc": "doc.pdf", "chunk_role": "child"}]],
             "distances": [[0.2]],
         }

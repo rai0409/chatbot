@@ -44,3 +44,11 @@ no secrets. Components: Prometheus pack (Prompt049), scheduled runner
   delivery (use real env in the customer environment), or HA. Wire to the
   customer's real monitor/endpoints during onboarding before claiming
   "monitoring proven in production".
+
+## 2026-11 additions (sign off each)
+
+- [ ] `monitoring_runner.sh` notifies once on a state change (no repeat while unchanged) and once on recovery.
+- [ ] Stop the runner's python (`PYTHON=/nonexistent`): the unit fails and `kuraden-monitor-failure.service` notifies.
+- [ ] A leftover running operation becomes `interrupted` at API start and raises a CRITICAL alert.
+- [ ] A backup older than `BACKUP_MAX_AGE_HOURS` and a failed backup raise alerts.
+- [ ] `/ready` shows `fingerprint` and returns 503 when the generation pointer is unreadable.

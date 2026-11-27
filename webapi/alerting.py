@@ -47,6 +47,11 @@ DEFAULT_THRESHOLDS: Dict[str, Any] = {
     "llm_min_calls": 10,
     "llm_breaker_open": {"warn": 1, "critical": 100},
     "llm_quota_exceeded": {"warn": 1, "critical": 100},
+    # 2026-11 ops hardening: counts over the window (deltas between two snapshots, see window_payload)
+    "ingestion_job_failures": {"warn": 1, "critical": 5},
+    "operation_failures": {"warn": 1, "critical": 3},
+    # state carried in payload["ops"] (webapi/routers/infra.ops_state)
+    "disk_used_fraction": {"warn": 0.85, "critical": 0.95},
 }
 
 # Answer modes that count as a successful (served) answer.
@@ -200,6 +205,29 @@ def evaluate_alerts(
             signals.append({"name": key, "status": _count_status(count, cfg["warn"], cfg["critical"]), "value": count,
                             "warn": cfg["warn"], "critical": cfg["critical"]})
 
+    # Ingestion jobs that failed or were interrupted, promotions/deletions that failed or were interrupted,
+    # in this window (counters of webapi/ingestion_jobs).
+    jobs = _counter(payload, "ingestion_job_total")
+    job_failures = int(jobs.get("error", 0)) + int(jobs.get("interrupted", 0)) if jobs else 0
+    if job_failures > 0:
+        cfg = t["ingestion_job_failures"]
+        signals.append({"name": "ingestion_job_failures", "status": _count_status(job_failures, cfg["warn"], cfg["critical"]),
+                        "value": job_failures, "warn": cfg["warn"], "critical": cfg["critical"]})
+    operations = _sum(_counter(payload, "ops_operation_total"))
+    if operations > 0:
+        cfg = t["operation_failures"]
+        signals.append({"name": "operation_failures", "status": _count_status(operations, cfg["warn"], cfg["critical"]),
+                        "value": operations, "warn": cfg["warn"], "critical": cfg["critical"],
+                        "detail": ",".join(sorted(_counter(payload, "ops_operation_total")))})
+    for counter in ("source_ledger_chain_broken_total", "source_ledger_torn_total"):
+        count = _sum(_counter(payload, counter))
+        if count > 0:
+            signals.append({"name": counter.replace("_total", ""),
+                            "status": CRITICAL if "broken" in counter else WARN, "value": count})
+    ops = payload.get("ops") if isinstance(payload, dict) else None
+    if isinstance(ops, dict):
+        signals.extend(_ops_signals(ops, t))
+
     # Optional latency p95 — only when explicitly provided in the snapshot.
     p95 = payload.get("latency_p95_ms") if isinstance(payload, dict) else None
     if isinstance(p95, (int, float)):
@@ -217,6 +245,92 @@ def evaluate_alerts(
         "chat_successes": successes,
         "signals": signals,
     }
+
+
+def window_payload(current: Dict[str, Any], previous: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The snapshot of one monitoring window: counters minus the previous snapshot's.
+
+    Counters are cumulative since the process started, so evaluating them directly alerts forever after one bad
+    hour. A counter that went down (the API restarted) is taken as it is. The operational state ("ops") and the
+    latency are current values and are kept. Without a previous snapshot the current one is returned."""
+    if not isinstance(current, dict):
+        return {}
+    if not isinstance(previous, dict):
+        return dict(current)
+    out = dict(current)
+    prev_counters = previous.get("counters") if isinstance(previous.get("counters"), dict) else {}
+    counters: Dict[str, Dict[str, int]] = {}
+    for name, bucket in (current.get("counters") or {}).items():
+        if not isinstance(bucket, dict):
+            continue
+        before = prev_counters.get(name) if isinstance(prev_counters.get(name), dict) else {}
+        try:
+            restarted = any(int(before.get(k, 0)) > int(v) for k, v in bucket.items())
+            delta = {k: int(v) - (0 if restarted else int(before.get(k, 0))) for k, v in bucket.items()}
+        except (TypeError, ValueError):  # a hand-edited or damaged snapshot: take the current counters as they are
+            delta = {k: int(v) for k, v in bucket.items() if isinstance(v, (int, float))}
+        delta = {k: v for k, v in delta.items() if v > 0}
+        if delta:
+            counters[name] = delta
+    out["counters"] = counters
+    for key in ("total_requests", "error_requests"):
+        try:
+            now_v, prev_v = int(current.get(key) or 0), int(previous.get(key) or 0)
+            out[key] = now_v - prev_v if now_v >= prev_v else now_v
+        except (TypeError, ValueError):
+            pass
+    out["window"] = True
+    return out
+
+
+def _ops_signals(ops: Dict[str, Any], t: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Signals from the operational state; a part that could not be read is a WARN (monitoring blind spot)."""
+    signals: List[Dict[str, Any]] = []
+
+    def add(name: str, status: str, value: Any, detail: str = "") -> None:
+        signals.append({"name": name, "status": status, "value": value, "detail": detail})
+
+    for part, values in sorted(ops.items()):
+        if isinstance(values, dict) and "error" in values:
+            add(f"ops_{part}_unavailable", WARN, None, str(values["error"]))
+    registry = ops.get("registry") if isinstance(ops.get("registry"), dict) else {}
+    if int(registry.get("collections_stuck_writing") or 0) > 0:
+        add("collections_stuck_writing", WARN, registry["collections_stuck_writing"],
+            "a collection stays 'writing': an ingestion job died; re-run it")
+    if int(registry.get("operations_interrupted") or 0) > 0:
+        add("operations_interrupted", CRITICAL, registry["operations_interrupted"],
+            "a promotion/deletion was interrupted: re-run it (idempotent)")
+    if int(registry.get("operations_failed") or 0) > 0:
+        add("operations_failed", WARN, registry["operations_failed"])
+    sources = ops.get("sources") if isinstance(ops.get("sources"), dict) else {}
+    if sources.get("ledger_chain_ok") is False:
+        add("source_ledger_chain", CRITICAL, False, "the source change ledger chain is broken: every apply fails")
+    if int(sources.get("apply_failed") or 0) > 0:
+        add("source_apply_failed", WARN, sources["apply_failed"])
+    if int(sources.get("held") or 0) > 0:
+        add("source_apply_held", WARN, sources["held"], "a source plan waits for approval")
+    index = ops.get("index") if isinstance(ops.get("index"), dict) else {}
+    if index.get("pointer_ok") is False:
+        add("generation_pointer", CRITICAL, False, "the active generation file is unreadable")
+    if index.get("fingerprint") == "mismatch":
+        add("embedding_fingerprint", CRITICAL, "mismatch", "the running embedding profile differs from the served manifest")
+    if index.get("manifest_status") in ("stale", "unverified"):
+        add("served_manifest", WARN, index["manifest_status"], "verify the served generation (switch_generation.py verify)")
+    if index.get("count_drift"):
+        add("index_count_drift", WARN, True, "live vector/keyword counts differ from the verified manifest")
+    backup = ops.get("backup") if isinstance(ops.get("backup"), dict) else {}
+    if backup.get("failed"):
+        add("backup_failed", CRITICAL, True, "the last backup failed")
+    elif backup and backup.get("too_old"):
+        add("backup_age", WARN, backup.get("newest_age_hours"), f"older than {backup.get('max_age_hours')} h")
+    disk = ops.get("disk") if isinstance(ops.get("disk"), dict) else {}
+    if isinstance(disk.get("used_fraction"), (int, float)):
+        cfg = t["disk_used_fraction"]
+        used = float(disk["used_fraction"])
+        status = _rate_status(used, cfg["warn"], cfg["critical"])
+        if status != OK:
+            add("disk_usage", status, used)
+    return signals
 
 
 def status_exit_code(overall: str) -> int:

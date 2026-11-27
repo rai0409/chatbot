@@ -135,8 +135,12 @@ def test_audit_question_masking_and_rotation(monkeypatch, tmp_path):
     files = sorted(audit_dir.glob("chat_events*.jsonl"))
     assert len(files) >= 2
     blob = "".join(f.read_text(encoding="utf-8") for f in files)
-    assert "1234" not in blob and "example.co.jp" not in blob
-    assert audit_log.verify_chain(audit_dir / "chat_events.jsonl")["ok"] is True
+    rows = [json.loads(line) for line in blob.splitlines() if line.strip()]
+    assert len(rows) == 4
+    assert all(row["question"] == "##-####-#### か [email] に連絡" for row in rows)
+    assert "03-1234-5678" not in blob and "Taro_Yamada@example.co.jp" not in blob
+    result = audit_log.verify_chain(audit_dir / "chat_events.jsonl")
+    assert result["ok"] is True and result["checked"] == 4
 
 
 # --- 6-5 / 6-7 / 6-8 ------------------------------------------------------------------------------

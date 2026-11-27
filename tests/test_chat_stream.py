@@ -283,7 +283,11 @@ def test_chat_stream_cache_hit_is_recorded_like_the_chat_route(monkeypatch, tmp_
     cached = {"answer_text": "キャッシュ済みの回答です。", "citations": [], "retrieved": [], "answer_mode": "grounded",
               "guard_reason": None, "used_fallback": False}
     monkeypatch.setattr(chat_router.answer_cache, "enabled", lambda: True)
-    monkeypatch.setattr(chat_router.answer_cache, "get", lambda key: dict(cached))
+    def read_cache(key):
+        assert key[-2:] == ("profile-validation-v1", "mail-quarantine-v2")
+        return dict(cached)
+
+    monkeypatch.setattr(chat_router.answer_cache, "get", read_cache)
     monkeypatch.setattr(chat_router, "_cache_validation_passed", lambda payload: True)
     recorded = []
     monkeypatch.setattr(chat_router.records_hook, "record_chat", lambda *a, **k: recorded.append(k))

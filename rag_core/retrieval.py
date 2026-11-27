@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import hmac
 import json
@@ -19,7 +20,7 @@ from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Sequence, Tup
 import config
 from rank_bm25 import BM25Okapi
 from rag_core import embedder, index_generation, ja_terms, ja_tokenizer, quantities, store
-from rag_core.mail_access import is_private_mail_record
+from rag_core.mail_access import is_private_mail_record, public_vector_row, vector_columns
 from rag_core.bm25_index import InvertedBM25
 from rag_core.ja_text import (
     active_normalization_version,
@@ -78,6 +79,45 @@ class _KeywordIndex:
             mask = masks[tenant] = np.fromiter((t == tenant for t in self.tenant_ids), dtype=bool,
                                                count=len(self.tenant_ids))
         return mask
+
+    def tenant_vocabulary(self, tenant: str) -> FrozenSet[str]:
+        """Tokens of this (normalized) tenant's rows only; built once per tenant.
+
+        The typo correction must not suggest another tenant's terms (they would
+        reach the query and the trace). From the postings of the inverted
+        engine, the per-document frequencies of rank_bm25, or (last resort) by
+        tokenizing the tenant's searchable texts again."""
+        cache = self.__dict__.setdefault("_tenant_vocabularies", {})
+        vocab = cache.get(tenant)
+        if vocab is not None:
+            return vocab
+        if self.tenant_ids and all(t == tenant for t in self.tenant_ids):
+            vocab = self.vocabulary
+        elif tenant not in set(self.tenant_ids):
+            vocab = frozenset()
+        else:
+            mask = self.tenant_mask(tenant)
+            if self.inverted is not None:
+                import numpy as np
+
+                vocab = frozenset(
+                    term for term, (ids, _tfs) in self.inverted.postings.items()
+                    if len(ids) and mask[np.frombuffer(ids, dtype=np.uint32)].any()
+                )
+            elif self.bm25 is not None and getattr(self.bm25, "doc_freqs", None):
+                words: set = set()
+                for idx, freqs in enumerate(self.bm25.doc_freqs):
+                    if idx < len(mask) and mask[idx]:
+                        words.update(freqs)
+                vocab = frozenset(words)
+            else:
+                words = set()
+                for idx, allowed in enumerate(mask):
+                    if allowed:
+                        words.update(_document_tokens(self.norm_docs[idx], self.tokenizer))
+                vocab = frozenset(words)
+        cache[tenant] = vocab
+        return vocab
 
     def row(self, chunk_id: str) -> Optional[Dict[str, Any]]:
         """The stored row of one chunk (a new dict), or None."""
@@ -393,6 +433,12 @@ def _build_lock(path: str) -> Lock:
         return _BUILD_LOCKS.setdefault(path, Lock())
 
 
+def keyword_index_refreshing() -> bool:
+    """True while a background keyword-index rebuild runs (the served index may be stale)."""
+    with _INDEX_LOCK:
+        return bool(_REFRESHING)
+
+
 def _refresh_in_background(path: str, build, store) -> None:
     with _INDEX_LOCK:
         if path in _REFRESHING:
@@ -485,7 +531,7 @@ def _reading_lane_min_bm25() -> float:
 # KEYWORD_INDEX_CACHE_KEY or a random key file created next to the cache with
 # mode 0600) and only a file with a valid signature is unpickled; several
 # workers starting together build the index once (file lock).
-_KEYWORD_CACHE_FORMAT = "kwcache-mail-quarantine-v3"
+_KEYWORD_CACHE_FORMAT = "kwcache-mail-quarantine-v4"
 _KEYWORD_CACHE_MAGIC = b"KWC2"
 _KEYWORD_CACHE_KEEP = 8
 
@@ -680,11 +726,25 @@ def _build_keyword_index_fresh(
                     for k, v in obj.items() if k != "text"
                 }
                 searchable_text = _extract_searchable_text(text=text, obj=obj)
+                # 2026-11-22: display_text, searchable_text and the normalized
+                # text usually equal the text; keep ONE string object for all
+                # of them (the row keeps its keys, callers see the same values).
+                if searchable_text == text:
+                    searchable_text = text
+                    if "searchable_text" in meta:
+                        meta["searchable_text"] = text
+                if meta.get("display_text") == text:
+                    meta["display_text"] = text
+                norm_doc = _normalize(searchable_text)
+                if norm_doc == searchable_text:
+                    norm_doc = searchable_text
+                elif norm_doc == text:
+                    norm_doc = text
                 tokens = _document_tokens(searchable_text, tokenizer_name)
                 if not tokens:
                     tokens = [str(meta.get("id") or "")]
                 texts.append(text)
-                norm_docs.append(_normalize(searchable_text))
+                norm_docs.append(norm_doc)
                 metas.append(meta)
                 tenant_ids.append(normalize_tenant_id(meta.get("tenant_id")))
                 if inverted is not None:
@@ -726,7 +786,7 @@ def chunk_row(chunk_id: str, collection_name: Optional[str] = None) -> Optional[
     """The stored row of one chunk (citation excerpts): the served corpus, or
     the keyword corpus of a staging collection."""
     row = _index_for_collection(collection_name).row(chunk_id)
-    return None if is_private_mail_record(row) else row
+    return None if is_private_mail_record(row, chunk_id) else row
 
 
 def _load_collection_keyword_index(path: str) -> _KeywordIndex:
@@ -785,6 +845,9 @@ class QueryEmbeddingBatch:
         return self._embeddings[query]
 
 
+_VECTOR_WIDEN_ROUNDS = 3
+
+
 def _resolve_query_embedding(question: str, client, query_embedding) -> List[float]:
     if query_embedding is None:
         return embedder.embed_queries([question], client=client)[0]
@@ -810,40 +873,46 @@ def vector_retrieve(
     )
     where = _build_base_where(allowed_types, allowed_qualities, tenant_id=tenant_id)
     # Qdrant prefilter prevents private email points from crowding out
-    # public results. Chroma keeps its legacy where clauses unchanged.
-    if str(os.getenv("VECTOR_BACKEND", "chroma")).strip().lower() == "qdrant":
+    # public results. Chroma keeps its legacy where clauses (a $ne clause
+    # would also drop rows without a "type" key); it gets the same number of
+    # usable candidates by widening the window below instead.
+    qdrant = str(os.getenv("VECTOR_BACKEND", "chroma")).strip().lower() == "qdrant"
+    if qdrant:
         if "type" not in where:
             where["type"] = {"$ne": "email"}
     embedding = _resolve_query_embedding(question, client, query_embedding)
     oversample = max(1, int(getattr(config, "CHILD_RETRIEVAL_OVERSAMPLE", 2)))
     n_results = max(top_k, top_k * oversample)
-    res = collection.query(
-        query_embeddings=[embedding], n_results=n_results, where=_to_chroma_where(where)
-    )
-    docs = list(res.get("documents", [[]])[0])
-    metas = list(res.get("metadatas", [[]])[0])
-    dists = list(res.get("distances", [[]])[0])
-    if "tenant_id" not in where and len(docs) >= n_results:
-        # Stage 14: the default tenant has no DB filter (legacy rows without
-        # tenant_id), so other tenants' rows can fill the oversampled window.
-        # When fewer than top_k survive the tenant check, ask once more with
-        # tenant_id = default and merge (legacy rows stay in the first pass).
-        kept = sum(1 for meta in metas if _tenant_matches(dict(meta or {}), tenant_id))
-        if kept < top_k:
-            strict = dict(where, tenant_id=normalize_tenant_id(tenant_id))
-            more = collection.query(query_embeddings=[embedding], n_results=n_results, where=_to_chroma_where(strict))
-            seen = {str((meta or {}).get("id") or "") for meta in metas}
-            for text, meta, dist in zip(more.get("documents", [[]])[0], more.get("metadatas", [[]])[0],
-                                        more.get("distances", [[]])[0]):
-                if str((meta or {}).get("id") or "") not in seen:
-                    docs.append(text)
-                    metas.append(meta)
-                    dists.append(dist)
+
+    def _run(n: int, clauses: Dict):
+        result = collection.query(query_embeddings=[embedding], n_results=n, where=_to_chroma_where(clauses))
+        columns = vector_columns(result, "documents", "metadatas", "distances", query=True)
+        if columns is None:
+            return 0, []
+        rows = [(row_id, text, meta, dist) for row_id, text, meta, dist in zip(*columns)
+                if public_vector_row(row_id, meta)]
+        return len(columns[0]), rows
+
+    fetched = n_results
+    count, rows = _run(fetched, where)
+    if not qdrant:
+        for _ in range(_VECTOR_WIDEN_ROUNDS):
+            if count < fetched or len(rows) >= top_k:
+                break
+            fetched *= 4
+            count, rows = _run(fetched, where)
+    rows = [row for row in rows if _tenant_matches(row[2], tenant_id)]
+    if "tenant_id" not in where and count >= fetched and len(rows) < top_k:
+        strict = dict(where, tenant_id=normalize_tenant_id(tenant_id))
+        _, more = _run(fetched, strict)
+        seen = {row[0] for row in rows}
+        for row in more:
+            if row[0] not in seen and _tenant_matches(row[2], tenant_id):
+                rows.append(row)
+                seen.add(row[0])
     out: List[RetrievedChunk] = []
-    for text, meta, dist in zip(docs, metas, dists):
-        m = dict(meta or {})
-        if not _tenant_matches(m, tenant_id) or is_private_mail_record(m):
-            continue
+    for row_id, text, meta, dist in rows:
+        m = dict(meta, id=row_id)
         m["retrieval_source"] = "vector"
         # Raw cosine distance survives fusion so the guard can use real
         # semantic evidence instead of rank-derived pseudo-distances.
@@ -855,7 +924,10 @@ def vector_retrieve(
                 score=float(dist),
             )
         )
-    out.sort(key=lambda ch: (0 if _is_child_chunk(ch.metadata) else 1, float(ch.score)))
+    # 2026-11-22: pure similarity order (child chunks only break exact ties),
+    # so the dense rank used by the fusion is the similarity rank. Child chunks
+    # used to be sorted first, which put a far child ahead of a near parent.
+    out.sort(key=lambda ch: (float(ch.score), 0 if _is_child_chunk(ch.metadata) else 1))
     return out[:top_k]
 
 
@@ -1067,16 +1139,19 @@ def _dbsf_normalize(scores: Dict[str, float]) -> Dict[str, float]:
 
 
 def _rank_buckets(merged: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Final order of the fused candidates: child chunks first, then the fused score, then lexical presence.
+    """Final order of the fused candidates: the fused score, then child chunks, then lexical presence.
 
-    Ties are broken by chunk key (ascending), never by the order in which the dense and lexical lanes
+    2026-11-22: child chunks used to be sorted before every parent whatever the
+    fused score; now the fused (similarity / BM25 rank) score decides and the
+    child preference only breaks ties. Remaining ties are broken by chunk key
+    (ascending), never by the order in which the dense and lexical lanes
     returned their hits, so the same candidates always give the same ranking."""
     by_key = sorted(merged.items(), key=lambda item: item[0])
     ranked = sorted(
         by_key,
         key=lambda item: (
-            _bucket_child_priority(item[1]),
             float(item[1]["fused"]),
+            _bucket_child_priority(item[1]),
             1 if item[1].get("keyword") is not None else 0,
         ),
         reverse=True,  # sorted() keeps the order of equal keys, so ties stay in chunk-key order
@@ -1120,6 +1195,62 @@ def _fuse_hybrid_buckets(merged: Dict[str, Dict[str, Any]], *, k_rrf: int, setti
         if item.get("exact_rank") is not None:
             fused += float(settings["exact_weight"])
         item["fused"] = fused
+
+
+_LANE_EXECUTOR: Optional[ThreadPoolExecutor] = None
+_LANE_EXECUTOR_LOCK = Lock()
+
+
+def _lane_executor() -> ThreadPoolExecutor:
+    """Process-wide pool of the keyword lane (HYBRID_PARALLEL); HYBRID_PARALLEL_WORKERS threads (default 4)."""
+    global _LANE_EXECUTOR
+    pool = _LANE_EXECUTOR
+    if pool is not None:
+        return pool
+    with _LANE_EXECUTOR_LOCK:
+        if _LANE_EXECUTOR is None:
+            raw_workers = str(os.getenv("HYBRID_PARALLEL_WORKERS", "")).strip()
+            try:
+                workers = int(raw_workers or 4)
+            except ValueError:
+                logger.warning("invalid HYBRID_PARALLEL_WORKERS=%r; using 4", raw_workers)
+                workers = 4
+            _LANE_EXECUTOR = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="hybrid-lane")
+        return _LANE_EXECUTOR
+
+
+_THREAD_BUDGET_WARNED = False
+
+
+def _lane_worker_count() -> int:
+    raw = str(os.getenv("HYBRID_PARALLEL_WORKERS", "")).strip()
+    try:
+        return max(1, int(raw or 4))
+    except ValueError:
+        return 4
+
+
+def check_thread_budget(*, cpu_count: Optional[int] = None) -> Optional[str]:
+    """Warn once when torch threads plus the parallel keyword-lane workers exceed the physical cores.
+
+    Physical cores are approximated as os.cpu_count() // 2 (the same rule as the EMBED_NUM_THREADS default).
+    Only checked when HYBRID_PARALLEL is on. Returns the warning text when one was logged (tests, diagnostics)."""
+    global _THREAD_BUDGET_WARNED
+    if _THREAD_BUDGET_WARNED or not bool(getattr(config, "HYBRID_PARALLEL", False)):
+        return None
+    physical = max(1, (cpu_count if cpu_count is not None else (os.cpu_count() or 2)) // 2)
+    embed_threads = max(0, int(getattr(config, "EMBED_NUM_THREADS", 0) or 0))
+    workers = _lane_worker_count()
+    _THREAD_BUDGET_WARNED = True
+    if embed_threads + workers <= physical:
+        return None
+    message = (
+        f"EMBED_NUM_THREADS={embed_threads} + HYBRID_PARALLEL_WORKERS={workers} exceeds the physical cores "
+        f"({physical}); oversubscribed threads can make retrieval slower, not faster. Lower one of them or keep "
+        "HYBRID_PARALLEL off (measure with scripts/measure_hybrid_parallel.py)."
+    )
+    logger.warning(message)
+    return message
 
 
 def hybrid_retrieve(
@@ -1178,12 +1309,22 @@ def hybrid_retrieve(
         )
 
     if bool(getattr(config, "HYBRID_PARALLEL", False)):
+        check_thread_budget()
         # Dense (embedding + ANN) and lexical lanes are independent; running
         # them together makes latency the slower lane instead of the sum.
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            vector_future = pool.submit(_vector)
-            keyword_future = pool.submit(_keyword)
-            vector_hits, keyword_hits = vector_future.result(), keyword_future.result()
+        # 2026-11-22: one shared pool per process (a pool per call cost a
+        # thread start each time and gave every call a new thread, so a new
+        # Sudachi tokenizer); the keyword lane runs there inside a copy of the
+        # caller's context (fusion_scale / query routing, deep mode), the dense
+        # lane in the calling thread.
+        keyword_future = _lane_executor().submit(contextvars.copy_context().run, _keyword)
+        try:
+            vector_hits = _vector()
+        except BaseException:  # noqa: BLE001  re-raised below after cancelling the keyword lane
+            # Do not let the keyword lane's own error mask the dense lane's.
+            keyword_future.cancel()
+            raise
+        keyword_hits = keyword_future.result()
     else:
         vector_hits, keyword_hits = _vector(), _keyword()
 
@@ -1303,7 +1444,7 @@ def expand_parent_chunks(
             continue
 
         parent_row = index.row(parent_id)
-        if not parent_row or is_private_mail_record(parent_row) or not _tenant_matches(parent_row, tenant_id):
+        if not parent_row or is_private_mail_record(parent_row, parent_id) or not _tenant_matches(parent_row, tenant_id):
             out.append(ch)
             continue
 
@@ -1420,10 +1561,13 @@ def add_neighbor_chunks(
         except Exception as exc:  # noqa: BLE001
             logger.warning("neighbor_chunks_lookup_failed %s", type(exc).__name__)
             continue
-        for text, meta in zip(res.get("documents", []), res.get("metadatas", [])):
-            m = dict(meta or {})
-            if not _tenant_matches(m, tenant_id) or is_private_mail_record(m):
+        columns = vector_columns(res, "documents", "metadatas")
+        if columns is None:
+            continue
+        for row_id, text, meta in zip(*columns):
+            if not public_vector_row(row_id, meta) or not _tenant_matches(meta, tenant_id):
                 continue
+            m = dict(meta, id=row_id)
             try:
                 key = (str(m.get("doc_id")), int(m.get("chunk_index")))
             except (TypeError, ValueError):

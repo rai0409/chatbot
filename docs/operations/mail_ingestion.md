@@ -2,7 +2,7 @@
 
 This module connects `mail_ingest.process()` to the existing canonical
 JSONL/staging ingestion boundary. It does **not** publish email to the
-production collection or implement per-message ACL or thread-aware answers.
+production collection, enforce per-message ACL at retrieval, or provide thread-aware answers.
 
 ## Input and authorization
 
@@ -48,21 +48,84 @@ production collection or implement per-message ACL or thread-aware answers.
 * `MAIL_INGEST_MAX_TOTAL_BYTES=52428800` (50 MiB).
 * `MAIL_INGEST_MAX_MESSAGES=2000`.
 
-These bounds reduce accidental load; they do NOT provide a hard CPU/memory
-limit while parsing a hostile spreadsheet. Do not expose this ingestion path
-to untrusted customer uploads without process isolation and decompression
-limits. An Excel parser can expand archives beyond the compressed input size.
+* `MAIL_MAX_MIME_PARTS=200`, `MAIL_MAX_MIME_DEPTH=20` (per EML; the MIME walk
+  is iterative; exceeding either fails the batch with `mail_mime_limit`).
+* `MAIL_CONVERT_TIMEOUT_SECONDS=300`: the API job parses the batch in a fresh
+  spawned worker process (`isolated.run_task("mail_batch")`) that is killed at the
+  limit (`error_type=ConversionTimeout`); `0` parses in the calling process.
+* `MAIL_CONVERT_MAX_MEMORY_MB=2048`: `RLIMIT_AS` of that worker (`0` = none).
+  The worker starts without secret-looking environment variables, so the ACL
+  key is never present while hostile input is parsed.
+
+The synchronous route (`async_job=false`) still holds the request thread while
+it waits for the worker; prefer `async_job=true` for untrusted uploads.
+
+## Per-person ACL data model (enforcement still fail-closed)
+
+* Every canonical row carries `acl_principals` (sorted HMAC-SHA256 hex digests of
+  normalized lowercase From/To/Cc addresses, plus `mailbox_owner` when the job
+  is given one), `acl_version` (1), `acl_key_id` and `sender_principal`.
+  No plaintext address is stored in ACL fields.
+* BCC: a BCC recipient is added only when it is the given `mailbox_owner` (the
+  owner's own copy). BCC addresses never appear in row text or metadata (they
+  are replaced by `[非表示]` if quoted in the body).
+* `MAIL_ACL_HMAC_KEY` is required with `APP_ENV=production` (ingestion is refused
+  with `mail_acl_key_required`). Development uses a fixed key and marks rows
+  `acl_key_id=dev`; such rows are never visible in production.
+* `rag_core.mail_access.mail_visible_to(record, principals)` is True only for a
+  supported ACL whose digests intersect the caller's; `mail_record_allowed()`
+  additionally requires `MAIL_SEARCH_ENABLED` (default false). Retrieval still
+  excludes all mail via `is_private_mail_record()`.
+* Migration: rows ingested before this change have no ACL fields and stay
+  invisible even when search is enabled; re-ingest them. Rotating the key
+  requires re-ingestion as well.
+
+## Quote handling
+
+* A quote is replaced by a reference to another message only when the parties
+  of the message holding the referenced text include every party of the quoting
+  message (BCC excluded). Otherwise the quote stays inline
+  (`照合済みの引用（原本メール内に保持）`), so a person added later keeps context
+  without being joined to a message they did not receive.
+* `superseded_by`: the source_doc of a later message that quotes the full
+  content of this one and whose parties include all of this one's.
+  `MAIL_KEEP_LATEST_ONLY=true` (default false) keeps such quotes inline in the
+  latest message and drops the quoted parts (never the new content) of the
+  superseded row when the latest message contains them (`quoted_text_dropped`).
+* Cross-import matching: a per tenant/collection state store
+  (`<dir of INGESTION_REGISTRY_PATH>/mail_state/<tenant>/<collection>.jsonl`,
+  mode 0600) keeps a bottom-k sketch of salted 4-gram hashes per message
+  (`MAIL_SKETCH_MAX_SHINGLES=512`, sketches for the newest
+  `MAIL_SHINGLE_STORE_MAX_MESSAGES=5000`, entries `MAIL_STATE_MAX_MESSAGES=100000`).
+  No body text or address is stored. Quotes of earlier imports become
+  `quote_refs` instead of `未照合の引用` when the ACL condition holds. The store is
+  local to the node; it is not shared with `INGESTION_REGISTRY_BACKEND=postgres`.
+
+## Update safety and deletion
+
+* Re-importing a known source_doc (Message-ID): identical content →
+  `skipped_identical`; older Date → `skipped_older`; same Date with different
+  content, missing Date, or a different sender digest → `conflict_same_message_id`
+  (existing rows kept); newer Date from the same sender → `replaced_newer`.
+  Counts are in the job's `mail_counts`.
+* Identity without Message-ID: EML → hash of the file bytes; tables → id column
+  (8+ characters), otherwise hash of the file bytes + row/id. A file name alone
+  is never used (two different `mails.csv` uploads do not collide).
+* Deletion: `webapi.mail_ingestion_jobs.delete_mail(tenant, collection,
+  source_doc=... | message_id=..., commit=False)` returns the chunk ids,
+  `dependent_source_docs` (rows whose quote was replaced by a reference to it;
+  re-ingest them) and `superseded_source_docs`. Delete the chunks by source_doc,
+  then call again with `commit=True` to drop the state entry.
+* Generic CSV/XLSX ingestion should refuse mail-shaped tables with
+  `mail_access.looks_like_mail_table(header)`.
 
 ## Known limitations / release gate
 
-* Without a valid Message-ID, the existing canonical converter uses a
-  source-path fallback. Re-uploads under a new random upload path may therefore
-  create another `source_doc`. Do not promise global idempotence for such rows.
+* Without a valid Message-ID, identity is content based: an edited file is a
+  new `source_doc`.
 * Identical Message-ID with different content in the **same** import is
-  refused. Revisions across separate imports replace rows for the same
-  `(tenant_id, source_doc)`; source provenance must be reviewed before
-  enabling automatic version updates.
-* No email-level ACL exists in this integration. It is suitable for
+  refused. Across imports see "Update safety" above.
+* The ACL data model exists but is not enforced by retrieval yet. It is suitable for
   restricted single-access-class staging evaluation **only**. Do not promote
   private mail to a broadly accessible tenant collection until effective
   user/role ACL has been implemented and tested at both retrieval and thread
@@ -76,7 +139,7 @@ limits. An Excel parser can expand archives beyond the compressed input size.
 
 From the repository root using its own Python environment:
 
-    python -m pytest -q tests/test_mail_ingestion_contract.py
+    python -m pytest -q tests/test_mail_ingestion_contract.py tests/test_mail_acl_isolation_20261122.py
     python -m pytest -q tests/test_ingestion_ui_job_status.py tests/test_ingestion_tenant_paths.py tests/test_stage14_security_and_ingestion.py tests/test_stage3_ingestion.py
     git diff --check
 
@@ -108,4 +171,11 @@ staging-backend connectivity and authorization are verified on the target host.
 ステージングにメールを示すチャンクが一件でもある場合、混在データ全体を拒否します。
 ドライランも拒否し、メタデータが不完全または整合しない場合も公開しません。
 検査は本番への書込み、削除、キーワード更新の前に実施します。メールの個人単位 ACL は
-引き続き未実装です。
+データモデル（acl_principals 等）のみ実装済みで、検索・昇格での適用は引き続き未実装です。
+
+## Parsing isolation and multi-node (2026-11)
+
+* `convert_mail_inputs` and `scripts/mail_to_canonical_jsonl.py` parse in the isolated `mail_batch` worker by default
+  (time and memory limited, secrets removed). `--in-process` (CLI) / `isolate=False` (function) is for debugging only.
+* The mail state store is node-local files. With `INGESTION_REGISTRY_BACKEND=postgres` it is NOT shared: run mail
+  ingestion on one node only. A warning is logged at startup and on first use.

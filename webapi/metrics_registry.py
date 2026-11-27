@@ -179,6 +179,22 @@ def to_prometheus(payload: Dict[str, object]) -> str:
         "# TYPE app_error_requests_total counter",
         f"app_error_requests_total {int(payload.get('error_requests', 0) or 0)}",
     ]
+    ops = payload.get("ops")
+    if isinstance(ops, dict):
+        # Operational state (webapi/routers/infra.ops_state) as gauges: numbers and booleans only.
+        for part in sorted(ops):
+            values = ops[part]
+            if not isinstance(values, dict):
+                continue
+            for key in sorted(values):
+                value = values[key]
+                if isinstance(value, bool):
+                    value = int(value)
+                if not isinstance(value, (int, float)):
+                    continue
+                metric = "app_ops_" + "".join(ch if ch.isalnum() else "_" for ch in f"{part}_{key}")
+                lines.append(f"# TYPE {metric} gauge")
+                lines.append(f"{metric} {value}")
     counters = payload.get("counters") or {}
     if isinstance(counters, dict):
         for name in sorted(counters):

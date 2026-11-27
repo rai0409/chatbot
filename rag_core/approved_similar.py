@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
+import threading
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -11,6 +15,7 @@ from typing import Any, Dict, List, Sequence
 
 import config
 from rag_core import embedder, store
+from rag_core.mail_access import public_vector_row, vector_columns
 from rag_core.ja_text import extract_salient_terms_ja, normalize_for_index
 
 
@@ -174,7 +179,107 @@ def _norm(text: Any) -> str:
     return normalize_for_index(str(text or ""))
 
 
-_SYNONYMS = _build_synonym_map()
+logger = logging.getLogger(__name__)
+_TRUE_VALUES = {"1", "true", "yes", "y", "on"}  # the set of config._get_bool
+_SYNONYMS = _build_synonym_map()  # built-in fallback (the survey-domain groups above)
+_SYNONYM_CACHE: Dict[str, Any] = {"key": None, "map": None, "checked_at": None}
+_SYNONYM_LOCK = threading.Lock()
+
+
+_WARNED: set = set()
+
+
+def _warn_once(name: str, message: str) -> None:
+    if name not in _WARNED:
+        _WARNED.add(name)
+        logger.warning(message, exc_info=True)
+
+
+def _loaded_synonym_groups(profile_id: str = "default") -> tuple[List[List[str]], Any]:
+    """(groups, version) from the RAG profile synonyms (query_preprocess._synonym_groups, read-only) and
+    configs/japanese_business_synonyms.json. Either source failing is skipped."""
+    groups: List[List[str]] = []
+    version: List[Any] = []
+    try:
+        from rag_core import profile_loader, query_preprocess
+
+        version.append(str(profile_loader.load_rag_profile(profile_id).get("profile_version") or ""))
+        groups.extend([list(g) for g in query_preprocess._synonym_groups(profile_id)])
+    except Exception:  # noqa: BLE001 - scoring never fails on a synonym source
+        _warn_once("profile", "approved similar: RAG profile synonyms unavailable")
+        version.append("profile_unavailable")
+    try:
+        from rag_core.japanese_normalizer import DEFAULT_SYNONYM_CONFIG, load_japanese_business_synonyms
+
+        try:
+            st = os.stat(DEFAULT_SYNONYM_CONFIG)
+            version.append((str(DEFAULT_SYNONYM_CONFIG), st.st_mtime_ns, st.st_size))
+        except OSError:
+            version.append("business_missing")
+        for entry in load_japanese_business_synonyms().get("synonym_groups") or []:
+            if not isinstance(entry, dict) or entry.get("enabled") is False:
+                continue
+            terms = [entry.get("canonical"), *(entry.get("terms") or entry.get("synonyms") or [])]
+            terms = [str(t) for t in terms if str(t or "").strip()]
+            if len(terms) >= 2:
+                groups.append(terms)
+    except Exception:  # noqa: BLE001 - scoring never fails on a synonym source
+        _warn_once("business", "approved similar: business synonym file unavailable")
+        version.append("business_unavailable")
+    return groups, tuple(version)
+
+
+def _builtin_synonyms_enabled() -> bool:
+    # APPROVED_SIMILAR_BUILTIN_SYNONYMS (default true): keep the built-in survey-domain groups next to the
+    # configured ones (historical scoring). Set false for other domains, where 設問/項目/質問 or 含む/対象 as
+    # synonyms add false matches; the built-ins are still used when no configured group exists at all.
+    return str(os.getenv("APPROVED_SIMILAR_BUILTIN_SYNONYMS", "true")).strip().lower() in _TRUE_VALUES
+
+
+def _synonym_recheck_seconds() -> float:
+    # Loading the sources (profile digest, JSON) is far too heavy to repeat for every scored candidate: the map is
+    # reused for this long before the sources' versions are compared again (APPROVED_SIMILAR_SYNONYM_MEMO_MS;
+    # default 5000 with APP_ENV=production, 0 = compare every call otherwise, so edits show at once in tests).
+    raw = str(os.getenv("APPROVED_SIMILAR_SYNONYM_MEMO_MS", "")).strip()
+    if raw:
+        try:
+            return max(0.0, float(raw) / 1000.0)
+        except ValueError:
+            return 0.0
+    return 5.0 if str(os.getenv("APP_ENV", "")).strip().lower() == "production" else 0.0
+
+
+def _synonym_map() -> Dict[str, List[str]]:
+    """Synonyms for candidate scoring: the configured groups (RAG profile + business synonyms) merged with the
+    built-in groups (see _builtin_synonyms_enabled); the built-ins alone when nothing is configured.
+    Cached by the sources' versions, which are compared at most every _synonym_recheck_seconds()."""
+    recheck = _synonym_recheck_seconds()
+    if recheck > 0:
+        with _SYNONYM_LOCK:
+            checked = _SYNONYM_CACHE["checked_at"]
+            if _SYNONYM_CACHE["map"] is not None and checked is not None and time.monotonic() - checked < recheck:
+                return _SYNONYM_CACHE["map"]
+    groups, version = _loaded_synonym_groups()
+    builtin = _builtin_synonyms_enabled() or not groups
+    version = (version, builtin)
+    with _SYNONYM_LOCK:
+        if _SYNONYM_CACHE["key"] == version and _SYNONYM_CACHE["map"] is not None:
+            _SYNONYM_CACHE["checked_at"] = time.monotonic()
+            return _SYNONYM_CACHE["map"]
+    if builtin:
+        groups = [list(g) for g in _SYNONYM_GROUPS] + groups
+    built: Dict[str, List[str]] = {}
+    for group in groups:
+        normalized = list(dict.fromkeys(_norm(item) for item in group if _norm(item)))
+        for item in normalized:
+            others = built.setdefault(item, [])
+            for other in normalized:
+                if other != item and other not in others:
+                    others.append(other)
+    with _SYNONYM_LOCK:
+        _SYNONYM_CACHE["key"], _SYNONYM_CACHE["map"] = version, built
+        _SYNONYM_CACHE["checked_at"] = time.monotonic()
+    return built
 
 
 def _compact(text: Any) -> str:
@@ -632,6 +737,7 @@ def score_approved_candidate_keyword(query: str, metadata: dict, text: str = "")
     specific_matched_terms: List[str] = []
     keyword_weight_details: List[Dict[str, Any]] = []
     synonym_matches: List[Dict[str, str]] = []
+    synonym_map = _synonym_map()
     score = 0.0
     for term in query_terms:
         if _is_number_term(term):
@@ -662,7 +768,7 @@ def score_approved_candidate_keyword(query: str, metadata: dict, text: str = "")
             break
 
     for query_term in query_base_terms:
-        for synonym in _SYNONYMS.get(_norm(query_term), []):
+        for synonym in synonym_map.get(_norm(query_term), []):
             for field_name in tuple(field for field in scored_field_names if field in {"question_text", "normalized_question", "answer_text", "approved_answer", "approved_answer_preview", "searchable_text", "text"}):
                 if not _contains(fields[field_name], synonym):
                     continue
@@ -969,18 +1075,26 @@ def _normalize_tenant(value: Any) -> str:
     return str(value or "").strip() or "default"
 
 
+def _require_status_metadata() -> bool:
+    # APPROVED_SIMILAR_REQUIRE_STATUS (default true): only pair rows whose metadata says status=approved are
+    # searched. Rows ingested before scripts/approved_qa_to_pair_chunks.py wrote that field have none and are
+    # not found (fail closed) until they are re-converted and re-ingested; set false only for that migration.
+    return str(os.getenv("APPROVED_SIMILAR_REQUIRE_STATUS", "true")).strip().lower() in _TRUE_VALUES
+
+
 def _qa_pair_where(tenant_id: str = "default") -> Dict[str, Any]:
     # Approved QA rows always carry tenant_id (the canonical converter writes
     # "default" when missing) and only status=approved records are converted,
     # so the tenant clause is applied for every tenant, including default.
-    return {
-        "$and": [
-            {"doc_type": "approved_qa_pair"},
-            {"chunk_type": "qa_pair"},
-            {"searchable": 1},
-            {"tenant_id": _normalize_tenant(tenant_id)},
-        ]
-    }
+    clauses: List[Dict[str, Any]] = [
+        {"doc_type": "approved_qa_pair"},
+        {"chunk_type": "qa_pair"},
+        {"searchable": 1},
+        {"tenant_id": _normalize_tenant(tenant_id)},
+    ]
+    if _require_status_metadata():
+        clauses.append({"status": "approved"})
+    return {"$and": clauses}
 
 
 def _query_collection(
@@ -1064,7 +1178,11 @@ def search_approved_similar_candidates(
     tenant_id: str = "default",
     top_k: int = 5,
     oversample: int = 4,
+    live_qa_ids: Any = None,
 ) -> List[Dict[str, Any]]:
+    # live_qa_ids: the qa_ids that are approved right now (the approved-QA store); a pair row whose record was
+    # rejected, edited back to draft or deleted after it was ingested is dropped. None = not checked (callers
+    # without access to the live store); an empty collection drops every row (fail closed).
     # client is the embedding client (OpenAI-compatible or None for local);
     # collection is the vector store. They used to share one argument, which
     # broke as soon as an embedding client was passed.
@@ -1073,18 +1191,26 @@ def search_approved_similar_candidates(
     embedding = embedder.embed_queries([query], client=client)[0]
     n_results = max(top_k, top_k * max(1, oversample))
     result = _query_collection(target, embedding, n_results, tenant_id=tenant)
-    docs = (result.get("documents") or [[]])[0]
-    metas = (result.get("metadatas") or [[]])[0]
-    distances = (result.get("distances") or [[]])[0]
+    columns = vector_columns(result, "documents", "metadatas", "distances", query=True)
+    if columns is None:
+        return []
     candidates: List[ApprovedSimilarCandidate] = []
     seen: set[str] = set()
-    for text, meta, distance in zip(docs, metas, distances):
-        m = dict(meta or {})
+    for row_id, text, meta, distance in zip(*columns):
+        if not public_vector_row(row_id, meta):
+            continue
+        m = dict(meta, id=row_id)
         if m.get("doc_type") != "approved_qa_pair" or m.get("chunk_type") != "qa_pair":
             continue
         if _normalize_tenant(m.get("tenant_id")) != tenant:
             continue
+        # The where clause already asks the store for status=approved; a row that states another status is
+        # dropped here too (stores or fakes that do not apply every clause).
+        if str(m.get("status") or "approved") != "approved":
+            continue
         qa_id = str(m.get("qa_id") or m.get("id") or "")
+        if live_qa_ids is not None and str(m.get("qa_id") or "") not in live_qa_ids:
+            continue
         if qa_id in seen:
             continue
         seen.add(qa_id)

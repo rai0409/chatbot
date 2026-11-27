@@ -11,7 +11,8 @@ from rag_core.document_converters.base import table_rows_to_chunks
 from rag_core.document_converters.table_layout import find_layout
 
 # Japanese business CSVs arrive as UTF-8 (with or without BOM), Shift_JIS
-# (cp932, Excel default), EUC-JP or UTF-16 (Excel "Unicode text").
+# (cp932, Excel default), EUC-JP or UTF-16 (Excel "Unicode text"; some
+# exporters write UTF-16 without a BOM, detected from the NUL-byte pattern).
 _CANDIDATE_ENCODINGS = ("utf-8", "cp932", "euc_jp")
 _DELIMITERS = ",\t;|"
 _SNIFF_BYTES = 64 * 1024
@@ -28,11 +29,43 @@ def _bom_encoding(raw: bytes) -> str | None:
     return None
 
 
+def _utf16_without_bom(raw: bytes) -> str | None:
+    """'utf-16-le' / 'utf-16-be' for UTF-16 text saved without a BOM, else None.
+
+    ASCII characters (delimiters, digits, line breaks: every CSV has many)
+    are encoded with a zero high byte, so NUL bytes pile up at odd offsets
+    (little endian) or even offsets (big endian). UTF-8, CP932 and EUC-JP
+    text never contains NUL. The guess must also decode strictly and read
+    as Japanese/ASCII text."""
+    sample = raw[: _SNIFF_BYTES - (_SNIFF_BYTES % 2)]
+    if len(sample) < 4 or b"\x00" not in sample:
+        return None
+    half = len(sample) // 2
+    even_nulls, odd_nulls = sample[0::2].count(0), sample[1::2].count(0)
+    if odd_nulls >= max(2, 0.05 * half) and even_nulls <= 0.25 * odd_nulls:
+        candidate = "utf-16-le"
+    elif even_nulls >= max(2, 0.05 * half) and odd_nulls <= 0.25 * even_nulls:
+        candidate = "utf-16-be"
+    else:
+        return None
+    if len(raw) % 2:
+        return None
+    try:
+        text = raw.decode(candidate)
+    except UnicodeDecodeError:
+        return None
+    score = len(_COMMON_RE.findall(text)) / max(1, len(text))
+    return candidate if score >= 0.6 else None
+
+
 def detect_encoding(raw: bytes) -> str:
     """Pick the encoding that decodes strictly and looks most like Japanese text."""
     bom = _bom_encoding(raw)
     if bom:
         return bom
+    utf16 = _utf16_without_bom(raw)
+    if utf16:
+        return utf16
     best = ("utf-8", -1.0)
     for encoding in _CANDIDATE_ENCODINGS:
         try:

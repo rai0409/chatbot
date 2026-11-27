@@ -23,6 +23,8 @@ def test_registry_entries_are_well_formed():
             assert k.lo is not None and k.hi is not None and k.lo < k.hi
     assert {k.name for k in knob_registry.REGISTRY if k.risk == "high"} == {
         "RAG_HARD_MAX_DIST", "RAG_SOFT_DIST_OTHER", "RAG_SOFT_DIST_RESET", "RAG_SOFT_DIST_CHANGE",
+        # 2026-11-22: the procedure guard knobs are registered too.
+        "RAG_SOFT_DIST_PROCEDURE", "RAG_HARD_MAX_DIST_PROCEDURE_DELTA",
     }
 
 

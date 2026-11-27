@@ -450,7 +450,7 @@ def test_search_candidates_calculates_margin_and_filters_qa_pairs(monkeypatch):
         def query(self, **kwargs):
             assert kwargs.get("where")
             return {
-                "documents": [
+                "ids": [[_meta()["id"], "approved_qa_pair:qa_shipping", "other"]], "documents": [
                     [
                         "Q: 15問程度の項目はフリーアンサーも含まれるという認識で良いでしょうか。\nA: フリーアンサーも含みます。",
                         "Q: 発送は海外も対象ですか。\nA: 国内のみとします。",

@@ -194,5 +194,7 @@ def test_delete_documents_passes_tenant_and_document_to_the_final_delete(monkeyp
     monkeypatch.setattr(ingest, "remove_keyword_documents", lambda path, keys: {"removed": 0})
     report = collection_admin.delete_documents(None, tenant="ta", source_docs=["d1.pdf"], execute=True)
     assert report["chunks"] == 2
-    assert calls and all(c["where"] == {"$and": [{"tenant_id": "ta"}, {"source_doc": "d1.pdf"}]} for c in calls)
+    # The purge resolves the ids of (tenant, document) first and deletes exactly those ids.
+    deleted_ids = sorted(i for c in calls for i in (c.get("ids") or []))
+    assert calls and deleted_ids == ["a1", "a2"]
     assert sorted(col.get(include=[])["ids"]) == ["b1"]
