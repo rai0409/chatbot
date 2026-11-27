@@ -1,0 +1,10 @@
+# The repository ignores *.csv / *.xlsx / *.docx / *.pptx so customer files are never committed by accident.
+# These files are tiny SYNTHETIC fixtures (tools/make_dummy_docs.py --conversion-fixtures, fixed example
+# values only) and are re-included by exact name. Do not add real documents here.
+!book.xlsx
+!deck.pptx
+!policy.docx
+!csv_cp932.csv
+!csv_utf8_sig.csv
+!csv_utf16le_nobom.csv
+!csv_utf16be_nobom.csv

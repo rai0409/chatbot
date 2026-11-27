@@ -111,7 +111,7 @@ class _RecordingCollection:
     def query(self, **kwargs):
         self.calls.append(kwargs)
         n = len(self.metas)
-        return {"documents": [["Q: 質問\nA: 回答"] * n], "metadatas": [self.metas], "distances": [[0.1] * n]}
+        return {"ids": [[m["qa_id"] for m in self.metas]], "documents": [["Q: 質問\nA: 回答"] * n], "metadatas": [self.metas], "distances": [[0.1] * n]}
 
 
 def test_similar_search_filters_tenant_in_where_and_results(monkeypatch):

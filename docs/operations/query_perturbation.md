@@ -1,6 +1,6 @@
 # 質問の揺れ（摂動）と前処理の評価
 
-クエリ前処理（`rag_core/query_preprocess.py`、`QUERY_PREPROCESS_ENABLED`、既定オフ）は以前からある。
+クエリ前処理（`rag_core/query_preprocess.py`、`QUERY_PREPROCESS_ENABLED`、既定オン）は以前からある。
 「入れたら良くなるのか」を数字で言えるようにするのが 3-1。
 
 ## 摂動（`eval/tenant_eval/perturb.py`）

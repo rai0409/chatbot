@@ -4,6 +4,8 @@
 [Unit]
 Description=KuraDen monitoring runner (metrics snapshot + alert check)
 After=network.target
+# A runner that crashes (exit code other than 0/1/2: missing python, broken script) is reported too.
+OnFailure=kuraden-monitor-failure.service
 
 [Service]
 Type=oneshot
@@ -13,8 +15,13 @@ Environment=KURADEN_METRICS_URL=http://127.0.0.1:8000/metrics
 Environment=KURADEN_MONITOR_DIR=/var/lib/kuraden/monitoring
 Environment=KURADEN_MONITOR_RETENTION=288
 ExecStart=/opt/kuraden/scripts/monitoring_runner.sh
-# Do not fail the unit on WARN/CRITICAL exit codes; alerting is the signal.
+# WARN/CRITICAL (1/2) are not unit failures: the runner itself notifies them through
+# scripts/alert_notify.py (de-duplicated by state change in KURADEN_MONITOR_DIR). Any
+# other exit code fails the unit and OnFailure= sends a "monitoring failed" notification.
+# Notification channels (ALERT_SLACK_WEBHOOK / SMTP settings) come from this file:
+EnvironmentFile=-/etc/kuraden/monitor.env
 SuccessExitStatus=0 1 2
+TimeoutStartSec=10min
 
 [Install]
 WantedBy=multi-user.target

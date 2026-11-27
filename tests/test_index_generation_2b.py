@@ -24,6 +24,8 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "CHUNKS_JSONL_PATH", str(tmp_path / "legacy_served.jsonl"))
     monkeypatch.delenv("CHROMA_COLLECTION", raising=False)
     monkeypatch.delenv("ACTIVE_GENERATION_FILE", raising=False)
+    # Tombstones, operation records and locks of the generation switch stay in this test's directory.
+    monkeypatch.setenv("INGESTION_REGISTRY_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("EMBED_PROVIDER", "local")
     client = qdrant_client.QdrantClient(":memory:")
     cols = {}
@@ -264,3 +266,87 @@ def test_switch_cli_registers_verifies_and_activates(env, capsys):
     assert switch_generation.main(["clear"]) == 0
     capsys.readouterr()
     assert index_generation.active_pointer() is None
+
+
+@pytest.mark.parametrize("fault", ["legacy_id", "metadata_id", "short_ids", "missing_ids"])
+def test_generation_checks_mail_and_column_alignment(env, monkeypatch, fault):
+    name = env.name("stage")
+    col = env.build(name, [_row("a1")])
+    get = col.get
+
+    def tamper(**kwargs):
+        result = get(**kwargs)
+        if kwargs.get("include") == ["metadatas"] and kwargs.get("limit") == 1000 and result["ids"]:
+            if fault == "legacy_id":
+                result["ids"][0] = "ta:email:abc:h1"
+            elif fault == "metadata_id":
+                result["metadatas"][0]["id"] = "ta:email:abc:h1"
+            elif fault == "short_ids":
+                result["ids"] = []
+            else:
+                del result["ids"]
+        return result
+
+    monkeypatch.setattr(col, "get", tamper)
+    with pytest.raises(index_generation.GenerationError) as error:
+        index_generation.activate(name)
+    assert "no_private_mail" in _failed(error)
+    assert index_generation.active_pointer() is None
+
+
+def test_generation_rejects_overlapping_scan_pages(env, monkeypatch):
+    name = env.name("stage")
+    col = env.build(name, [_row(f"row-{i}") for i in range(1001)])
+    get = col.get
+    first = []
+
+    def overlap(**kwargs):
+        result = get(**kwargs)
+        if kwargs.get("include") == ["metadatas"] and kwargs.get("limit") == 1000:
+            if kwargs["offset"] == 0:
+                first[:] = [result["ids"][0], result["metadatas"][0]]
+            else:
+                result["ids"], result["metadatas"] = [first[0]], [first[1]]
+        return result
+
+    monkeypatch.setattr(col, "get", overlap)
+    with pytest.raises(index_generation.GenerationError) as error:
+        index_generation.activate(name)
+    assert "no_private_mail" in _failed(error)
+
+
+@pytest.mark.parametrize("mode", ["purge", "refuse"])
+@pytest.mark.parametrize("operation", ["activate", "rollback"])
+def test_generation_redaction_failure_keeps_active_pointer(env, monkeypatch, mode, operation):
+    from webapi import collection_admin as ca, ingestion_jobs as ij
+
+    g1, g2 = env.name("g1"), env.name("g2")
+    env.build(g1, [_row("first")])
+    env.build(g2, [_row("second")])
+    index_generation.activate(g1)
+    if operation == "rollback":
+        index_generation.activate(g2)
+    before = index_generation.active_pointer()
+    ij.add_tombstones("ta", ["absent.pdf"], reason="source_delete")
+    calls = []
+
+    def fail(tenant, docs):
+        calls.append((tenant, docs))
+        raise ca.ConversationRedactionError("injected failure")
+
+    monkeypatch.setattr(ca, "_redact_conversations", fail)
+    with pytest.raises(index_generation.GenerationError, match="redaction|ConversationRedactionError"):
+        if operation == "activate":
+            index_generation.activate(g2, tombstones=mode)
+        else:
+            index_generation.rollback(tombstones=mode)
+    assert calls == [("ta", ["absent.pdf"])]
+    assert index_generation.active_pointer() == before
+
+
+def test_generation_production_cannot_ignore_tombstones(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    with pytest.raises(index_generation.GenerationError, match="not allowed in production"):
+        index_generation._tombstones("unused", "ignore")
+    monkeypatch.setenv("APP_ENV", "development")
+    assert index_generation._tombstones("unused", "ignore") == {"mode": "ignore"}

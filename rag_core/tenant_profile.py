@@ -31,11 +31,47 @@ def load_tenant_profile_mapping(
 
     directory = Path(config_dir) if config_dir is not None else TENANT_PROFILE_DIR
     mapping_path = directory / f"{safe_name}.json"
+    try:
+        st = mapping_path.stat()
+        key = (str(mapping_path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is not None and key in _MAPPING_CACHE:
+        return copy.deepcopy(_MAPPING_CACHE[key])
     with mapping_path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
     if not isinstance(payload, dict):
         raise ValueError(f"tenant profile mapping must be a JSON object: {mapping_path}")
+    if key is not None:
+        if len(_MAPPING_CACHE) > 16:
+            _MAPPING_CACHE.clear()
+        _MAPPING_CACHE[key] = copy.deepcopy(payload)
     return copy.deepcopy(payload)
+
+
+# Parsed mapping files by (path, mtime_ns, size); /chat reads the mapping on every request.
+_MAPPING_CACHE: Dict[tuple, dict] = {}
+
+
+def tenant_chat_policy(tenant_id: str | None, mapping: dict | None = None) -> Dict[str, bool]:
+    """The optional per-tenant `chat_policy` block of the mapping (explicit booleans only).
+
+        "tenants": {"tenant_a": {..., "chat_policy": {"allow_llm_calls": false,
+                                                      "allow_exact_answer": true,
+                                                      "human_review_on_low_confidence": true}}}
+
+    Enforced on /chat and /chat/stream regardless of CHAT_USE_TENANT_PROFILE. Unknown keys and non-boolean values
+    are ignored; a tenant without the block gets {}."""
+    active = mapping if isinstance(mapping, dict) else load_tenant_profile_mapping()
+    tenants = active.get("tenants") if isinstance(active.get("tenants"), dict) else {}
+    entry = tenants.get(_as_str(tenant_id) or "default")
+    block = entry.get("chat_policy") if isinstance(entry, dict) else None
+    if not isinstance(block, dict):
+        return {}
+    return {key: value for key, value in block.items() if key in _CHAT_POLICY_KEYS and isinstance(value, bool)}
+
+
+_CHAT_POLICY_KEYS = {"allow_exact_answer", "allow_llm_calls", "human_review_on_low_confidence"}
 
 
 def validate_tenant_profile_mapping(

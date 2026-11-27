@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -8,6 +9,7 @@ from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import config
 from rag_core import embedding_provider, ja_terms, query_preprocess
+from rag_core import cross_encoder_reranker as _ce_module
 from rag_core.cross_encoder_reranker import rerank as cross_encoder_rerank
 from rag_core.ja_text import normalize_for_index, normalize_japanese_text
 from rag_core.keyword_scorer import apply_keyword_boost, classify_query_type, score_keyword_match
@@ -21,6 +23,8 @@ from rag_core.retrieval import QueryEmbeddingBatch, RetrievedChunk, add_neighbor
 from rag_core.utils import ensure_openai_client
 from rag_grounded import Chunk, build_citation_payloads, build_evidence_blocks, build_messages, drop_empty_shortage_lines, extractive_fallback, merge_by_page, rewrite_query, strip_reference_block, strip_source_tags, to_footnotes, validate_output
 from schemas import AnswerResult, CitationOut, RetrievedChunkOut
+
+logger = logging.getLogger(__name__)
 
 
 def retrieve_chunks(
@@ -97,14 +101,16 @@ def infer_intent(question: str) -> str:
     return "other"
 
 
-def _soft_threshold(intent: str) -> float:
+def _soft_threshold(intent: str, values: Optional[Dict[str, float]] = None) -> float:
+    if values is None:
+        values = guard_thresholds()["values"]  # type: ignore[assignment]
     if intent == "reset":
-        return config.RAG_SOFT_DIST_RESET
+        return float(values["RAG_SOFT_DIST_RESET"])  # type: ignore[index]
     if intent == "change":
-        return config.RAG_SOFT_DIST_CHANGE
+        return float(values["RAG_SOFT_DIST_CHANGE"])  # type: ignore[index]
     if intent == "procedure":
-        return config.RAG_SOFT_DIST_PROCEDURE
-    return config.RAG_SOFT_DIST_OTHER
+        return float(values["RAG_SOFT_DIST_PROCEDURE"])  # type: ignore[index]
+    return float(values["RAG_SOFT_DIST_OTHER"])  # type: ignore[index]
 
 
 def _salient_terms(question: str) -> List[str]:
@@ -278,22 +284,217 @@ _DEICTIC_ONLY_RE = re.compile(
 )
 
 
-def distance_guard_calibration() -> Dict[str, object]:
-    """Whether the distance thresholds were calibrated for the active embedding model."""
+# Keys of a calibration identity (scripts/calibrate_distance_guard.py writes them).
+CALIBRATION_IDENTITY_KEYS = ("provider", "model", "revision", "prefix_scheme", "dim", "max_seq_length")
+# One tuple (key, value) replaced atomically, so concurrent readers never see a key with another file's value.
+_CALIBRATION_FILE_CACHE: Tuple[object, object] = (None, None)
+
+
+def _load_calibration_file(path: str) -> Tuple[Optional[Dict[str, object]], Optional[str]]:
+    """(parsed calibration, error) for RAG_DIST_CALIBRATION_FILE; cached by path and mtime."""
+    import json
+
+    global _CALIBRATION_FILE_CACHE
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        _warn_calibration_once(path, "calibration_file_missing")
+        return None, "calibration_file_missing"
+    key = (path, mtime)
+    cached_key, cached_value = _CALIBRATION_FILE_CACHE
+    if cached_key == key:
+        return cached_value  # type: ignore[return-value]
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        logger.warning("RAG_DIST_CALIBRATION_FILE %s is unreadable; guard thresholds fall back to environment/defaults", path)
+        result: Tuple[Optional[Dict[str, object]], Optional[str]] = (None, "calibration_file_unreadable")
+    else:
+        identity = data.get("identity") if isinstance(data, dict) else None
+        thresholds = data.get("thresholds") if isinstance(data, dict) else None
+        if not isinstance(identity, dict) or not isinstance(thresholds, dict):
+            logger.warning("RAG_DIST_CALIBRATION_FILE %s has no identity/thresholds; ignored", path)
+            result = (None, "calibration_file_without_identity_or_thresholds")
+        else:
+            clean: Dict[str, float] = {}
+            for name in config.GUARD_THRESHOLD_NAMES:
+                if name not in thresholds:
+                    continue
+                try:
+                    value = float(thresholds[name])
+                except (TypeError, ValueError):
+                    logger.warning("calibration file %s: threshold %s=%r is not a number; ignored", path, name, thresholds[name])
+                    continue
+                low = -0.5 if name.endswith("_DELTA") else 0.0
+                if value == value and low <= value <= 2.0:  # finite, inside the cosine-distance range
+                    clean[name] = value
+                else:
+                    logger.warning("calibration file %s: threshold %s=%r is outside the distance range; ignored", path, name, value)
+            result = ({
+                "identity": dict(identity),
+                "thresholds": clean,
+                "measured_at": data.get("measured_at"),
+                "n_cases": data.get("n_cases"),
+            }, None)
+    _CALIBRATION_FILE_CACHE = (key, result)
+    return result
+
+
+_CALIBRATION_WARNED: set = set()
+
+
+def _warn_calibration_once(path: str, reason: str) -> None:
+    if (path, reason) not in _CALIBRATION_WARNED:
+        _CALIBRATION_WARNED.add((path, reason))
+        logger.warning("RAG_DIST_CALIBRATION_FILE %s: %s; guard thresholds fall back to environment/defaults", path, reason)
+
+
+def _as_int(value: object) -> int:
+    try:
+        return int(value or 0)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return -1  # unparsable (malformed file): never equals a real value, so it reports a mismatch
+
+
+def _identity_mismatch(calibrated: Dict[str, object], active: Dict[str, object]) -> List[str]:
+    """Identity keys that differ. dim is compared only when both sides know it."""
+    out: List[str] = []
+    for name in CALIBRATION_IDENTITY_KEYS:
+        want, have = calibrated.get(name), active.get(name)
+        if name == "dim":
+            if want not in (None, "") and have not in (None, "") and _as_int(want) != _as_int(have):
+                out.append(name)
+            continue
+        if name == "max_seq_length":
+            if _as_int(want) != _as_int(have):
+                out.append(name)
+            continue
+        if str(want or "") != str(have or ""):
+            out.append(name)
+    return out
+
+
+def _calibration_state() -> Dict[str, object]:
     from rag_core import embedding_provider
 
     try:
-        active = str(embedding_provider.active_fingerprint().get("embed_model") or "")
-    except Exception:  # noqa: BLE001 - provider misconfigured: reported elsewhere
-        active = ""
+        identity = embedding_provider.embedding_identity()
+    except (ValueError, NotImplementedError, RuntimeError, OSError):  # provider misconfigured: reported elsewhere
+        identity = {}
+    try:
+        active_model = str(embedding_provider.active_fingerprint().get("embed_model") or "")
+    except (ValueError, NotImplementedError, RuntimeError, OSError):
+        active_model = str(identity.get("model") or "")
+    path = str(getattr(config, "RAG_DIST_CALIBRATION_FILE", "") or "").strip()
+    if path:
+        if not os.path.isabs(path):
+            path = os.path.join(str(config.BASE_DIR), path)
+        loaded, error = _load_calibration_file(path)
+        if loaded is None:
+            return {"basis": "identity_file", "calibrated": False, "reason": error, "file": path,
+                    "active_identity": identity, "active_model": active_model, "calibrated_for": "", "thresholds": {}}
+        calibrated_identity = dict(loaded["identity"])  # type: ignore[arg-type]
+        mismatch = _identity_mismatch(calibrated_identity, identity) if identity else ["active_identity_unavailable"]
+        return {
+            "basis": "identity_file",
+            "calibrated": not mismatch,
+            "reason": None if not mismatch else "identity_mismatch",
+            "mismatch": mismatch,
+            "file": path,
+            "active_identity": identity,
+            "calibrated_identity": calibrated_identity,
+            "dim_verified": identity.get("dim") is not None and calibrated_identity.get("dim") is not None,
+            "measured_at": loaded.get("measured_at"),
+            "n_cases": loaded.get("n_cases"),
+            "active_model": active_model,
+            "calibrated_for": str(calibrated_identity.get("model") or ""),
+            "thresholds": dict(loaded["thresholds"]) if not mismatch else {},  # type: ignore[arg-type]
+        }
     calibrated_for = str(getattr(config, "RAG_DIST_CALIBRATED_MODEL", "") or "")
+    ok = bool(active_model) and active_model == calibrated_for
     return {
-        "active_model": active,
+        # Legacy: the model name only (revision, prefixes, dimension and
+        # truncation are not checked). Prefer RAG_DIST_CALIBRATION_FILE.
+        "basis": "model_name_only",
+        "calibrated": ok,
+        "reason": None if ok else ("not_calibrated" if not calibrated_for else "model_mismatch"),
+        "active_identity": identity,
+        "active_model": active_model,
         "calibrated_for": calibrated_for,
-        "calibrated": bool(active) and active == calibrated_for,
-        "soft_other": config.RAG_SOFT_DIST_OTHER,
-        "hard": config.RAG_HARD_MAX_DIST,
+        "thresholds": {},
     }
+
+
+def _threshold_explicit(name: str) -> bool:
+    env_names = (name, "RAG_MAX_DISTANCE") if name == "RAG_HARD_MAX_DIST" else (name,)
+    if any(str(os.environ.get(env) or "").strip() for env in env_names):
+        return True
+    imported = getattr(config, "GUARD_THRESHOLD_IMPORTED", {}).get(name)
+    return imported is not None and getattr(config, name, imported) != imported
+
+
+def guard_thresholds(state: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+    """Distance thresholds in force and where each comes from.
+
+    Precedence: a value set explicitly (environment variable, or the config
+    attribute changed at run time) > a RAG_DIST_CALIBRATION_FILE whose identity
+    matches the active embedding identity > the built-in default."""
+    if state is None:
+        has_file = bool(str(getattr(config, "RAG_DIST_CALIBRATION_FILE", "") or "").strip())
+        state = _calibration_state() if has_file else {"thresholds": {}}
+    from_file = dict(state.get("thresholds") or {})  # type: ignore[arg-type]
+    values: Dict[str, float] = {}
+    sources: Dict[str, str] = {}
+    for name in config.GUARD_THRESHOLD_NAMES:
+        explicit = _threshold_explicit(name)
+        if explicit or name not in from_file:
+            values[name] = float(getattr(config, name))
+            sources[name] = "explicit" if explicit else "default"
+        else:
+            values[name] = float(from_file[name])  # type: ignore[arg-type]
+            sources[name] = "calibration_file"
+    return {"values": values, "sources": sources}
+
+
+def distance_guard_calibration() -> Dict[str, object]:
+    """Whether the distance thresholds were calibrated for the active embedding identity."""
+    state = _calibration_state()
+    thresholds = guard_thresholds(state)
+    values = thresholds["values"]
+    out = {key: value for key, value in state.items() if key != "thresholds"}
+    out.update({
+        "soft_other": values["RAG_SOFT_DIST_OTHER"],  # type: ignore[index]
+        "hard": values["RAG_HARD_MAX_DIST"],  # type: ignore[index]
+        "thresholds": values,
+        "threshold_sources": thresholds["sources"],
+    })
+    return out
+
+
+def warmup_models() -> Dict[str, object]:
+    """Load the local embedding model (one dummy query) and, when enabled, the
+    cross-encoder, so the first user request does not pay the load time.
+    Call it once at start-up (webapi/main.py lifespan); failures are reported,
+    never raised."""
+    out: Dict[str, object] = {}
+    started = time.perf_counter()
+    try:
+        if embedding_provider.is_local_provider():
+            embedding_provider.embed_queries(["warmup"])
+            out["embedding"] = "ok"
+        else:
+            out["embedding"] = "remote_provider_skipped"
+    except Exception as exc:  # noqa: BLE001 - best-effort model load at start-up; reported and logged
+        logger.warning("embedding warmup failed: %s", type(exc).__name__, exc_info=True)
+        out["embedding"] = f"failed:{type(exc).__name__}"
+    out["embedding_ms"] = int((time.perf_counter() - started) * 1000)
+    started = time.perf_counter()
+    out["cross_encoder"] = "ok" if _ce_module.warmup() else (
+        "disabled" if not getattr(config, "CROSS_ENCODER_RERANK_ENABLED", False) else "failed"
+    )
+    out["cross_encoder_ms"] = int((time.perf_counter() - started) * 1000)
+    return out
 
 
 def _question_term_coverage(question: str, chunks: Sequence[Chunk]) -> Optional[float]:
@@ -322,14 +523,15 @@ def guard_merged_top(question: str, intent: str, chunks: Sequence[Chunk], retrie
     best_vector_distance = evidence["best_vector_distance"]
     if best_vector_distance is not None:
         best = float(best_vector_distance)
-        hard = config.RAG_HARD_MAX_DIST
+        values = guard_thresholds()["values"]
+        hard = float(values["RAG_HARD_MAX_DIST"])  # type: ignore[index]
         if intent == "procedure":
             has_pages = any(ch.source_pages for ch in chunks)
             if has_pages:
-                hard = hard + config.RAG_HARD_MAX_DIST_PROCEDURE_DELTA
+                hard = hard + float(values["RAG_HARD_MAX_DIST_PROCEDURE_DELTA"])  # type: ignore[index]
         if best > hard:
             return "hard_distance"
-        soft = _soft_threshold(intent)
+        soft = _soft_threshold(intent, values)  # type: ignore[arg-type]
         if best > soft:
             if intent == "change":
                 if any(t in question for t in config.PREFER_SORT_TERMS_CHANGE):
@@ -383,14 +585,17 @@ def _is_definition_question(question: str) -> bool:
     return q.endswith(_DEFINITION_ENDINGS) or any(t in q for t in config.DEFINITION_TERMS)
 
 
-def _compose_query(question: str, intent: str) -> str:
+def _compose_query(question: str, intent: str, *, definition: Optional[bool] = None) -> str:
+    """definition: whether the question AS ASKED is a definition question (the
+    caller decides it before any cleanup); None = decide on `question`."""
     q = question
     if intent in {"reset", "change"}:
         q = q + " 手順 方法"
     if intent == "other":
         # Definition words are added only to definition questions; other
         # questions keep a single retrieval pass (augmented == question).
-        if _setting("COMPOSE_QUERY_MODE", "definition_only") == "legacy" or _is_definition_question(q):
+        is_definition = _is_definition_question(q) if definition is None else (definition or _is_definition_question(q))
+        if _setting("COMPOSE_QUERY_MODE", "definition_only") == "legacy" or is_definition:
             q = q + " " + " ".join(config.OTHER_QUERY_BOOST_TERMS)
     return q.strip()
 
@@ -1176,6 +1381,26 @@ def _confident_first_pass(hits: Sequence[RetrievedChunk]) -> bool:
     return len(scores) == 2 and scores[0] - scores[1] >= margin
 
 
+def _synonym_lane_variants(question: str, *, rag_profile_id: Optional[str], tenant_id: str) -> List[Dict[str, str]]:
+    """Synonym-substituted variants of the question (SYNONYM_LANE_ENABLED, default on).
+
+    Searched as their own lane and fused by RRF whether or not
+    MULTI_QUERY_ENABLED is on and whether or not the first pass was confident:
+    appending synonyms to the augmented query alone barely moved the dense
+    vector and was skipped on a confident first pass."""
+    if not bool(getattr(config, "SYNONYM_LANE_ENABLED", True)):
+        return []
+    try:
+        variants = multi_query.build_variants(
+            question, profile_id=rag_profile_id, tenant_id=tenant_id, limit=multi_query.MAX_QUERIES + 8
+        )
+    except Exception:  # noqa: BLE001 - a broken profile must not fail retrieval; logged
+        logger.warning("synonym lane skipped: variant build failed", exc_info=True)
+        return []
+    limit = max(0, int(getattr(config, "SYNONYM_LANE_MAX_VARIANTS", 1) or 0))
+    return [v for v in variants if v.get("kind") == "synonym"][:limit]
+
+
 def _retrieve_and_rerank(
     question: str,
     augmented_query: str,
@@ -1189,12 +1414,14 @@ def _retrieve_and_rerank(
     collection_name: Optional[str] = None,
     stats: Optional[Dict[str, object]] = None,
     rag_profile_id: Optional[str] = None,
+    expansions: Sequence[str] = (),
 ) -> Tuple[List[RetrievedChunk], List[RetrievedChunk], List[RetrievedChunk]]:
     # A staging collection with its own keyword corpus (stage 3) gets the same
     # hybrid retrieval as the served collection; without one it stays vector
     # only (the historical staging behaviour).
     staging_mode = _staging_vector_only(collection_name)
     create_missing = not bool(collection_name)
+    vector_top_k = max(int(getattr(config, "VECTOR_TOP_K", top_k) or top_k), top_k)
 
     def _hybrid(query: str, embedding=None) -> List[RetrievedChunk]:
         return hybrid_retrieve(
@@ -1211,21 +1438,34 @@ def _retrieve_and_rerank(
         )
 
     def _vector(query: str, embedding=None) -> List[RetrievedChunk]:
+        # Same candidate pool as the dense lane of production (VECTOR_TOP_K),
+        # cut to the same output size (top_k) as the fused production list.
         return vector_retrieve(
             query,
             client,
-            top_k=top_k,
+            top_k=vector_top_k,
             query_embedding=embedding,
             tenant_id=tenant_id,
             collection_name=collection_name,
             create_collection_if_missing=False,
-        )
+        )[:top_k]
 
     base_retrieve = _vector if staging_mode else _hybrid
     # Step 3-3: lane weights by query type (QUERY_ROUTING_ENABLED, default off); not for a vector-only staging pass.
     route = None if staging_mode else query_route.route_for(query_type)
     if route is not None and stats is not None:
         stats["route"] = {"name": route["name"], "scale": dict(route["scale"])}
+    if staging_mode and stats is not None:
+        # What differs from production on this pass, so a staging evaluation is read correctly.
+        stats["staging_conditions"] = {
+            "mode": "vector_only",
+            "reason": "no keyword corpus for the staging collection",
+            "vector_top_k": vector_top_k,
+            "top_k": top_k,
+            "query_routing": False,
+            "parent_expansion": False,
+            "guard_lenient": bool(getattr(config, "STAGING_GUARD_LENIENT", False)),
+        }
 
     def retrieve(query: str, embedding=None) -> List[RetrievedChunk]:
         if route is None:
@@ -1233,32 +1473,58 @@ def _retrieve_and_rerank(
         with fusion_scale(route["scale"]):
             return base_retrieve(query, embedding)
 
+    # Variant lanes: multi-query (MULTI_QUERY_ENABLED or a deep request) and the
+    # synonym lane (always, when the profile has a matching synonym group).
+    variant_queries: List[Dict[str, str]] = []
+    if multi_query.enabled():
+        # Step 3-2: rule-based variants of the question, searched as well and fused by RRF.
+        mq_variants = multi_query.build_variants(
+            question, profile_id=rag_profile_id, tenant_id=tenant_id, limit=multi_query.max_queries()
+        )[1:]
+        variant_queries.extend(mq_variants)
+        if stats is not None:
+            stats["multi_query"] = {"variants": mq_variants, "deep": search_mode.is_deep()}
+    synonym_variants = _synonym_lane_variants(question, rag_profile_id=rag_profile_id, tenant_id=tenant_id)
+    seen_queries = {normalize_for_index(question), normalize_for_index(augmented_query)}
+    seen_queries |= {normalize_for_index(v["query"]) for v in variant_queries}
+    added_synonyms = []
+    for variant in synonym_variants:
+        key = normalize_for_index(variant["query"])
+        if key in seen_queries:
+            continue
+        seen_queries.add(key)
+        variant_queries.append(variant)
+        added_synonyms.append(variant)
+    if added_synonyms and stats is not None:
+        stats["synonym_lane"] = {"variants": added_synonyms}
+
+    # One embed_queries call for every query of this request (lazy: stubbed or
+    # keyword-only paths never trigger embedding).
+    all_queries = [question, augmented_query, *(v["query"] for v in variant_queries)]
+    embedding_batch = QueryEmbeddingBatch(all_queries, client=client) if len(set(all_queries)) > 1 else None
+
+    def _embedding_for(query: str):
+        if embedding_batch is None:
+            return None
+        return lambda: embedding_batch.get(query)
+
     if augmented_query == question:
         # Identical queries would produce identical passes; retrieve once.
-        base = retrieve(question)
+        base = retrieve(question, _embedding_for(question))
         aug = base
     else:
-        # Lazy batch: both queries are embedded in one embed_queries call the
-        # first time vector retrieval asks for an embedding; stubbed or
-        # keyword-only paths never trigger embedding.
-        embedding_batch = QueryEmbeddingBatch([question, augmented_query], client=client)
-        base = retrieve(question, lambda: embedding_batch.get(question))
+        base = retrieve(question, _embedding_for(question))
         if _confident_first_pass(base):
-            # v2_03: the first pass is decisive; the augmented pass is skipped.
+            # v2_03: the first pass is decisive; the augmented pass is skipped
+            # (the synonym lane below is not).
             aug = []
             if stats is not None:
                 stats["skipped_augmented_pass"] = True
         else:
-            aug = retrieve(augmented_query, lambda: embedding_batch.get(augmented_query))
-    extra_lists: List[List[RetrievedChunk]] = []
-    if multi_query.enabled():
-        # Step 3-2: rule-based variants of the question, searched as well and fused by RRF.
-        variants = multi_query.build_variants(
-            question, profile_id=rag_profile_id, tenant_id=tenant_id, limit=multi_query.max_queries()
-        )[1:]
-        extra_lists = [retrieve(variant["query"]) for variant in variants]
-        if stats is not None:
-            stats["multi_query"] = {"variants": variants, "deep": search_mode.is_deep()}
+            aug = retrieve(augmented_query, _embedding_for(augmented_query))
+    extra_lists: List[List[RetrievedChunk]] = [
+        retrieve(variant["query"], _embedding_for(variant["query"])) for variant in variant_queries
+    ]
     if extra_lists:
         before_rerank = multi_query.fuse_rrf(
             [base] if aug is base else [base, aug],
@@ -1278,7 +1544,11 @@ def _retrieve_and_rerank(
             )
         )
     before_rerank = _decorate_score_details(scoring_query, before_rerank, query_type=query_type)
-    child_ranked = rerank_chunks(question, before_rerank, intent=intent)
+    if expansions:
+        # Hits on synonyms count like hits on the question's own terms.
+        child_ranked = rerank_chunks(question, before_rerank, intent=intent, expansions=list(expansions))
+    else:
+        child_ranked = rerank_chunks(question, before_rerank, intent=intent)
     if config.KEYWORD_BOOST_ENABLED and query_type in set(config.KEYWORD_BOOST_QUERY_TYPES):
         child_ranked = apply_keyword_boost(
             child_ranked,
@@ -1302,7 +1572,22 @@ def _retrieve_and_rerank(
     if config.CROSS_ENCODER_RERANK_ENABLED:
         # Optional semantic stage over the already tenant-filtered, heuristic-
         # ranked candidates; reorders the fused top-N before parent expansion.
+        _ce_module.reset_last_run()
         child_ranked = cross_encoder_rerank(question, child_ranked)
+        ce_run = _ce_module.last_run()
+        if ce_run is not None and stats is not None:
+            stats["cross_encoder"] = ce_run
+    # Document priority (tenant doc_boost_rules / doc_priority metadata) runs last, after the
+    # cross-encoder, so a semantic re-sort cannot erase the tenant's document ordering.
+    # load_rag_profile does not raise for missing/malformed files (it returns warnings); like the profile
+    # boost above, a profile that did not load cleanly is skipped.
+    _profile_for_priority = load_rag_profile(rag_profile_id or "default")
+    if isinstance(_profile_for_priority, dict) and not _profile_for_priority.get("warnings"):
+        from rag_core import profile_engine as _profile_engine
+
+        child_ranked, priority_trace = _profile_engine.apply_doc_priority(child_ranked, _profile_for_priority)
+        if stats is not None and priority_trace.get("rules"):
+            stats["doc_priority"] = priority_trace
     if staging_mode:
         # Prompt072 staging collections are Chroma-only and have no matching
         # JSONL keyword/parent index. Keep retrieval inside the selected
@@ -1367,15 +1652,20 @@ def _build_retrieval_trace(
     q = re.sub(r"\s+", " ", q)
     intent = intent_override or infer_intent(q)
     query_type = classify_query_type(classification_query, intent=intent)
-    # N5 query preprocessing (QUERY_PREPROCESS_ENABLED, default off): the
-    # cleaned query is used for retrieval, synonyms and typo candidates are
+    # Definition questions are recognised on the question as asked: the
+    # colloquial cleanup used to turn "VPNってなに" into "vpnなに", and the
+    # definition boost terms were then never added.
+    definition = _is_definition_question(q)
+    # N5 query preprocessing (config.query_preprocess_enabled(), default on):
+    # the cleaned query is used for retrieval, synonyms and typo candidates are
     # appended to the augmented query. Intent is inferred on the original.
     retrieval_q = q
     expansions: List[str] = []
+    synonym_expansions: List[str] = []
     preprocess_trace: Optional[Dict[str, object]] = None
     # Commercial fix F12: colloquial stripping, synonyms and typo candidates are part
     # of the product path (QUERY_PREPROCESS_ENABLED=false restores the raw query).
-    if _setting("QUERY_PREPROCESS_ENABLED", "true") in _ENABLED_VALUES:
+    if config.query_preprocess_enabled():
         pre = query_preprocess.preprocess_query(
             q,
             tenant_id=normalize_tenant_id(tenant_id),
@@ -1384,9 +1674,10 @@ def _build_retrieval_trace(
         )
         retrieval_q = pre.query or q
         expansions = list(pre.expansions)
+        synonym_expansions = [str(t) for step in pre.steps if step.get("step") == "synonyms" for t in step.get("added") or []]
         preprocess_trace = pre.to_trace()
     rewritten = rewrite_query(retrieval_q)
-    augmented = _compose_query(rewritten, intent)
+    augmented = _compose_query(rewritten, intent, definition=definition)
     if expansions:
         augmented = (augmented + " " + " ".join(expansions)).strip()
 
@@ -1406,6 +1697,7 @@ def _build_retrieval_trace(
         collection_name=collection_name,
         stats=retrieval_stats,
         rag_profile_id=rag_profile_id,
+        expansions=synonym_expansions,
     )
     retrieval_ms = int((time.perf_counter() - retrieval_started) * 1000)
 
@@ -1437,6 +1729,9 @@ def _build_retrieval_trace(
     if collection_name:
         trace["query_collection"] = collection_name
         trace["query_collection_mode"] = "staging"
+        if "staging_conditions" in retrieval_stats:
+            trace["staging_conditions"] = dict(retrieval_stats["staging_conditions"])  # type: ignore[arg-type]
+    trace["definition_question"] = definition
 
     if intent == "procedure":
         max_per_page = config.PROCEDURE_MAX_PER_PAGE
@@ -1463,8 +1758,16 @@ def _build_retrieval_trace(
 
     if guard_reason is None:
         guard_reason = guard_merged_top(q, intent, guard_grounded, retrieved)
-        # Lenient guard only for vector-only staging (no keyword evidence).
-        if _staging_vector_only(collection_name) and guard_reason in {"too_general", "soft_distance"} and grounded:
+        # Lenient guard for vector-only staging (no keyword evidence) only when
+        # STAGING_GUARD_LENIENT=true: by default staging is evaluated with the
+        # production guard conditions.
+        staging_lenient = bool(getattr(config, "STAGING_GUARD_LENIENT", False))
+        if (
+            staging_lenient
+            and _staging_vector_only(collection_name)
+            and guard_reason in {"too_general", "soft_distance"}
+            and grounded
+        ):
             trace["staging_guard_bypass_reason"] = guard_reason
             guard_reason = None
         elif guard_reason in {"too_general", "soft_distance"} and _should_recover_guarded_extractive(q, grounded, retrieved):

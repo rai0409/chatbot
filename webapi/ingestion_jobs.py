@@ -91,6 +91,10 @@ _PG_DDL = (
     "CREATE TABLE IF NOT EXISTS jobs (job_id TEXT PRIMARY KEY, created_at DOUBLE PRECISION NOT NULL, record TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS collections (name TEXT PRIMARY KEY, owner_tenant TEXT NOT NULL, status TEXT NOT NULL,"
     " created_at DOUBLE PRECISION NOT NULL, updated_at DOUBLE PRECISION NOT NULL, last_job_id TEXT)",
+    "CREATE TABLE IF NOT EXISTS tombstones (tenant TEXT NOT NULL, source_doc TEXT NOT NULL,"
+    " deleted_at DOUBLE PRECISION NOT NULL, reason TEXT NOT NULL, PRIMARY KEY (tenant, source_doc))",
+    "CREATE TABLE IF NOT EXISTS operations (op_id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,"
+    " created_at DOUBLE PRECISION NOT NULL, updated_at DOUBLE PRECISION NOT NULL, record TEXT NOT NULL)",
 )
 _PG_READY = {"done": False}
 
@@ -114,6 +118,25 @@ def _connect() -> sqlite3.Connection:
         " created_at REAL NOT NULL,"
         " updated_at REAL NOT NULL,"
         " last_job_id TEXT)"
+    )
+    # 2026-11 ops hardening: documents deleted at the source or by an administrator (tombstones), and the
+    # promotion / deletion operations with their state (a crash leaves "running", marked interrupted at startup).
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS tombstones ("
+        " tenant TEXT NOT NULL,"
+        " source_doc TEXT NOT NULL,"
+        " deleted_at REAL NOT NULL,"
+        " reason TEXT NOT NULL,"
+        " PRIMARY KEY (tenant, source_doc))"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS operations ("
+        " op_id TEXT PRIMARY KEY,"
+        " kind TEXT NOT NULL,"
+        " status TEXT NOT NULL,"
+        " created_at REAL NOT NULL,"
+        " updated_at REAL NOT NULL,"
+        " record TEXT NOT NULL)"
     )
     return conn
 
@@ -157,6 +180,183 @@ def reset() -> None:
     with _db() as conn:
         conn.execute("DELETE FROM jobs")
         conn.execute("DELETE FROM collections")
+        conn.execute("DELETE FROM tombstones")
+        conn.execute("DELETE FROM operations")
+
+
+# --- tombstones (documents that must not be served again) ---------------------------------------
+#
+# A document deleted at the source (rag_core/source_apply) or by an administrator is recorded here, per tenant,
+# before any row is removed. Promotion removes tombstoned documents from the served generation and never copies
+# them from a staging collection; activating / rolling back a generation purges them first
+# (rag_core/index_generation). A tombstone is lifted when the document is ingested again by a job.
+
+TOMBSTONE_REASONS = ("source_delete", "admin_delete")
+
+
+def add_tombstones(tenant: str, source_docs: List[str], *, reason: str, clock=time.time) -> int:
+    tenant = str(tenant or "").strip() or "default"
+    docs = sorted({str(d).strip() for d in source_docs if str(d).strip()})
+    if not docs:
+        return 0
+    now = clock()
+    with _db() as conn:
+        for doc in docs:
+            conn.execute("DELETE FROM tombstones WHERE tenant = ? AND source_doc = ?", (tenant, doc))
+            conn.execute("INSERT INTO tombstones (tenant, source_doc, deleted_at, reason) VALUES (?, ?, ?, ?)",
+                         (tenant, doc, float(now), str(reason or "")[:40]))
+    return len(docs)
+
+
+def lift_tombstones(tenant: str, source_docs: List[str]) -> int:
+    """The document was ingested again (or an operator restores it): it may be served again."""
+    tenant = str(tenant or "").strip() or "default"
+    docs = sorted({str(d).strip() for d in source_docs if str(d).strip()})
+    with _db() as conn:
+        for doc in docs:
+            conn.execute("DELETE FROM tombstones WHERE tenant = ? AND source_doc = ?", (tenant, doc))
+    return len(docs)
+
+
+def list_tombstones(tenant: Optional[str] = None) -> List[Dict[str, Any]]:
+    with _db() as conn:
+        if tenant is None:
+            rows = conn.execute("SELECT tenant, source_doc, deleted_at, reason FROM tombstones ORDER BY tenant, source_doc").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT tenant, source_doc, deleted_at, reason FROM tombstones WHERE tenant = ? ORDER BY source_doc",
+                (str(tenant or "").strip() or "default",),
+            ).fetchall()
+    return [{"tenant": r[0], "source_doc": r[1], "deleted_at": r[2], "reason": r[3]} for r in rows]
+
+
+def tombstoned_keys(tenant: Optional[str] = None) -> set:
+    """{(tenant, source_doc)} of every tombstone (of one tenant)."""
+    return {(row["tenant"], row["source_doc"]) for row in list_tombstones(tenant)}
+
+
+# --- operations (promotion / deletion state, crash recovery) -----------------------------------
+
+OP_RUNNING = "running"
+OP_DONE = "done"
+OP_FAILED = "failed"
+OP_INTERRUPTED = "interrupted"
+
+
+def _save_operation(record: Dict[str, Any]) -> None:
+    with _db() as conn:
+        upsert = (
+            "INSERT INTO operations (op_id, kind, status, created_at, updated_at, record) VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (op_id) DO UPDATE SET status = EXCLUDED.status, updated_at = EXCLUDED.updated_at,"
+            " record = EXCLUDED.record"
+            if _pg_registry()
+            else "INSERT OR REPLACE INTO operations (op_id, kind, status, created_at, updated_at, record) VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        conn.execute(upsert, (record["op_id"], record["kind"], record["status"], float(record["created_at"]),
+                              float(record["updated_at"]), json.dumps(record, ensure_ascii=False)))
+
+
+def start_operation(kind: str, clock=time.time, **info: Any) -> Dict[str, Any]:
+    """Persist a running operation BEFORE it writes anything (names and counts only, never document text)."""
+    now = clock()
+    record = {"op_id": f"op-{uuid.uuid4().hex}", "kind": str(kind), "status": OP_RUNNING, "created_at": now,
+              "updated_at": now, "owner": _owner_token(), **info}
+    _save_operation(record)
+    return record
+
+
+def finish_operation(record: Dict[str, Any], status: str, clock=time.time, **info: Any) -> Dict[str, Any]:
+    record.update(info)
+    record.update(status=status, updated_at=clock(), finished_at=clock())
+    _save_operation(record)
+    if status != OP_DONE:
+        _metric("ops_operation_total", f"{record.get('kind')}:{status}")
+    return record
+
+
+def list_operations(status: Optional[str] = None, limit: int = 200) -> List[Dict[str, Any]]:
+    with _db() as conn:
+        if status is None:
+            rows = conn.execute("SELECT record FROM operations ORDER BY created_at DESC LIMIT ?", (max(1, int(limit)),)).fetchall()
+        else:
+            rows = conn.execute("SELECT record FROM operations WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                                (status, max(1, int(limit)))).fetchall()
+    return [json.loads(row[0]) for row in rows]
+
+
+def recover_interrupted_operations(clock=time.time) -> int:
+    """Startup: running promotions / deletions of dead processes on this host become "interrupted".
+
+    The served manifest was marked stale before the first write; re-running the same promotion or deletion is
+    idempotent and converges (tombstones were written first)."""
+    recovered = 0
+    for record in list_operations(OP_RUNNING, limit=10000):
+        if _owner_alive(record.get("owner")) is not False:
+            continue
+        finish_operation(record, OP_INTERRUPTED, clock=clock)
+        recovered += 1
+    return recovered
+
+
+def collections_stuck_writing(older_than_seconds: float, clock=time.time) -> List[str]:
+    with _db() as conn:
+        rows = conn.execute("SELECT name, updated_at FROM collections WHERE status = ?", (COLLECTION_WRITING,)).fetchall()
+    now = clock()
+    return sorted(name for name, updated in rows if now - float(updated or 0) > older_than_seconds)
+
+
+def _metric(name: str, label: str) -> None:
+    try:
+        from webapi import metrics_registry
+
+        metrics_registry.increment(name, label)
+    except Exception:  # noqa: BLE001, S110  metrics never break an operation
+        pass
+
+
+# --- maintenance lock (backup <-> writers) ----------------------------------------------------
+
+
+def maintenance_lock_path() -> Path:
+    """MAINTENANCE_LOCK_FILE, default <registry dir>/locks/maintenance.lock (runs/locks/maintenance.lock).
+
+    scripts/backup.sh holds it exclusively while it copies; ingestion jobs, promotion and deletion hold it shared."""
+    raw = str(os.getenv("MAINTENANCE_LOCK_FILE", "")).strip()
+    if raw:
+        path = Path(raw)
+        return path if path.is_absolute() else Path(config.BASE_DIR) / path
+    return registry_path().parent / "locks" / "maintenance.lock"
+
+
+class MaintenanceBusy(RuntimeError):
+    """A backup (or another maintenance task) holds the maintenance lock."""
+
+
+@contextmanager
+def maintenance_shared(wait_seconds: Optional[float] = None) -> Iterator[None]:
+    import fcntl
+
+    if wait_seconds is None:
+        try:
+            wait_seconds = float(os.getenv("MAINTENANCE_LOCK_WAIT_SECONDS", "") or 30)
+        except ValueError:
+            wait_seconds = 30.0
+    path = maintenance_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+") as handle:
+        deadline = time.monotonic() + max(0.0, wait_seconds)
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise MaintenanceBusy("a backup or maintenance task is running; retry later")
+                time.sleep(0.2)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def _new_job_id() -> str:
@@ -465,6 +665,29 @@ def _convert_workers() -> int:
     return max(1, min(workers, os.cpu_count() or 1))
 
 
+def _mail_shaped(rows: List[Dict[str, Any]]) -> bool:
+    """Converted rows that are private mail: a mail marker on any row, or a table whose header looks like a mail
+    export (rag_core.mail_access.looks_like_mail_table)."""
+    from rag_core import mail_access
+
+    headers_seen = set()
+    for row in rows:
+        if mail_access.is_private_mail_record(row):
+            return True
+        columns = row.get("columns")
+        if isinstance(columns, list) and columns:
+            key = tuple(str(c) for c in columns)
+            if key in headers_seen:
+                continue
+            headers_seen.add(key)
+            try:
+                if mail_access.looks_like_mail_table(list(key)):
+                    return True
+            except Exception:  # noqa: BLE001 - a classifier failure refuses (fail-closed)
+                return True
+    return False
+
+
 # Uploads are stored as <upload dir>/<tenant>/<YYYYMMDD>/<12 hex>_<file name>.
 _UPLOAD_NAME_RE = re.compile(r"[0-9a-f]{12}_(.+)")
 
@@ -616,6 +839,10 @@ def run_raw_document_job(
                 if not converted:
                     warnings.append(_bounded_warning(file_name=file_name, reason="no_chunks_generated"))
                     continue
+                if _mail_shaped(converted):
+                    # Private mail must not enter through the generic document path (fail-closed).
+                    warnings.append(_bounded_warning(file_name=file_name, reason="mail_table_refused"))
+                    continue
                 converted, preprocess_summary = _preprocess_converted(converted)
                 for key, value in preprocess_summary.items():
                     if key == "quantities_by_kind":
@@ -666,13 +893,15 @@ def run_raw_document_job(
                 elif not manifest.get("ok"):
                     record.update({"status": "issues_found", "ok": False})
                 else:
-                    with _collection_write_lock(target):
+                    with maintenance_shared(), _collection_write_lock(target):
                         _claim_collection_for_write(target, tenant, job_id, clock=clock)
                         write_started = True
                         record["write_started"] = True
                         _save_job(record)
                         ingest_result = _ingest_chunks(chunks, target)
                         register_collection(target, owner_tenant=tenant, status=COLLECTION_READY, job_id=job_id)
+                    # Ingested again: a document deleted earlier may be served again after the next promotion.
+                    lift_tombstones(tenant, sorted({str(c.get("source_doc") or c.get("doc_id") or "") for c in chunks}))
                     record.update(
                         {
                             "status": "ok",
@@ -708,6 +937,7 @@ def run_raw_document_job(
                 "finished_at": clock(),
             }
         )
+        _metric("ingestion_job_total", "error")
 
     _save_job(record)
     return dict(record)
@@ -795,6 +1025,7 @@ def recover_interrupted_jobs(clock=time.time) -> int:
         })
         _save_job(record)
         recovered += 1
+        _metric("ingestion_job_total", "interrupted")
     return recovered
 
 

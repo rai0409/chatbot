@@ -103,7 +103,7 @@ def test_correct_typos_skips_ids_quotes_and_known_words(monkeypatch):
         tokenizer = "heuristic"
         tokenized_corpus = [["就業規則", "申請書"]]
 
-    monkeypatch.setattr(qp, "_vocabulary", lambda collection_name: (_Index(), qp._Vocabulary(_Index.tokenized_corpus)))
+    monkeypatch.setattr(qp, "_vocabulary", lambda collection_name, tenant_id="default": (_Index(), qp._Vocabulary(_Index.tokenized_corpus)))
     from rag_core import retrieval
 
     monkeypatch.setattr(retrieval, "_query_tokens", lambda q, t: ["就業規側", "申請書", "abc12", "「就業規則」"])

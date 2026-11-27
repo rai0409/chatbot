@@ -1,0 +1,18 @@
+{
+ "_comment": "Minimum conversion accuracy per fixture document (tests/fixtures/conversion). A metric missing for a document (no truth for it) is not checked. Tighten, never loosen, without a recorded reason (docs/operations/conversion_accuracy.md).",
+ "min": {
+  "text.normalized_levenshtein_similarity": 0.95,
+  "reading_order.kendall_tau": 0.9,
+  "table.f1": 0.95,
+  "table.recall": 0.9,
+  "headings.recall": 1.0,
+  "typed_cells.exact_match_rate": 1.0,
+  "warnings.recall": 1.0,
+  "encoding.correct": 1.0
+ },
+ "max": {
+  "text.cer": 0.05,
+  "header_footer_leakage.rate": 0.0,
+  "excluded_text_leakage.rate": 0.0
+ }
+}

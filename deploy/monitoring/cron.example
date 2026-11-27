@@ -1,4 +1,5 @@
 # Cron fallback for the KuraDen monitoring runner (Prompt050).
 # Runs every 5 minutes; logs/snapshots land under KURADEN_MONITOR_DIR.
 # Edit paths to match the install. No secrets are stored by the runner.
-*/5 * * * * cd /opt/kuraden && KURADEN_MONITOR_DIR=/var/lib/kuraden/monitoring scripts/monitoring_runner.sh >/dev/null 2>&1
+# The runner notifies WARN/CRITICAL itself (scripts/alert_notify.py); a runner crash (exit > 2) is notified by the || branch.
+*/5 * * * * cd /opt/kuraden && KURADEN_MONITOR_DIR=/var/lib/kuraden/monitoring scripts/monitoring_runner.sh >/dev/null 2>&1; rc=$?; [ $rc -le 2 ] || .venv/bin/python scripts/alert_notify.py --failure monitor_cron_failed --state-dir /var/lib/kuraden/monitoring >/dev/null 2>&1

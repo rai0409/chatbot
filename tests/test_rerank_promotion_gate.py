@@ -226,6 +226,7 @@ def test_cli_threshold_overrides_work(tmp_path):
 
     code = main(
         [
+            "--legacy-feedback-preview",
             "--comparison",
             str(comparison),
             "--profile",
@@ -277,7 +278,7 @@ def test_cli_writes_requested_output_path(tmp_path):
     profile = _profile(tmp_path / "profile.json")
     output = tmp_path / "decision.json"
 
-    code = main(["--comparison", str(comparison), "--profile", str(profile), "--output", str(output)])
+    code = main(["--legacy-feedback-preview", "--comparison", str(comparison), "--profile", str(profile), "--output", str(output)])
 
     assert code == 0
     assert output.exists()

@@ -80,3 +80,12 @@ python3 scripts/external_probe.py report --log /var/lib/kuraden-probe/probe.json
 - 1 か所のプローブからの観測であり、プローブ側のネットワーク障害は「停止」に見える（`--fail-after` で一時的なものは抑える）。
 - 祝日・計画停止は除外できない。
 - 実環境（実サービス・Slack・SMTP・外部の死活監視サービス）では未検証。テストはローカル HTTP サーバーと模擬の通知で行っている。
+
+## 内部状態の監視（2026-11）
+
+`/metrics` の `ops` には、ジョブ・操作（昇格／削除）の失敗と中断、`writing` のまま止まったコレクション、ソース適用の
+失敗・保留、変更台帳の連鎖、世代ポインタ、embedding 指紋の不一致、マニフェストの stale、ベクトル／キーワード件数の
+ずれ、バックアップの失敗・経過時間（`BACKUP_MAX_AGE_HOURS`）、ディスク使用率が入る。`/ready` は指紋の状態と
+ポインタの読み取りも返す（ポインタが壊れていれば 503）。`scripts/monitoring_runner.sh` は前回との差分で判定し、
+`scripts/alert_notify.py` が状態が変わったときだけ通知する。runner 自体が落ちたときは systemd の
+`OnFailure=kuraden-monitor-failure.service` が通知する。

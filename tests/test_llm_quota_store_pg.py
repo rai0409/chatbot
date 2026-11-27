@@ -255,3 +255,116 @@ def test_fractional_scale_overflow_is_not_silent(database):
     else:
         stored = conn.execute("SELECT reserved_cost FROM llm_quota_ledger_reservations WHERE reservation_id='beyond-scale'").fetchone()[0]
         assert stored == value, 'PostgreSQL silently rounded a reservation cost'
+
+
+@pytest.fixture
+def conversation_database(database, monkeypatch):
+    from webapi import conversation_store as cs
+
+    admin, factory, _ = database
+
+    @contextmanager
+    def transaction():
+        with factory() as conn:
+            with conn.transaction():
+                yield conn
+
+    monkeypatch.setattr(cs, "_pg_conn", transaction)
+    monkeypatch.setenv("CONVERSATION_STORE_BACKEND", "postgres")
+    monkeypatch.setenv("CONVERSATION_RETENTION_DAYS", "0")
+    return cs, admin, factory
+
+
+def test_conversation_v2_postgres_crud_and_legacy_isolation(conversation_database):
+    cs, admin, _ = conversation_database
+    cs.append_turn("t", "u", "thread", question="first", answer_text="A", source_docs=["x"])
+    admin.execute("INSERT INTO conversation_turns (tenant_id, identity, thread_id, ts, record)"
+                  " VALUES ('t','u','thread',1,'{}'::jsonb)")
+    for tenant, identity, thread in [("_t", "u", "thread"), ("t", "_u", "thread"), ("t", "u", "_thread")]:
+        assert cs.get_thread(tenant, identity, thread) == []
+        cs.append_turn(tenant, identity, thread, question="other", answer_text="B", source_docs=["x"])
+    assert {row["thread_id"] for row in cs.list_threads("t", "u")} == {"thread", "_thread"}
+    assert cs.redact_source_doc("t", "x") == 3
+    assert cs.redact_source_doc("t", "x") == 0
+    assert cs.get_thread("_t", "u", "thread")[0]["answer_text"] == "B"
+    assert cs.get_thread("t", "_u", "thread")[0]["answer_text"] == cs.REDACTED_NOTICE
+    assert cs.delete_thread("t", "u", "thread")
+    assert cs.get_thread("t", "u", "thread") == []
+    assert cs.purge("t", "u", max_threads=0) == 1
+    assert admin.execute("SELECT COUNT(*) FROM conversation_turns WHERE tenant_id = 't'").fetchone()[0] == 1
+
+
+def test_conversation_postgres_marker_survives_rewrite_failure(conversation_database):
+    cs, admin, _ = conversation_database
+    cs.append_turn("t", "u", "th", question="q", answer_text="private", source_docs=["x"])
+    admin.execute("""CREATE FUNCTION fail_conversation_rewrite() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION 'injected failure'; END $$""")
+    admin.execute("CREATE TRIGGER fail_rewrite BEFORE UPDATE ON conversation_turns"
+                  " FOR EACH ROW EXECUTE FUNCTION fail_conversation_rewrite()")
+    with pytest.raises(psycopg.Error):
+        cs.redact_source_doc("t", "x")
+    assert admin.execute("SELECT count(*) FROM conversation_redactions_v2").fetchone()[0] == 1
+    assert cs.get_thread("t", "u", "th")[0]["answer_text"] == cs.REDACTED_NOTICE
+    assert cs.append_turn("t", "u", "th", question="late", answer_text="private", source_docs=["x"])["redacted"]
+    admin.execute("DROP TRIGGER fail_rewrite ON conversation_turns")
+    assert cs.redact_source_doc("t", "x") == 1
+    assert cs.redact_source_doc("t", "x") == 0
+
+
+def test_conversation_postgres_schema_rollback_retries(conversation_database):
+    cs, admin, factory = conversation_database
+    with pytest.raises(RuntimeError, match="rollback"):
+        with factory() as conn:
+            with conn.transaction():
+                cs._pg_ensure(conn)
+                raise RuntimeError("rollback")
+    assert admin.execute("SELECT to_regclass('conversation_redactions_v2')").fetchone()[0] is None
+    cs.append_turn("t", "u", "th", question="q")
+    assert cs.get_thread("t", "u", "th")[0]["question"] == "q"
+
+
+def test_conversation_postgres_append_retention_rollback(conversation_database, monkeypatch):
+    cs, _, _ = conversation_database
+    cs.append_turn("t", "u", "th", question="old")
+    with monkeypatch.context() as patch:
+        def fail_purge(*args, **kwargs):
+            raise RuntimeError("retention failed")
+        patch.setattr(cs, "_pg_purge_locked", fail_purge)
+        with pytest.raises(RuntimeError, match="retention failed"):
+            cs.append_turn("t", "u", "th", question="new")
+    assert [row["question"] for row in cs.get_thread("t", "u", "th")] == ["old"]
+
+
+def test_conversation_postgres_concurrent_append_redaction(conversation_database):
+    cs, _, _ = conversation_database
+    cs.append_turn("t", "u", "th", question="old", answer_text="private", source_docs=["x"])
+    barrier = Barrier(2, timeout=5)
+
+    def append():
+        barrier.wait()
+        return cs.append_turn("t", "u", "th", question="late", answer_text="private", source_docs=["x"])
+
+    def redact():
+        barrier.wait()
+        return cs.redact_source_doc("t", "x")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        writer = executor.submit(append)
+        remover = executor.submit(redact)
+        writer.result(timeout=15)
+        remover.result(timeout=15)
+    turns = cs.get_thread("t", "u", "th")
+    assert {row["question"] for row in turns} == {"old", "late"}
+    assert all(row["redacted"] and row["answer_text"] == cs.REDACTED_NOTICE for row in turns)
+
+
+def test_conversation_postgres_rejects_invalid_provenance_before_write(conversation_database):
+    cs, admin, _ = conversation_database
+    for kwargs in ({"citations_count": 1}, {"source_docs": [""]}, {"source_docs": [1]},
+                   {"source_docs": ["x" * 513]}, {"source_docs": [str(i) for i in range(21)]}):
+        with pytest.raises(ValueError):
+            cs.append_turn("t", "u", "th", question="q", **kwargs)
+    assert admin.execute("SELECT to_regclass('conversation_turns')").fetchone()[0] is None
+    rec = cs.append_turn("t", "u", "th", question="q", citations_count=2, source_docs=[" a ", "a", "b"])
+    assert rec["source_docs"] == ["a", "b"]
+    assert cs.get_thread("t", "u", "th")[0]["source_docs"] == ["a", "b"]

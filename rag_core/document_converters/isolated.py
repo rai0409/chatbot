@@ -17,6 +17,10 @@ _TASKS_PER_WORKER files so memory does not accumulate.
   INGEST_CONVERT_SCRUB_ENV        true (default): a worker starts without the secret-looking environment
                                   variables of the API process (*_KEY, *_TOKEN, *_SECRET, *_PASSWORD, ...), so a
                                   parser exploit finds no credentials to read
+
+run_task(kind, payload, timeout=..., memory_limit=...) runs one registered task
+(e.g. "mail_batch") in a fresh process with the same hardening; see
+rag_core.mail_to_canonical (MAIL_CONVERT_TIMEOUT_SECONDS, MAIL_CONVERT_MAX_MEMORY_MB).
 """
 from __future__ import annotations
 
@@ -70,12 +74,12 @@ def memory_limit_bytes() -> int:
         return 0
 
 
-def _harden_worker() -> None:
+def _harden_worker(limit: Optional[int] = None) -> None:
     """Runs first in a worker process: no inherited secrets, an optional memory limit."""
     if scrub_enabled():
         for name in secret_variable_names(os.environ):
             os.environ.pop(name, None)
-    limit = memory_limit_bytes()
+    limit = memory_limit_bytes() if limit is None else limit
     if limit > 0:
         try:
             import resource
@@ -257,6 +261,74 @@ def convert_files(tasks: Sequence[Tuple], *, workers: int = 1, timeout: Optional
             for worker, _, _ in busy.values():
                 worker.stop(kill=True)
     return out
+
+
+# One-shot isolated tasks (a fresh process per task, killed afterwards). The
+# parent sends only a task *kind*; the target is resolved from this table.
+_TASK_TARGETS: Dict[str, str] = {
+    "mail_batch": "rag_core.mail_to_canonical:_convert_local",
+}
+
+
+def _serve_task(conn, target: str, payload: Dict[str, Any], limit: int) -> None:
+    _harden_worker(limit)
+    try:
+        import importlib
+
+        module, _, name = target.partition(":")
+        func = getattr(importlib.import_module(module), name)
+        args = payload.get("__args__") if isinstance(payload, dict) else None
+        if args is not None:
+            result = func(*args)
+        else:
+            result = func(**payload)
+        conn.send(("ok", result))
+    except MemoryError:
+        conn.send(("error", "MemoryError", "the task exceeded the worker memory limit"))
+    except BaseException as exc:  # noqa: BLE001 - SystemExit from a parser must not escape silently
+        conn.send(("error", type(exc).__name__, str(exc)[:200]))
+    finally:
+        conn.close()
+
+
+def run_task(kind: str, payload: Dict[str, Any], *, timeout: float, memory_limit: int = 0) -> Any:
+    """Run one registered task in a fresh spawned process with a time and memory limit.
+
+    The worker starts without secret-looking environment variables, gets
+    RLIMIT_AS=memory_limit (0 = none) and is killed after `timeout` seconds
+    (ConversionFailed("ConversionTimeout")); a worker that dies gives
+    ConversionFailed("ConversionCrashed"); an exception in the task gives
+    ConversionFailed(<exception type>, <message>).
+    """
+    target = _TASK_TARGETS.get(kind)
+    if not target:
+        raise ValueError("unknown_isolated_task")
+    if timeout <= 0:
+        raise ValueError("isolated_task_timeout_required")
+    parent, child = _CTX.Pipe(duplex=False)
+    process = _CTX.Process(target=_serve_task, args=(child, target, payload, max(0, int(memory_limit))),
+                           name=f"kuraden-{kind}", daemon=True)
+    process.start()
+    child.close()
+    answered = False
+    try:
+        if not parent.poll(timeout):
+            raise ConversionFailed("ConversionTimeout", f"over {timeout:g} seconds")
+        try:
+            message = parent.recv()
+        except (EOFError, OSError):
+            raise ConversionFailed("ConversionCrashed", "the isolated worker stopped") from None
+        answered = True
+        if message[0] == "ok":
+            return message[1]
+        raise ConversionFailed(message[1], message[2])
+    finally:
+        parent.close()
+        if answered:
+            process.join(timeout=5)
+        if process.is_alive():
+            process.kill()
+        process.join(timeout=5)
 
 
 def worker_value(name: str, *, env: Optional[Dict[str, Optional[str]]] = None, timeout: float = 120.0) -> Optional[str]:

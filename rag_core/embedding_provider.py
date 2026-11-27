@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
+import threading
+from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Protocol, Sequence
+from typing import Any, Dict, List, Optional, Protocol, Sequence
 
 import config
 from rag_core.model_cache import load_once
@@ -84,24 +87,171 @@ def _load_sentence_transformer_class(provider_name: str):
     return SentenceTransformer
 
 
+def local_model_revision() -> str:
+    """LOCAL_EMBED_MODEL_REVISION: hub revision (commit hash / tag) the local model is pinned to; "" = latest."""
+    return str(getattr(config, "LOCAL_EMBED_MODEL_REVISION", "") or "").strip()
+
+
+def embed_max_seq_length() -> int:
+    """EMBED_MAX_SEQ_LENGTH: truncation length in tokens; 0 = the model default."""
+    try:
+        return max(0, int(getattr(config, "EMBED_MAX_SEQ_LENGTH", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def embed_batch_size() -> int:
+    try:
+        return max(1, int(getattr(config, "EMBED_BATCH_SIZE", 32) or 32))
+    except (TypeError, ValueError):
+        return 32
+
+
+def _apply_max_seq_length(model, max_seq_length: int) -> None:
+    """EMBED_MAX_SEQ_LENGTH is part of the stamped profile, so a model that cannot take it must be visible."""
+    if max_seq_length <= 0:
+        return
+    try:
+        model.max_seq_length = int(max_seq_length)
+        actual = model.max_seq_length
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("embedding model cannot apply or report max_seq_length") from exc
+    if isinstance(actual, bool) or actual != max_seq_length:
+        raise ValueError(f"embedding model reports max_seq_length={actual!r}, expected {max_seq_length}")
+
+
+_THREADS_LOCK = threading.Lock()
+_THREADS_APPLIED: Dict[str, Any] = {"value": None}
+
+
+def apply_num_threads() -> Optional[int]:
+    """torch.set_num_threads(EMBED_NUM_THREADS) once per value; 0 or no torch = untouched."""
+    try:
+        wanted = int(getattr(config, "EMBED_NUM_THREADS", 0) or 0)
+    except (TypeError, ValueError):
+        wanted = 0
+    if wanted <= 0:
+        return None
+    with _THREADS_LOCK:
+        if _THREADS_APPLIED["value"] == wanted:
+            return wanted
+        try:
+            import torch  # noqa: WPS433 - optional, loaded with sentence-transformers anyway
+
+            torch.set_num_threads(wanted)
+        except ImportError:  # no torch: nothing to tune
+            return None
+        _THREADS_APPLIED["value"] = wanted
+        return wanted
+
+
 @load_once(maxsize=8)
-def _get_sentence_transformer_model(model_name: str, provider_name: str):
+def _get_sentence_transformer_model(model_name: str, provider_name: str, revision: str = "", max_seq_length: int = 0):
+    # The cache key is every argument: a new revision or truncation length is a new model object.
     sentence_transformer = _load_sentence_transformer_class(provider_name)
-    return sentence_transformer(model_name)
+    apply_num_threads()
+    kwargs: Dict[str, Any] = {"trust_remote_code": False}
+    if revision:
+        kwargs["revision"] = revision
+    model = sentence_transformer(model_name, **kwargs)
+    _apply_max_seq_length(model, max_seq_length)
+    return model
 
 
 def _get_local_model(model_name: str):
-    return _get_sentence_transformer_model(model_name, LOCAL_PROVIDER)
+    return _get_sentence_transformer_model(model_name, LOCAL_PROVIDER, local_model_revision(), embed_max_seq_length())
+
+
+def _get_external_local_model(model_path: str):
+    return _load_external_local_model(model_path, embed_max_seq_length())
+
+
+_get_external_local_model.cache_clear = lambda: _load_external_local_model.cache_clear()  # type: ignore[attr-defined]
 
 
 @load_once(maxsize=8)
-def _get_external_local_model(model_path: str):
+def _load_external_local_model(model_path: str, max_seq_length: int = 0):
     sentence_transformer = _load_sentence_transformer_class(LOCAL_PROVIDER)
-    return sentence_transformer(
+    apply_num_threads()
+    model = sentence_transformer(
         model_path,
         local_files_only=True,
         trust_remote_code=False,
     )
+    _apply_max_seq_length(model, max_seq_length)
+    return model
+
+
+def _accepts_batch_size(model) -> bool:
+    encode = getattr(model, "encode", None)
+    if encode is None:
+        return False
+    try:
+        params = inspect.signature(encode).parameters
+    except (TypeError, ValueError):
+        return False
+    return "batch_size" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _encode(model, texts: Sequence[str]) -> List[List[float]]:
+    texts = list(texts)
+    if _accepts_batch_size(model):
+        out = model.encode(texts, normalize_embeddings=True, batch_size=embed_batch_size())
+    else:  # test doubles and old wrappers
+        out = model.encode(texts, normalize_embeddings=True)
+    return out.tolist() if hasattr(out, "tolist") else [list(v) for v in out]
+
+
+_QUERY_CACHE_ATTR = "_kuraden_query_embedding_cache"
+_QUERY_CACHE_LOCK = threading.Lock()
+
+
+def _query_cache_size() -> int:
+    try:
+        return max(0, int(getattr(config, "EMBED_QUERY_CACHE_SIZE", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _encode_queries_cached(model, prefixed: Sequence[str]) -> List[List[float]]:
+    """LRU cache of query vectors kept on the loaded model object.
+
+    The model object is unique per (model, revision, max length) in the loader
+    cache and the texts already carry the query prefix, so the key is
+    (embedding identity, prefixed text). Misses are encoded in one batch."""
+    size = _query_cache_size()
+    texts = list(prefixed)
+    if size <= 0 or not texts:
+        return _encode(model, texts)
+    with _QUERY_CACHE_LOCK:
+        cache = getattr(model, _QUERY_CACHE_ATTR, None)
+        if cache is None:
+            cache = OrderedDict()
+            try:
+                setattr(model, _QUERY_CACHE_ATTR, cache)
+            except (AttributeError, TypeError):  # an object without attributes: no cache
+                cache = None
+        if cache is None:
+            hits: Dict[str, List[float]] = {}
+        else:
+            hits = {}
+            for text in texts:
+                if text in cache:
+                    cache.move_to_end(text)
+                    hits[text] = cache[text]
+    missing = list(dict.fromkeys(t for t in texts if t not in hits))
+    if missing:
+        vectors = _encode(model, missing)
+        fresh = {t: list(v) for t, v in zip(missing, vectors)}
+        hits.update(fresh)
+        if cache is not None:
+            with _QUERY_CACHE_LOCK:
+                for text, vector in fresh.items():
+                    cache[text] = vector
+                    cache.move_to_end(text)
+                while len(cache) > size:
+                    cache.popitem(last=False)
+    return [list(hits[t]) for t in texts]
 
 
 @lru_cache(maxsize=8)
@@ -127,7 +277,7 @@ def validate_external_local_model_asset(
 
 
 def _get_bge_m3_model(model_name: str = BGE_M3_MODEL_NAME):
-    return _get_sentence_transformer_model(model_name, BGE_M3_PROVIDER)
+    return _get_sentence_transformer_model(model_name, BGE_M3_PROVIDER, "", embed_max_seq_length())
 
 
 def _load_openai_class():
@@ -175,16 +325,26 @@ class LocalEmbeddingProvider:
             str(self.model_path),
         )
 
-    def _embed(self, texts: Sequence[str]) -> List[List[float]]:
+    @property
+    def revision(self) -> str:
+        # An external asset path is pinned by its asset contract, not by a hub revision.
+        return "" if self.model_path else local_model_revision()
+
+    @property
+    def max_seq_length(self) -> int:
+        return embed_max_seq_length()
+
+    def _model(self):
         if self.model_path:
             self.embedding_asset_metadata()
-            model = _get_external_local_model(str(self.model_path))
-        else:
-            model = _get_local_model(str(self.model_name))
-        return model.encode(list(texts), normalize_embeddings=True).tolist()
+            return _get_external_local_model(str(self.model_path))
+        return _get_local_model(str(self.model_name))
+
+    def _embed(self, texts: Sequence[str]) -> List[List[float]]:
+        return _encode(self._model(), texts)
 
     def embed_queries(self, queries: Sequence[str], *, client=None) -> List[List[float]]:
-        return self._embed(_with_prefix(queries, self.query_prefix))
+        return _encode_queries_cached(self._model(), _with_prefix(queries, self.query_prefix))
 
     def embed_documents(self, documents: Sequence[str], *, client=None) -> List[List[float]]:
         return self._embed(_with_prefix(documents, self.document_prefix))
@@ -199,12 +359,18 @@ class BgeM3EmbeddingProvider:
     def __init__(self, model_name: str | None = None):
         self.model_name = model_name or BGE_M3_MODEL_NAME
 
+    revision = ""
+
+    @property
+    def max_seq_length(self) -> int:
+        return embed_max_seq_length()
+
     def _embed(self, texts: Sequence[str]) -> List[List[float]]:
         model = _get_bge_m3_model(str(self.model_name))
-        return model.encode(list(texts), normalize_embeddings=True).tolist()
+        return _encode(model, texts)
 
     def embed_queries(self, queries: Sequence[str], *, client=None) -> List[List[float]]:
-        return self._embed(queries)
+        return _encode_queries_cached(_get_bge_m3_model(str(self.model_name)), queries)
 
     def embed_documents(self, documents: Sequence[str], *, client=None) -> List[List[float]]:
         return self._embed(documents)
@@ -215,6 +381,8 @@ class OpenAIEmbeddingProvider:
     prefix_scheme = PREFIX_SCHEME_NONE
     normalize_embeddings = True
     distance = "cosine"
+    revision = ""
+    max_seq_length = 0
 
     def __init__(self, model_name: str | None = None):
         self.model_name = model_name or config.getenv_first(
@@ -279,16 +447,64 @@ def active_prefix_scheme(provider_name: str | None = None) -> str:
 
 
 # Facts of the code that decide whether stored vectors and query vectors are comparable.
-# (The model revision is not part of the profile yet: the loaders do not pin it.)
+# 2026-11-22: the loaders pin LOCAL_EMBED_MODEL_REVISION and apply EMBED_MAX_SEQ_LENGTH,
+# so both are part of the profile (stamped at ingest, compared when stamped).
 PROFILE_VERSION = "1"
-PROFILE_KEYS = ("embed_normalize", "embed_distance", "profile_version")
+PROFILE_KEYS = ("embed_normalize", "embed_distance", "profile_version", "embed_revision", "embed_max_seq_length")
+# Optional profile keys are written only when they differ from these defaults,
+# so collections stamped before they existed (or with the defaults) still match.
+PROFILE_OPTIONAL_DEFAULTS = {"embed_revision": "", "embed_max_seq_length": "0"}
 
 
 def provider_profile(provider) -> Dict[str, str]:
-    return {
+    profile = {
         "embed_normalize": "true" if getattr(provider, "normalize_embeddings", True) else "false",
         "embed_distance": str(getattr(provider, "distance", "cosine") or "cosine"),
         "profile_version": PROFILE_VERSION,
+    }
+    revision = str(getattr(provider, "revision", "") or "")
+    max_seq = str(int(getattr(provider, "max_seq_length", 0) or 0))
+    if revision != PROFILE_OPTIONAL_DEFAULTS["embed_revision"]:
+        profile["embed_revision"] = revision
+    if max_seq != PROFILE_OPTIONAL_DEFAULTS["embed_max_seq_length"]:
+        profile["embed_max_seq_length"] = max_seq
+    return profile
+
+
+def profile_value(profile: Dict[str, str], key: str) -> str:
+    """A profile value with the default of an optional key filled in."""
+    return str(profile.get(key, PROFILE_OPTIONAL_DEFAULTS.get(key, "")))
+
+
+def loaded_embedding_dim(provider=None) -> Optional[int]:
+    """The vector size of the active local model when it is already loaded (never loads it); else None."""
+    provider = provider or get_embedding_provider()
+    model = None
+    if isinstance(provider, LocalEmbeddingProvider) and not provider.model_path:
+        model = _get_sentence_transformer_model.peek(  # type: ignore[attr-defined]
+            str(provider.model_name), LOCAL_PROVIDER, local_model_revision(), embed_max_seq_length()
+        )
+    if model is None:
+        return None
+    getter = getattr(model, "get_sentence_embedding_dimension", None)
+    try:
+        return int(getter()) if callable(getter) else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def embedding_identity(provider_name: str | None = None, *, embedding_dim: Optional[int] = None) -> Dict[str, Any]:
+    """What a calibrated distance threshold depends on: provider, model, revision,
+    prefix scheme, vector size and truncation length."""
+    provider = get_embedding_provider(provider_name)
+    dim = embedding_dim if embedding_dim is not None else loaded_embedding_dim(provider)
+    return {
+        "provider": str(provider.name),
+        "model": str(getattr(provider, "model_name", "") or ""),
+        "revision": str(getattr(provider, "revision", "") or ""),
+        "prefix_scheme": str(getattr(provider, "prefix_scheme", PREFIX_SCHEME_NONE) or PREFIX_SCHEME_NONE),
+        "dim": int(dim) if dim else None,
+        "max_seq_length": int(getattr(provider, "max_seq_length", 0) or 0),
     }
 
 

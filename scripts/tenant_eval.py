@@ -115,17 +115,40 @@ def _evaluate(args) -> int:
     out = evaluate.evaluate_candidate(
         cases, answer, answer,
         proposal_id=args.proposal,
-        policy=Policy(),
+        policy=Policy(latency_p95_budget_ms=args.latency_budget_ms),
         conditions={"baseline": baseline_conditions, "candidate": candidate_conditions, "declared": declared},
         budget=args.budget,
         candidate_context=conditions.candidate_environment(args.profile, version=args.candidate_version, knobs=knobs),
     )
     gate = out["gate"]
+    review_summary = None
+    if args.customer_review:
+        from eval.tenant_eval import customer_review
+
+        ratings, problems = customer_review.import_review_csv(args.customer_review)
+        for problem in problems:
+            print(f"[customer-review] {problem}", file=sys.stderr)
+        review_summary = customer_review.aggregate_reviews(ratings, out["candidate_rows"])
+    feedback_summary = None
+    if args.feedback_events:
+        from eval.tenant_eval import feedback
+
+        events = [json.loads(line) for line in _Path(args.feedback_events).read_text(encoding="utf-8").splitlines()
+                  if line.strip()]
+        feedback_summary = feedback.aggregate(events)
     markdown = report.to_markdown(
         gate, title=f"評価レポート: {args.proposal}",
         baseline_rows=out["baseline_rows"], candidate_rows=out["candidate_rows"],
         baseline_conditions=baseline_conditions, candidate_conditions=candidate_conditions,
+        customer_review=review_summary, feedback=feedback_summary,
     )
+    if args.save_evaluation:
+        # The saved evaluation is the input of `python -m eval.tenant_eval.customer_review export|import`.
+        target = _Path(args.save_evaluation)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({"gate": gate, "baseline_rows": out["baseline_rows"],
+                                      "candidate_rows": out["candidate_rows"], "cases": cases},
+                                     ensure_ascii=False, indent=1, default=str), encoding="utf-8")
     if args.perturb:
         markdown += perturb.robustness_markdown(out["baseline_rows"], out["candidate_rows"])
     if args.report:
@@ -154,6 +177,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ev.add_argument("--exclude-change", default=None)
     ev.add_argument("--budget", type=int, default=ledger.DEFAULT_BUDGET)
     ev.add_argument("--report", default=None)
+    ev.add_argument("--save-evaluation", default=None,
+                    help="write {gate, baseline_rows, candidate_rows, cases} as JSON (input of customer_review export)")
+    ev.add_argument("--customer-review", default=None, help="customer review CSV (customer_review export → filled in)")
+    ev.add_argument("--feedback-events", default=None, help="chat feedback events JSONL of the evaluation period")
+    ev.add_argument("--latency-budget-ms", type=float, default=None,
+                    help="fail the gate when the candidate's end-to-end p95 latency exceeds this")
     ev.add_argument("--golden-source", choices=("profile", "console", "both"), default="profile",
                     help="where the golden cases come from: the profile (default), the console's golden questions, or both")
     ev.add_argument("--golden-tenant", default=None, help="the tenant of the console's golden questions (default: --tenant)")

@@ -214,7 +214,8 @@
     { v: "wrong_intent", t: "質問の意図と違う" }, { v: "incorrect", t: "内容が誤っている" },
     { v: "outdated", t: "情報が古い" }, { v: "wrong_source", t: "出典が合っていない" }, { v: "incomplete", t: "情報が足りない" }
   ];
-  var controller = null, busy = false, historyEnabled = true;
+  var controller = null, busy = false, historyEnabled = true, generation = 0;
+  var historySequence = 0, threadReadSequence = 0, statusSequence = 0;
   // Wording of the service state. The server sends only a code (GET /system/status, and "service_notice" on an answer).
   var SERVICE_TEXT = {
     llm_unavailable: "現在、AI による文章生成は利用できません。登録文書の原文の抜粋を表示しています。",
@@ -378,19 +379,41 @@
   }
 
   // --- conversation history -----------------------------------------------------------------
-  function saveTurn(question, tenantId, data, streamed) {
-    // Stored only when CONVERSATION_HISTORY_ENABLED (404 otherwise; ignored).
-    var txt = (data && (data.answer_text || data.answer_with_footnotes)) || streamed || "";
+  function validContext(ctx) { return ctx.generation === generation; }
+  function invalidate() {
+    generation += 1;
+    if (controller) controller.abort();
+    controller = null; setBusy(false);
+  }
+  function context() {
+    return { generation: generation, tenantId: tenant(), threadId: threadId,
+      collection: stagingCollection(), headers: headers() };
+  }
+  function saveTurn(ctx, data, card) {
+    if (!validContext(ctx)) return;
+    function failed() {
+      if (!validContext(ctx)) return;
+      var notice = document.createElement("div"); notice.className = "answer-notice";
+      notice.textContent = "回答は表示されましたが、会話履歴に保存できませんでした。";
+      card.appendChild(notice);
+    }
+    var citations = data && data.citations;
+    var txt = data && (data.answer_text || data.answer_with_footnotes);
+    var docs = [];
+    if (!data || typeof data !== "object" || typeof txt !== "string" || !Array.isArray(citations)) { failed(); return; }
+    for (var i = 0; i < citations.length; i++) {
+      var doc = citations[i] && citations[i].source_doc;
+      if (typeof doc !== "string" || !doc.trim() || doc.trim().length > 512) { failed(); return; }
+      doc = doc.trim();
+      if (docs.indexOf(doc) < 0) docs.push(doc);
+    }
+    if (docs.length > 20) { failed(); return; }
     fetch("/chat/threads", {
-      method: "POST", headers: headers(),
-      body: JSON.stringify({
-        thread_id: threadId, question: question, answer_text: txt,
-        answer_mode: (data && data.answer_mode) || null,
-        abstained: answerKind(data) === "abstain",
-        citations_count: (data && data.citations && data.citations.length) || 0,
-        tenant_id: tenantId
-      })
-    }).then(function (r) { if (r.ok) loadHistory(); }).catch(function () {});
+      method: "POST", headers: ctx.headers,
+      body: JSON.stringify({ thread_id: ctx.threadId, question: ctx.question, answer_text: txt,
+        answer_mode: data.answer_mode || null, abstained: answerKind(data) === "abstain",
+        citations_count: citations.length, source_docs: docs, tenant_id: ctx.tenantId })
+    }).then(function (r) { if (validContext(ctx)) { if (r.ok) loadHistory(); else if (r.status !== 404) failed(); } }).catch(failed);
   }
   function fmtTime(epoch) {
     if (!epoch) return "";
@@ -401,12 +424,15 @@
   }
   function loadHistory() {
     if (!historyEnabled) return;
-    fetch("/chat/threads?tenant_id=" + encodeURIComponent(tenant()), { headers: headers() })
+    var ctx = context(), sequence = ++historySequence;
+    fetch("/chat/threads?tenant_id=" + encodeURIComponent(ctx.tenantId), { headers: ctx.headers })
       .then(function (r) {
+        if (!validContext(ctx) || sequence !== historySequence) return null;
         if (r.status === 404) { historyEnabled = false; return null; }
         return r.ok ? r.json() : null;
       })
       .then(function (res) {
+        if (!validContext(ctx) || sequence !== historySequence) return;
         if (!historyEnabled) { convList.innerHTML = '<div class="placeholder">会話履歴は無効です（管理者が有効にすると、ここに表示されます）。</div>'; return; }
         var threads = (res && res.threads) || [];
         if (!threads.length) { convList.innerHTML = '<div class="placeholder">まだ会話はありません。</div>'; return; }
@@ -422,10 +448,14 @@
       .catch(function () {});
   }
   function openThread(id) {
-    fetch("/chat/threads/" + encodeURIComponent(id) + "?tenant_id=" + encodeURIComponent(tenant()), { headers: headers() })
+    invalidate();
+    threadId = id;
+    showEmptyState(); renderCitations([], tenant());
+    var ctx = context(), sequence = ++threadReadSequence;
+    fetch("/chat/threads/" + encodeURIComponent(id) + "?tenant_id=" + encodeURIComponent(ctx.tenantId), { headers: ctx.headers })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (res) {
-        if (!res) return;
+        if (!validContext(ctx) || sequence !== threadReadSequence || !res) return;
         threadId = id; log.innerHTML = "";
         (res.turns || []).forEach(function (t) {
           var turn = addTurn(t.question);
@@ -518,31 +548,35 @@
     }
     turn._citations = citations; turn._tenant = ctx.tenantId; turn._collection = ctx.collection;
     renderCitations(citations, ctx.tenantId, ctx.collection);
-    attachActions(turn, card, ctx);
-    saveTurn(ctx.question, ctx.tenantId, data, streamed);
+    attachActions(turn, card, { token: ctx.token, tenantId: ctx.tenantId, collection: ctx.collection, deep: ctx.deep });
+    saveTurn(ctx, data, card);
   }
 
   function streamChat(ctx, turn, card) {
-    var body = { question: ctx.question, tenant_id: ctx.tenantId, trace_id: ctx.token, thread_id: threadId };
+    var body = { question: ctx.question, tenant_id: ctx.tenantId, trace_id: ctx.token, thread_id: ctx.threadId };
     if (ctx.collection) body.staging_collection = ctx.collection;
     if (ctx.deep) body.deep = true;
     controller = window.AbortController ? new AbortController() : null;
     var a = card.querySelector(".a");
     return fetch("/chat/stream", {
-      method: "POST", headers: headers(), body: JSON.stringify(body),
+      method: "POST", headers: ctx.headers, body: JSON.stringify(body),
       signal: controller ? controller.signal : undefined
     }).then(function (resp) {
+      if (!validContext(ctx)) return;
       if (!resp.ok || !resp.body) { showError(card, resp.status); return; }
       var reader = resp.body.getReader();
       var decoder = new TextDecoder("utf-8");
       var buf = "", streamed = "", settled = false;
       function handleEvent(name, dataStr) {
+        if (!validContext(ctx) || settled) return;
         var data = null;
         try { data = dataStr ? JSON.parse(dataStr) : null; } catch (_) { data = null; }
         if (name === "delta" && data && typeof data.text === "string") {
           streamed += data.text; a.textContent = stripReferenceBlock(streamed); scrollDown();
         } else if (name === "final" || name === "approved") {
-          settled = true; finish(turn, card, ctx, data, streamed);
+          settled = true;
+          if (data && typeof data === "object" && Array.isArray(data.citations) && typeof (data.answer_text || data.answer_with_footnotes) === "string") finish(turn, card, ctx, data, streamed);
+          else showError(card, 0);
         } else if (name === "error") {
           settled = true; showError(card, 0);
         }
@@ -562,7 +596,7 @@
       function pump() {
         return reader.read().then(function (res) {
           if (res.done) {
-            if (!settled && streamed) finish(turn, card, ctx, null, streamed);
+            if (!settled && validContext(ctx)) showError(card, 0);
             return;
           }
           buf += decoder.decode(res.value, { stream: true });
@@ -572,6 +606,7 @@
       }
       return pump();
     }).catch(function (err) {
+      if (!validContext(ctx)) return;
       if (err && err.name === "AbortError") {
         setKind(card, "grounded");
         var s = document.createElement("div"); s.className = "err"; s.textContent = "回答の生成を停止しました。";
@@ -591,13 +626,16 @@
   function send(text, opts) {
     var question = String(text || "").trim();
     if (!question || busy) return;
-    var ctx = { question: question, tenantId: tenant(), collection: stagingCollection(), token: uuid(), deep: !!(opts && opts.deep) };
+    // An outstanding history read must not replace the new live turn.
+    threadReadSequence += 1;
+    var ctx = context();
+    ctx.question = question; ctx.token = uuid(); ctx.deep = !!(opts && opts.deep);
     var turn = addTurn(question);
     var card = addCard(turn, "pending");
     scrollDown();
     citationsEl.innerHTML = '<div class="empty">回答を取得中…</div>';
     setBusy(true);
-    streamChat(ctx, turn, card).then(function () { setBusy(false); controller = null; scrollDown(); qEl.focus(); });
+    streamChat(ctx, turn, card).then(function () { if (validContext(ctx)) { setBusy(false); controller = null; scrollDown(); qEl.focus(); } });
   }
   function ask() {
     if (busy) { if (controller) controller.abort(); return; }
@@ -608,7 +646,7 @@
   }
 
   function newConversation() {
-    if (controller) controller.abort();
+    invalidate();
     threadId = uuid();
     showEmptyState();
     renderCitations([], tenant());
@@ -647,18 +685,23 @@
     banner.hidden = false;
   }
   function refreshServiceStatus() {
-    fetch("/system/status?tenant_id=" + encodeURIComponent(tenant()), { headers: headers() })
+    var ctx = context(), sequence = ++statusSequence;
+    fetch("/system/status?tenant_id=" + encodeURIComponent(ctx.tenantId), { headers: ctx.headers })
       .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (s) { if (s) showServiceBanner(s.service === "degraded" ? (s.reason || "llm_unavailable") : ""); })
+      .then(function (s) { if (s && validContext(ctx) && sequence === statusSequence) showServiceBanner(s.service === "degraded" ? (s.reason || "llm_unavailable") : ""); })
       .catch(function () { /* the state is a hint: never block the page on it */ });
   }
 
   sendBtn.addEventListener("click", ask);
   newChatBtn.addEventListener("click", newConversation);
-  tenantEl.addEventListener("change", function () { updateScope(); historyEnabled = true; loadHistory(); });
-  tenantEl.addEventListener("input", updateScope);
-  apiKeyEl.addEventListener("change", function () { historyEnabled = true; loadHistory(); });
-  if (stagingCollectionEl) stagingCollectionEl.addEventListener("input", updateScope);
+  function scopeChanged() {
+    qEl.value = ""; autoGrow(); historyEnabled = true;
+    convList.innerHTML = ""; showServiceBanner(null);
+    newConversation(); updateScope();
+  }
+  tenantEl.addEventListener("input", scopeChanged);
+  apiKeyEl.addEventListener("input", scopeChanged);
+  if (stagingCollectionEl) stagingCollectionEl.addEventListener("input", scopeChanged);
   qEl.addEventListener("input", autoGrow);
   qEl.addEventListener("keydown", function (e) {
     // Japanese IME: Enter that confirms a conversion must not send.

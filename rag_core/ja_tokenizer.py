@@ -80,6 +80,16 @@ def _get_sudachi():
         str(getattr(config, "SUDACHI_DICT", "core") or "core"),
         str(getattr(config, "SUDACHI_SPLIT_MODE", "A") or "A"),
     )
+    # Lock-free fast path (2026-11-22): this thread already holds a tokenizer of
+    # the current generation and settings. The global lock is only taken to
+    # create one, so threads that are reused (the shared lane pool, server
+    # workers) never wait on each other here.
+    if (
+        _STATE["key"] == key
+        and _STATE["tokenizer"] is not None
+        and getattr(_LOCAL, "generation", None) == _STATE["generation"]
+    ):
+        return _LOCAL.tokenizer
     thread = threading.get_ident()
     with _STATE_LOCK:
         if _STATE["key"] != key:

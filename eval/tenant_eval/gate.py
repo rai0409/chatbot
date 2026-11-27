@@ -6,7 +6,7 @@ else "pass". The numbers of Policy are initial values; tune them on real data.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from eval.bench.stats import holm, mcnemar_exact, non_inferior, paired_bootstrap_diff
 from eval.tenant_eval.metrics import is_error, summarize
@@ -23,6 +23,8 @@ class Policy:
     protected_priority: int = 100  # cases at or above this priority that pass in the baseline must still pass
     resamples: int = 2000
     seed: int = 0
+    latency_p95_budget_ms: Optional[float] = None  # candidate end-to-end p95 must stay under this (None: not checked)
+    retrieval_margin: float = 0.02  # nDCG@10 may not fall by more than this (only when cases carry gold ids)
 
 
 def _check(name: str, status: str, **detail: Any) -> Dict[str, Any]:
@@ -104,6 +106,33 @@ def compare(
     # 5. no new errors
     new_errors = sorted(i for i, b, c in zip(ids, b_rows, c_rows) if is_error(c) and not is_error(b))
     checks.append(_check("errors", "fail" if new_errors else "pass", new=new_errors))
+
+    # 6. latency SLO: the candidate's end-to-end p95 within the budget
+    if policy.latency_p95_budget_ms is None:
+        checks.append(_check("latency_p95", "not_applicable"))
+    elif c_sum["latency_p95_ms"] is None:
+        checks.append(_check("latency_p95", "insufficient", budget_ms=policy.latency_p95_budget_ms))
+    else:
+        ok = c_sum["latency_p95_ms"] <= policy.latency_p95_budget_ms
+        checks.append(_check("latency_p95", "pass" if ok else "fail", baseline_ms=b_sum["latency_p95_ms"],
+                             candidate_ms=c_sum["latency_p95_ms"], budget_ms=policy.latency_p95_budget_ms))
+
+    # 7. retrieval: nDCG@10 of cases with gold ids is non-inferior (paired, cluster bootstrap)
+    with_gold = [i for i, (b, c) in enumerate(zip(b_rows, c_rows)) if b.get("retrieval") and c.get("retrieval")]
+    if not with_gold:
+        checks.append(_check("retrieval_ndcg", "not_applicable"))
+    elif len(with_gold) < policy.min_cases:
+        checks.append(_check("retrieval_ndcg", "insufficient", n=len(with_gold), needed=policy.min_cases))
+    else:
+        r_diff = paired_bootstrap_diff(
+            [float(b_rows[i]["retrieval"].get("ndcg@10", 0.0)) for i in with_gold],
+            [float(c_rows[i]["retrieval"].get("ndcg@10", 0.0)) for i in with_gold],
+            [b_rows[i].get("group") or b_rows[i]["case_id"] for i in with_gold],
+            resamples=policy.resamples, alpha=policy.ci_alpha, seed=policy.seed,
+        )
+        ok = non_inferior(r_diff["low"], policy.retrieval_margin)
+        checks.append(_check("retrieval_ndcg", "pass" if ok else "fail", n=len(with_gold), diff=r_diff["diff"],
+                             low=r_diff["low"], high=r_diff["high"], margin=policy.retrieval_margin))
 
     statuses = {check["status"] for check in checks}
     decision = "fail" if "fail" in statuses else "insufficient" if "insufficient" in statuses else "pass"

@@ -18,7 +18,8 @@ CURRENT = {"hard": 0.95, "soft_other": 0.65, "soft_reset": 0.8, "soft_change": 0
 
 def test_sweep_thresholds_grid_and_extras():
     grid = sweep_thresholds()
-    assert grid[0] == 0.5
+    assert grid[0] == 0.05  # 2026-11-22: was 0.5, too high for ruri-v3 distances
+    assert 0.3 in grid
     assert grid[-1] == 1.0
     assert 0.75 in grid
     with_extra = sweep_thresholds(extra=[0.65, 0.95])
@@ -55,7 +56,7 @@ def test_recommendation_unambiguous_when_classes_separate():
 
     assert rec["separated"] is True
     assert rec["unambiguous"] is True
-    assert rec["recommended"]["hard"] == 0.5
+    assert rec["recommended"]["hard"] == 0.35  # smallest grid point above every answerable case
     assert rec["sweep_at_recommended_hard"]["false_abstain_count"] == 0
 
 

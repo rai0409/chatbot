@@ -334,7 +334,7 @@ def test_approved_similar_candidate_uses_embedding_provider(monkeypatch):
         def query(self, **kwargs):
             assert kwargs["query_embeddings"] == [[0.0, 1.0]]
             return {
-                "documents": [["Q: 15問程度の項目はフリーアンサーも含まれる。\nA: フリーアンサーも含みます。"]],
+                "ids": [["qa_free_answer"]], "documents": [["Q: 15問程度の項目はフリーアンサーも含まれる。\nA: フリーアンサーも含みます。"]],
                 "metadatas": [
                     [
                         {
@@ -364,3 +364,29 @@ def test_approved_similar_candidate_uses_embedding_provider(monkeypatch):
     )
 
     assert candidates[0]["qa_id"] == "qa_free_answer"
+
+
+@pytest.mark.parametrize("mode", ["reject", "ignore", "different", "unreadable"])
+def test_invalid_truncation_is_never_cached(monkeypatch, mode):
+    calls = []
+
+    class Model:
+        def __init__(self, *args, **kwargs):
+            calls.append(mode)
+
+        @property
+        def max_seq_length(self):
+            if mode == "unreadable":
+                raise AttributeError("unavailable")
+            return 128 if mode == "ignore" else 255
+
+        @max_seq_length.setter
+        def max_seq_length(self, value):
+            if mode == "reject":
+                raise AttributeError("read-only")
+
+    monkeypatch.setattr(embedding_provider, "_load_sentence_transformer_class", lambda _: Model)
+    for _ in range(2):
+        with pytest.raises(ValueError, match="max_seq_length"):
+            embedding_provider._get_sentence_transformer_model("synthetic", "local", "", 256)
+    assert len(calls) == 2

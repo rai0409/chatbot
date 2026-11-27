@@ -13,7 +13,8 @@ FALLBACK_RULES = (
     },
     {
         "type_id": "definition",
-        "question_contains_any": ["とは", "定義", "意味", "指す"],
+        # Colloquial definition questions: 「VPNってなに」「〜って何ですか」「どういう意味」.
+        "question_contains_any": ["とは", "定義", "意味", "指す", "って何", "ってなに", "とは何", "どういう意味"],
         "priority": 90,
     },
     {

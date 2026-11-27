@@ -298,3 +298,164 @@ def test_document_delete_check_from_the_ingestion_page(page, server, monkeypatch
     expect(page.locator("#deleteResult")).to_contain_text("chunks")
     expect(page.locator("#deleteResult")).to_contain_text("4")
     assert calls == [(None, "default", ["経費規程.pdf", "手順書.pdf"], False)]
+
+
+# --- deterministic browser-side privacy boundary (no model or backend) ---
+
+
+def _boundary_page(page, server):
+    page.add_init_script(r"""(() => {
+      window.boundary = {requests: [], pending: {}, posts: [], listNumber:0, threads: [{thread_id: 'one', title: 'Thread one'}, {thread_id: 'two', title: 'Thread two'}]};
+      const b = window.boundary;
+      const json = x => new Response(JSON.stringify(x), {headers: {'Content-Type': 'application/json'}});
+      b.release = (key, value) => {
+        const p = b.pending[key]; delete b.pending[key];
+        p.resolve(value);
+      };
+      b.wait = (key, options) => new Promise((resolve, reject) => {
+        b.pending[key] = {resolve, reject};
+        if (key === 'abort' && options.signal) options.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), {once: true});
+      });
+      b.sse = (name, data) => new Response('event: ' + name + '\ndata: ' + JSON.stringify(data) + '\n\n', {headers: {'Content-Type':'text/event-stream'}});
+      b.final = (text, citations) => ({answer_text: text, citations: citations === undefined ? [{source_doc:'a.pdf', number:1}, {source_doc:'b.pdf', number:2}, {source_doc:'a.pdf', number:3}] : citations, intent:'grounded'});
+      window.fetch = (url, options = {}) => {
+        const u = new URL(url, location.href), body = options.body ? JSON.parse(options.body) : null;
+        b.requests.push({path:u.pathname, tenant:u.searchParams.get('tenant_id'), body, headers:options.headers});
+        if (u.pathname === '/chat/stream') return b.wait(body.question, options);
+        if (u.pathname === '/chat/threads' && options.method === 'POST') {b.posts.push({body, headers:options.headers}); return Promise.resolve(json({ok:true}));}
+        if (u.pathname === '/chat/threads') return b.holdLists ? b.wait('list-' + (++b.listNumber), options) : Promise.resolve(json({threads:b.threads}));
+        if (u.pathname.startsWith('/chat/threads/')) return b.wait(u.pathname, options);
+        if (u.pathname === '/ui/context') return Promise.resolve(json({role:'admin'}));
+        if (u.pathname === '/system/status') return b.holdStatus && u.searchParams.get('tenant_id') === 'default' ? b.wait('old status', options) : Promise.resolve(json({service:'ok'}));
+        return Promise.resolve(json({}));
+      };
+    })();""")
+    page.goto(server.url + "/chat-ui")
+    _expect()(page.locator("#convList .conv-item")).to_have_count(2)
+
+
+def _boundary_send(page, question):
+    page.fill("#q", question)
+    page.click("#send")
+    page.wait_for_function("q => !!boundary.pending[q]", arg=question)
+
+
+def _boundary_finish(page, question, name="final", citations=None):
+    page.evaluate("([q, name, citations]) => boundary.release(q, boundary.sse(name, boundary.final(q, citations === null ? undefined : citations)))",
+                  [question, name, citations])
+    _expect()(page.locator("#send")).to_have_text("送信")
+
+
+@pytest.mark.parametrize("event", ["final", "approved"])
+def test_boundary_saves_all_sources_and_original_thread(page, server, event):
+    _boundary_page(page, server)
+    _boundary_send(page, "complete")
+    _boundary_finish(page, "complete", event)
+    page.wait_for_function("boundary.posts.length === 1")
+    data = page.evaluate("({post:boundary.posts[0], stream:boundary.requests.find(r => r.path === '/chat/stream')})")
+    assert data["post"]["body"]["source_docs"] == ["a.pdf", "b.pdf"]
+    assert data["post"]["body"]["citations_count"] == 3
+    assert data["post"]["body"]["thread_id"] == data["stream"]["body"]["thread_id"]
+    assert data["post"]["body"]["tenant_id"] == data["stream"]["body"]["tenant_id"]
+
+
+@pytest.mark.parametrize("kind", ["error", "delta", "invalid", "abort", "overflow"])
+def test_boundary_does_not_save_incomplete_or_invalid_answers(page, server, kind):
+    _boundary_page(page, server)
+    _boundary_send(page, "abort" if kind == "abort" else "incomplete")
+    if kind == "abort":
+        page.click("#send")
+        _expect()(page.locator(".turn .err")).to_contain_text("停止")
+    elif kind == "invalid":
+        _boundary_finish(page, "incomplete", citations=[{"source_doc":""}])
+        _expect()(page.locator(".answer-notice")).to_contain_text("保存できません")
+    elif kind == "overflow":
+        _boundary_finish(page, "incomplete", citations=[{"source_doc":str(i)} for i in range(21)])
+        _expect()(page.locator(".answer-notice")).to_contain_text("保存できません")
+    else:
+        page.evaluate("name => boundary.release('incomplete', boundary.sse(name, {text:'partial'}))", kind)
+        _expect()(page.locator(".turn .err")).to_be_visible()
+    _expect()(page.locator("#send")).to_have_text("送信")
+    assert page.evaluate("boundary.posts.length") == 0
+
+
+@pytest.mark.parametrize("selector,value", [("#tenantId", "other"), ("#apiKey", "synthetic-key"), ("#stagingCollection", "stg_other")])
+def test_boundary_scope_change_rejects_old_stream_and_preserves_new_controller(page, server, selector, value):
+    _boundary_page(page, server)
+    _boundary_send(page, "old scope")
+    page.locator(".settings summary").click()
+    page.fill(selector, value)
+    _expect()(page.locator(".turn")).to_have_count(0)
+    _boundary_send(page, "new scope")
+    # The mock deliberately ignores abort for this old request, so the generation guard must reject it.
+    page.evaluate("boundary.release('old scope', boundary.sse('final', boundary.final('old secret')))")
+    # Let the resolved fetch and its microtasks run before inspecting the new request state.
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    _expect()(page.locator("#send")).to_have_text("停止")
+    _expect()(page.locator(".turn")).to_have_count(1)
+    assert page.evaluate("boundary.posts.length") == 0
+    _boundary_finish(page, "new scope")
+    page.wait_for_function("boundary.posts.length === 1")
+    post = page.evaluate("boundary.posts[0]")
+    assert post["body"]["question"] == "new scope"
+    if selector == "#tenantId":
+        assert post["body"]["tenant_id"] == value
+    elif selector == "#apiKey":
+        assert post["headers"]["X-Api-Key"] == value
+    else:
+        assert page.evaluate("boundary.requests.filter(r => r.path === '/chat/stream').at(-1).body.staging_collection") == value
+
+
+def test_boundary_delayed_thread_does_not_overwrite_live_turn(page, server):
+    _boundary_page(page, server)
+    page.get_by_role("button", name="Thread one").click()
+    page.wait_for_function("!!boundary.pending['/chat/threads/one']")
+    _boundary_send(page, "new question")
+    _boundary_finish(page, "new question")
+    page.wait_for_function("boundary.posts.length === 1")
+    page.evaluate("boundary.release('/chat/threads/one', new Response(JSON.stringify({turns:[{question:'old question', answer_text:'old answer'}]})))")
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    _expect()(page.locator(".turn .q")).to_have_text("new question")
+    _expect()(page.locator(".turn .a")).to_have_text("new question")
+
+
+def test_boundary_delayed_thread_cannot_replace_selected_thread(page, server):
+    _boundary_page(page, server)
+    page.get_by_role("button", name="Thread one").click()
+    page.wait_for_function("!!boundary.pending['/chat/threads/one']")
+    page.get_by_role("button", name="Thread two").click()
+    page.wait_for_function("!!boundary.pending['/chat/threads/two']")
+    page.evaluate("boundary.release('/chat/threads/two', new Response(JSON.stringify({turns:[{question:'second question', answer_text:'second answer'}]})))")
+    _expect()(page.locator(".turn .a")).to_have_text("second answer")
+    page.evaluate("boundary.release('/chat/threads/one', new Response(JSON.stringify({turns:[{question:'first question', answer_text:'first answer'}]})))")
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    _expect()(page.locator(".turn .a")).to_have_text("second answer")
+
+
+def test_boundary_old_list_response_does_not_overwrite_newer_history(page, server):
+    _boundary_page(page, server)
+    page.evaluate("boundary.holdLists = true")
+    _boundary_send(page, "first")
+    _boundary_finish(page, "first")
+    page.wait_for_function("!!boundary.pending['list-1']")
+    _boundary_send(page, "second")
+    _boundary_finish(page, "second")
+    page.wait_for_function("!!boundary.pending['list-2']")
+    page.evaluate("boundary.release('list-2', new Response(JSON.stringify({threads:[{thread_id:'new',title:'New list'}]})))")
+    _expect()(page.locator("#convList")).to_contain_text("New list")
+    page.evaluate("boundary.release('list-1', new Response(JSON.stringify({threads:[{thread_id:'old',title:'Old list'}]})))")
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    _expect()(page.locator("#convList")).to_contain_text("New list")
+
+
+def test_boundary_old_service_status_does_not_cross_tenant(page, server):
+    _boundary_page(page, server)
+    page.evaluate("boundary.holdStatus = true")
+    page.dispatch_event("#tenantId", "change")
+    page.wait_for_function("!!boundary.pending['old status']")
+    page.locator(".settings summary").click()
+    page.fill("#tenantId", "other")
+    page.dispatch_event("#tenantId", "change")
+    page.evaluate("boundary.release('old status', new Response(JSON.stringify({service:'degraded',reason:'llm_unavailable'})))")
+    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    _expect()(page.locator("#serviceBanner")).to_be_hidden()

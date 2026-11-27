@@ -9,14 +9,16 @@ if str(_ROOT) not in sys.path:
 
 """CI regression gate on the repository's labeled retrieval cases (6-13).
 
-Runs eval/runner.py's retrieval-aware evaluation on eval/cases/retrieval_cases.jsonl
-with the vector search stubbed (no model download in CI), so it guards the
-keyword path, rerank heuristics, guards and abstention. It is not an
-accuracy figure (that comes from eval.bench with the real evaluation set).
+Runs eval/runner.py's retrieval-aware evaluation on eval/cases/retrieval_v2_cases.jsonl
+over the corpus eval/cases/smoke_v2_chunks.jsonl with the vector search stubbed (no model
+download in CI), so it guards the keyword path, rerank heuristics, guards and abstention.
+It is not an accuracy figure: accuracy comes from the frozen general benchmark
+(scripts/run_general_benchmark.py, docs/operations/benchmark_governance.md) and eval.bench.
 
 Fails (exit 1) when mean MRR@k or nDCG@k of a mode drops by more than
---margin against eval/baselines/retrieval_gate_baseline.json, or when the
-gold hit count or correct abstentions drop.
+--margin against eval/baselines/retrieval_gate_baseline_v2.json, or when the
+gold hit count or correct abstentions drop. That baseline is saturated (every
+value 1.0 on 20 cases), so the gate only detects regressions, never improvements.
   python scripts/eval_regression_gate.py                 # check
   python scripts/eval_regression_gate.py --update-baseline   # after an intended change
 """

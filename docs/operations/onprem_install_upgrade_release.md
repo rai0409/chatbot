@@ -56,3 +56,27 @@ A release bundle (a tagged git revision) must include:
 - Single-node; no HA. Upgrades require a brief maintenance window.
 - For closed networks, mirror the pinned wheels internally; `release_check.py`
   enforces the freeze.
+
+## Dependency, model and index upgrades (2026-11)
+
+- Install from the lock files only: `pip install --require-hashes -r requirements.lock.txt` (and
+  `requirements-embedding.lock.txt` for the embedding extras). Regenerate them with `scripts/lock_dependencies.sh`.
+- A change of the embedding model, tokenizer, dictionary or an embedding/tokenizer library changes the embedding
+  fingerprint: do NOT serve the old vectors. Re-embed into a NEW generation (`switch_generation.py register ...
+  --reembedded`, `verify`, `activate`) and keep the previous one for `rollback`.
+- `python scripts/release_check.py --fingerprint` compares the running embedding profile with the served generation's
+  manifest and fails on a difference or a missing manifest. Run it after every upgrade, before opening to users.
+- A chromadb upgrade may migrate the on-disk store irreversibly: take a backup (`scripts/backup.sh`) first and test
+  the restore.
+- Cadence: review the lock files and run the release check monthly, and after every security advisory.
+
+## Pre-release checklist additions (2026-11)
+
+- [ ] `AUDIT_QUESTION_MODE=hash` for production and pilot customers (`mask` does not mask Japanese names/addresses).
+- [ ] If `CHAT_USE_TENANT_PROFILE=true` is planned: every tenant profile checked first; the shipped product profiles
+      set `allow_llm_calls=false` and would make `/chat` answer extractively.
+- [ ] Clients and the console poll mail ingestion: `POST /admin/ingestion/mail` with `execute=true` returns 202; they
+      poll `GET /admin/ingestion/jobs/{job_id}` until it is no longer `queued`/`running` (`ok`, `issues_found` or `failed`).
+- [ ] Mail ingestion runs on a single node when `INGESTION_REGISTRY_BACKEND=postgres` (mail state is node-local).
+- [ ] Conversation clients send `source_docs` with saved turns; `CONVERSATION_RETENTION_DAYS` decided for old turns.
+- [ ] Legacy untyped rows stamped with `scripts/stamp_legacy_types.py` before promotion (not `PROMOTION_ALLOW_UNTYPED`).

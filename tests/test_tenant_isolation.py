@@ -70,7 +70,7 @@ class _FakeVectorCollection:
     def query(self, query_embeddings, n_results, where=None):
         self.where_clauses.append(dict(where or {}))
         return {
-            "documents": [["レガシー本文", "デフォルト本文", "テナントB本文"]],
+            "ids": [["legacy-1", "default-1", "tenant-b-1"]], "documents": [["レガシー本文", "デフォルト本文", "テナントB本文"]],
             "metadatas": [
                 [
                     {"id": "legacy-1", "source_doc": "d", "chunk_role": "child"},
@@ -138,7 +138,7 @@ def test_neighbor_lookup_filters_other_tenants(monkeypatch):
     class _FakeGetCollection:
         def get(self, where=None):
             return {
-                "documents": ["隣接チャンク"],
+                "ids": ["n1"], "documents": ["隣接チャンク"],
                 "metadatas": [{"id": "n1", "doc_id": "d", "chunk_index": 2, "tenant_id": "tenant_b"}],
             }
 

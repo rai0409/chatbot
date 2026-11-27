@@ -100,6 +100,9 @@ def test_the_preprocessing_flag_is_a_registered_env_knob(monkeypatch):
     assert "QUERY_PREPROCESS_ENABLED" in knob_registry.names() and "QUERY_PREPROCESS_ENABLED" in knob_registry.ENV_KNOBS
     monkeypatch.delattr(config, "QUERY_PREPROCESS_ENABLED", raising=False)
     monkeypatch.delenv("QUERY_PREPROCESS_ENABLED", raising=False)
+    # 2026-11-22: unset means ON, as in qa (config.query_preprocess_enabled()); it used to read False here.
+    assert knob_registry.read("QUERY_PREPROCESS_ENABLED") is True
+    monkeypatch.setenv("QUERY_PREPROCESS_ENABLED", "false")
     assert knob_registry.read("QUERY_PREPROCESS_ENABLED") is False
     monkeypatch.setenv("QUERY_PREPROCESS_ENABLED", " True ")
     assert knob_registry.read("QUERY_PREPROCESS_ENABLED") is True and knob_registry.snapshot()["QUERY_PREPROCESS_ENABLED"] is True
@@ -149,7 +152,8 @@ def setup(monkeypatch, tmp_path):
     monkeypatch.setenv("TENANT_EVAL_LEDGER", str(tmp_path / "ledger.jsonl"))
     monkeypatch.delenv("CHROMA_COLLECTION", raising=False)
     monkeypatch.delenv("ACTIVE_GENERATION_FILE", raising=False)
-    monkeypatch.delenv("QUERY_PREPROCESS_ENABLED", raising=False)
+    # Baseline with preprocessing OFF (explicitly: unset now means ON, 2026-11-22), so the knob is a change.
+    monkeypatch.setenv("QUERY_PREPROCESS_ENABLED", "false")
     monkeypatch.delattr(config, "QUERY_PREPROCESS_ENABLED", raising=False)
     monkeypatch.setattr(config, "INDEX_DIR", str(tmp_path / "index"))
     source = tmp_path / "profiles" / PID / "exported"

@@ -46,3 +46,8 @@ python scripts/sources.py verify
 ```
 
 定期実行は、`due` を cron などから呼ぶ（5-2 で `run-due` が加わる）。
+
+## 2026-11 hardening (change ledger)
+
+The ledger append is one flock'd read, verify, append. A torn last line (crash, full disk) is moved to
+`changes.jsonl.torn` and the chain continues. Applies are serialised per source (file lock).

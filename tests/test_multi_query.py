@@ -167,7 +167,10 @@ def stage(monkeypatch):
     return run, calls
 
 
-def test_by_default_only_the_question_is_searched(stage):
+def test_by_default_only_the_question_is_searched(stage, monkeypatch):
+    # 2026-11-22: the synonym lane is on by default (tests/test_retrieval_hardening_20261122.py);
+    # this test covers multi-query alone.
+    monkeypatch.setattr(config, "SYNONYM_LANE_ENABLED", False)
     run, calls = stage
     ranked, stats = run()
     assert calls == ["サーバーの再起動手順"] and _ids(ranked) == ["A", "B"] and "multi_query" not in stats
@@ -197,5 +200,6 @@ def test_one_query_in_all_means_no_extra_search(stage, monkeypatch):
     run, calls = stage
     monkeypatch.setattr(config, "MULTI_QUERY_ENABLED", True)
     monkeypatch.setattr(config, "MULTI_QUERY_MAX_VARIANTS", 1)
+    monkeypatch.setattr(config, "SYNONYM_LANE_ENABLED", False)  # the synonym lane is separate (2026-11-22)
     ranked, _stats = run()
     assert calls == ["サーバーの再起動手順"] and _ids(ranked) == ["A", "B"]

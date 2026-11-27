@@ -87,7 +87,7 @@ def test_admin_login_is_rate_limited(admin_env, monkeypatch):
 
 def test_chat_ui_sends_thread_id_and_records_turns():
     html = (ROOT / "webapi/static/chat.html").read_text(encoding="utf-8")
-    assert "thread_id: threadId" in html
+    assert "thread_id: ctx.threadId" in html
     assert '"/chat/threads"' in html
     assert "threadId = uuid();" in html  # reset by newConversation
 

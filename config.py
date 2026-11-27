@@ -142,7 +142,18 @@ HYBRID_DENSE_WEIGHT = _get_float("HYBRID_DENSE_WEIGHT", default=1.0)
 HYBRID_KEYWORD_WEIGHT = _get_float("HYBRID_KEYWORD_WEIGHT", default=1.0)
 HYBRID_EXACT_WEIGHT = _get_float("HYBRID_EXACT_WEIGHT", default=1.0)
 # Run the dense and keyword lanes concurrently (latency = slower lane).
+# Stays off by default until measured on the production host (one shared
+# 2-thread pool per process; context variables are copied into the workers).
 HYBRID_PARALLEL = _get_bool("HYBRID_PARALLEL", default=False)
+# Staging collections without a keyword corpus are searched vector-only. They
+# used to skip the too_general / soft_distance guards; that is now opt-in so a
+# staging evaluation sees the production guard conditions.
+STAGING_GUARD_LENIENT = _get_bool("STAGING_GUARD_LENIENT", default=False)
+# Synonym-substituted variant of the question searched as its own lane and
+# fused by RRF (independent of MULTI_QUERY_ENABLED; needs profile synonyms).
+SYNONYM_LANE_ENABLED = _get_bool("SYNONYM_LANE_ENABLED", default=True)
+# Synonym variants searched per question (each costs one dense + one keyword search).
+SYNONYM_LANE_MAX_VARIANTS = int(getenv_first("SYNONYM_LANE_MAX_VARIANTS", default="1"))
 # Keyword (BM25) tokenizer. "auto" uses Sudachi when SudachiPy and a
 # dictionary are installed (requirements-ja.txt) and otherwise falls back to
 # the legacy heuristic tokenizer with one warning; "sudachi" fails loudly when
@@ -197,15 +208,42 @@ RAG_MIN_KEYWORD_EVIDENCE_BM25 = _get_float("RAG_MIN_KEYWORD_EVIDENCE_BM25", defa
 # with this model; after switching models (the product default is ruri-v3),
 # calibrate them (scripts/calibrate_distance_guard.py) and set this to the
 # model they were calibrated for. /admin/health reports a mismatch.
-RAG_DIST_CALIBRATED_MODEL = getenv_first(
-    "RAG_DIST_CALIBRATED_MODEL", default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-)
+# 2026-11-22 hardening: the default used to name MiniLM while the product
+# default model is ruri-v3, and only the model NAME was compared. The name-only
+# check is kept for old deployments (reported as basis "model_name_only"); the
+# preferred way is RAG_DIST_CALIBRATION_FILE, a JSON written by
+# scripts/calibrate_distance_guard.py whose "identity" (provider, model,
+# revision, prefix scheme, dimension, max sequence length) must equal the
+# active embedding identity. Empty = not calibrated.
+RAG_DIST_CALIBRATED_MODEL = getenv_first("RAG_DIST_CALIBRATED_MODEL", default="")
+RAG_DIST_CALIBRATION_FILE = getenv_first("RAG_DIST_CALIBRATION_FILE", default="")
 RAG_SOFT_DIST_OTHER = _get_float("RAG_SOFT_DIST_OTHER", default=0.65)
 RAG_SOFT_DIST_RESET = _get_float("RAG_SOFT_DIST_RESET", default=0.80)
 RAG_SOFT_DIST_CHANGE = _get_float("RAG_SOFT_DIST_CHANGE", default=0.90)
 RAG_SOFT_DIST_PROCEDURE = _get_float(
     "RAG_SOFT_DIST_PROCEDURE", default=RAG_SOFT_DIST_CHANGE
 )
+
+# Values of the guard thresholds at import (environment or built-in default).
+# qa.guard_thresholds() treats a threshold as explicitly set when its variable
+# is in the environment or the attribute was changed after import; explicit
+# values win over a matching RAG_DIST_CALIBRATION_FILE.
+GUARD_THRESHOLD_NAMES = (
+    "RAG_SOFT_DIST_OTHER",
+    "RAG_SOFT_DIST_RESET",
+    "RAG_SOFT_DIST_CHANGE",
+    "RAG_SOFT_DIST_PROCEDURE",
+    "RAG_HARD_MAX_DIST",
+    "RAG_HARD_MAX_DIST_PROCEDURE_DELTA",
+)
+GUARD_THRESHOLD_IMPORTED = {
+    "RAG_SOFT_DIST_OTHER": RAG_SOFT_DIST_OTHER,
+    "RAG_SOFT_DIST_RESET": RAG_SOFT_DIST_RESET,
+    "RAG_SOFT_DIST_CHANGE": RAG_SOFT_DIST_CHANGE,
+    "RAG_SOFT_DIST_PROCEDURE": RAG_SOFT_DIST_PROCEDURE,
+    "RAG_HARD_MAX_DIST": RAG_HARD_MAX_DIST,
+    "RAG_HARD_MAX_DIST_PROCEDURE_DELTA": RAG_HARD_MAX_DIST_PROCEDURE_DELTA,
+}
 
 NEGATION_PHRASES = _get_list(
     "NEGATION_PHRASES",
@@ -296,12 +334,68 @@ CROSS_ENCODER_MAX_LENGTH = int(getenv_first("CROSS_ENCODER_MAX_LENGTH", default=
 # at least this value (0 = never skip). Derive it from
 # `python -m eval.bench calibrate --base-config-id ...` (rerank_skip).
 CROSS_ENCODER_SKIP_MARGIN = _get_float("CROSS_ENCODER_SKIP_MARGIN", default=0.0)
+# Pin the reranker (and embedding) weights to a hub revision (commit hash or
+# tag); empty keeps the latest download. trust_remote_code is always False.
+CROSS_ENCODER_REVISION = getenv_first("CROSS_ENCODER_REVISION", default="")
+# Pairs per predict() call (the latency budget is checked between batches).
+CROSS_ENCODER_BATCH_SIZE = int(getenv_first("CROSS_ENCODER_BATCH_SIZE", default="16"))
+# Latency budget of the stage in milliseconds (0 = none). When it runs out the
+# unscored remainder keeps its pre-cross-encoder order (recorded in the trace).
+CROSS_ENCODER_TIMEOUT_MS = int(getenv_first("CROSS_ENCODER_TIMEOUT_MS", default="0"))
+# final = min-max normalized cross-encoder score + weight * boost delta, where
+# the delta is what the keyword / profile boosts took off the distance. 0 =
+# pure cross-encoder order (the former behaviour).
+CROSS_ENCODER_BOOST_WEIGHT = _get_float("CROSS_ENCODER_BOOST_WEIGHT", default=1.0)
+
+# Local embedding model (EMBED_PROVIDER=local) loading and encoding.
+LOCAL_EMBED_MODEL_REVISION = getenv_first("LOCAL_EMBED_MODEL_REVISION", default="")
+# Texts per encode() batch.
+EMBED_BATCH_SIZE = int(getenv_first("EMBED_BATCH_SIZE", default="32"))
+# Truncation length in tokens; 0 keeps the model default (ruri-v3: 8192). It
+# changes the vectors of long texts, so it is part of the embedding profile.
+EMBED_MAX_SEQ_LENGTH = int(getenv_first("EMBED_MAX_SEQ_LENGTH", default="0"))
+
+
+def _default_embed_threads() -> int:
+    # Physical cores, approximated as half the logical CPUs: on a WSL host
+    # using every logical CPU made OpenMP/BLAS 10-90x slower (measured).
+    return max(1, (os.cpu_count() or 2) // 2)
+
+
+# torch intra-op threads for local embedding / reranking; 0 = leave torch alone.
+EMBED_NUM_THREADS = int(getenv_first("EMBED_NUM_THREADS", default=str(_default_embed_threads())))
+# LRU cache of query embeddings keyed by (embedding identity, prefixed text); 0 = off.
+EMBED_QUERY_CACHE_SIZE = int(getenv_first("EMBED_QUERY_CACHE_SIZE", default="2048"))
 
 APPROVED_QA_ENABLED = _get_bool("APPROVED_QA_ENABLED", default=False)
 _APPROVED_QA_PATH_RAW = getenv_first("APPROVED_QA_PATH", default="eval/cases/approved_qa_sample.jsonl")
 APPROVED_QA_PATH = str((BASE_DIR / _APPROVED_QA_PATH_RAW).resolve())
 APPROVED_SIMILAR_CANDIDATES_ENABLED = _get_bool("APPROVED_SIMILAR_CANDIDATES_ENABLED", default=False)
 APPROVED_SIMILAR_CANDIDATES_TOP_K = int(getenv_first("APPROVED_SIMILAR_CANDIDATES_TOP_K", default="5"))
+
+# Query preprocessing (rag_core/query_preprocess.py): colloquial cleanup,
+# synonyms and typo candidates. ON by default (commercial fix F12). The single
+# source of truth is query_preprocess_enabled(): a QUERY_PREPROCESS_ENABLED
+# attribute set on this module (evaluation knobs) wins, then the environment,
+# then this default. The attribute is deliberately not defined at import, so
+# the environment keeps working after import (tests, tenant evaluation).
+QUERY_PREPROCESS_ENABLED_DEFAULT = True
+
+
+def query_preprocess_enabled() -> bool:
+    import sys
+
+    module = sys.modules[__name__]
+    value = getattr(module, "QUERY_PREPROCESS_ENABLED", None)
+    if value is not None:
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
+    raw = os.getenv("QUERY_PREPROCESS_ENABLED")
+    if raw is None or str(raw).strip() == "":
+        return QUERY_PREPROCESS_ENABLED_DEFAULT
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
 
 ANSWER_CACHE_ENABLED = _get_bool("ANSWER_CACHE_ENABLED", default=False)
 ANSWER_CACHE_MAX_ENTRIES = int(getenv_first("ANSWER_CACHE_MAX_ENTRIES", default="256"))

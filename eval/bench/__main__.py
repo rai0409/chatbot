@@ -128,7 +128,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--baseline", type=Path, required=True)
     p.add_argument("--runs", type=Path, nargs="+", required=True)
     p.add_argument("--metric", default="recall@10")
-    p.add_argument("--resamples", type=int, default=2000)
+    p.add_argument("--resamples", type=stats.resamples_arg, default=2000)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)

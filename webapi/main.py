@@ -13,6 +13,7 @@ from fastapi.exception_handlers import http_exception_handler as _default_http_e
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
+import config
 from rag_core import answer_cache
 from rag_core import approved_similar
 from rag_core import approved_similar_feature_reranker
@@ -154,6 +155,21 @@ production_guard.check_production_settings()
 _DOCS = production_guard.docs_enabled()
 
 
+def _warm_cross_encoder() -> None:
+    """Load the cross-encoder at startup when reranking is on, so the first question does not pay for it."""
+    if not getattr(config, "CROSS_ENCODER_RERANK_ENABLED", False):
+        return
+    try:
+        from rag_core import cross_encoder_reranker
+
+        warmup = getattr(cross_encoder_reranker, "warmup", None)
+        if callable(warmup):
+            ready = warmup()
+            logging.info("cross-encoder warm-up: %s", "ready" if ready else "not ready (rerank keeps the input order)")
+    except Exception:  # noqa: BLE001 - reranking falls back to the input order; never block startup
+        logging.warning("cross-encoder warm-up failed", exc_info=True)
+
+
 @asynccontextmanager
 async def _lifespan(_app):
     # Stage 14: jobs of a process that was stopped (deploy, crash) are marked
@@ -165,6 +181,21 @@ async def _lifespan(_app):
             logging.warning("ingestion jobs marked interrupted at startup: %d", recovered)
     except Exception:  # noqa: BLE001 - never block startup on the job registry
         logging.exception("ingestion job recovery failed")
+    try:
+        # Promotions / deletions of a stopped process: "interrupted" (counted in ops_operation_total, alerted).
+        # The served manifest was marked stale before their first write; re-running them is idempotent.
+        interrupted = ingestion_jobs.recover_interrupted_operations()
+        if interrupted:
+            logging.error("promotion/deletion operations marked interrupted at startup: %d (re-run them)", interrupted)
+    except Exception:  # noqa: BLE001 - never block startup on the job registry
+        logging.exception("operation recovery failed")
+    _warm_cross_encoder()
+    try:
+        from webapi import mail_ingestion_jobs
+
+        mail_ingestion_jobs.warn_local_state_if_shared_registry()
+    except Exception:  # noqa: BLE001 - never block startup on a diagnostic
+        logging.exception("mail state check failed")
     try:
         # Settings are present but the integration is off (the default since the switches exist): say so, once.
         for line in integrations.startup_warnings():

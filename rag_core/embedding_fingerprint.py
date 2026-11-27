@@ -17,6 +17,8 @@ EXTENDED_FINGERPRINT_KEYS = (
     "embed_normalize",
     "embed_distance",
     "profile_version",
+    "embed_revision",
+    "embed_max_seq_length",
     "embedding_dim",
     "source_jsonl_path",
     "source_jsonl_sha256",
@@ -128,14 +130,29 @@ def fingerprint_status(metadata: Mapping[str, Any] | None, *, provider_name: str
     stamped_scheme = extended.get("embed_prefix_scheme")
     active_profile = embedding_provider.active_profile(provider_name)
     stamped_profile = {k: str(extended[k]) for k in embedding_provider.PROFILE_KEYS if k in extended}
-    profile_matches = all(active_profile[k] == v for k, v in stamped_profile.items()) if stamped_profile else None
+    # An optional key (revision, max sequence length) set on only one side is
+    # compared against its default, so pinning a revision later is reported.
+    compared = set(stamped_profile)
+    if stamped_profile:
+        compared |= {k for k in embedding_provider.PROFILE_OPTIONAL_DEFAULTS if k in active_profile}
+    profile_matches = (
+        all(
+            embedding_provider.profile_value(active_profile, k) == embedding_provider.profile_value(stamped_profile, k)
+            for k in compared
+        )
+        if stamped_profile
+        else None
+    )
     return {
         "present": stamped is not None,
         "matches_active": stamped == active if stamped is not None else False,
         "active": active,
         "stamped": stamped,
         "extended": extended,
-        "missing_extended_keys": [key for key in EXTENDED_FINGERPRINT_KEYS if key not in extended],
+        "missing_extended_keys": [
+            key for key in EXTENDED_FINGERPRINT_KEYS
+            if key not in extended and key not in embedding_provider.PROFILE_OPTIONAL_DEFAULTS
+        ],
         # None when the collection predates prefix stamping.
         "prefix_scheme_matches": (stamped_scheme == active_scheme) if stamped_scheme else None,
         "active_prefix_scheme": active_scheme,

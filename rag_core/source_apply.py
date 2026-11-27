@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
@@ -12,6 +14,8 @@ import config
 from rag_core import change_ledger, source_registry as registry, source_sync
 from rag_core.source_registry import SourceError
 from rag_core.source_scan import diff_manifests, document_name, name_conflicts
+
+logger = logging.getLogger(__name__)
 
 Ingest = Callable[[Sequence[Path], str, str], Dict[str, Any]]
 Delete = Callable[[str, str, Sequence[str]], Dict[str, Any]]
@@ -33,7 +37,8 @@ def default_delete(collection: str, tenant: str, documents: Sequence[str]) -> Di
     from webapi import collection_admin
 
     try:
-        return collection_admin.delete_documents(collection, tenant=tenant, source_docs=list(documents), execute=True)
+        return collection_admin.delete_documents(collection, tenant=tenant, source_docs=list(documents), execute=True,
+                                                 reason="source_delete")
     except LookupError:
         return {"chunks": 0, "missing_collection": True}
 
@@ -125,7 +130,36 @@ def apply_source(
     source_id: str, *, approval: Optional[str] = None, actor: str = "", ingest: Optional[Ingest] = None,
     delete: Optional[Delete] = None, now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """Apply the plan of the last scan to the staging collection, unless the guard holds it and `approval` is not its SHA."""
+    """Apply the plan of the last scan to the staging collection, unless the guard holds it and `approval` is not its SHA.
+
+    One apply per source at a time (a file lock under SOURCES_DIR/locks): a second one raises SourceError."""
+    registry.get(source_id)
+    with _source_lock(source_id):
+        return _apply_locked(source_id, approval=approval, actor=actor, ingest=ingest, delete=delete, now=now)
+
+
+@contextmanager
+def _source_lock(source_id: str):
+    import fcntl
+
+    directory = registry.sources_dir() / "locks"
+    directory.mkdir(parents=True, exist_ok=True)
+    name = hashlib.sha256(source_id.encode("utf-8")).hexdigest()[:24]
+    with open(directory / f"apply-{name}.lock", "a+") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise SourceError("this source is being applied by another process; retry later") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _apply_locked(
+    source_id: str, *, approval: Optional[str], actor: str, ingest: Optional[Ingest], delete: Optional[Delete],
+    now: Optional[datetime],
+) -> Dict[str, Any]:
     record = registry.get(source_id)
     when = now or datetime.now(timezone.utc)
     plan = plan_source(source_id)
@@ -154,19 +188,26 @@ def apply_source(
                 rel = path.relative_to(root).as_posix()
                 applied[rel] = observed[rel]
                 ingested_paths.append(rel)
-        deleted_docs = [document_name(rel) for rel in plan["deleted"]]
+        # A file moved to another folder (a/x.pdf -> b/x.pdf) is "deleted" and "added" under the same document
+        # name: the name is still alive, so its rows (just ingested) must not be deleted.
+        alive = {document_name(rel) for rel in observed}
+        deleted_docs = sorted({document_name(rel) for rel in plan["deleted"]} - alive)
         if deleted_docs:
             delete(collection, tenant, deleted_docs)
-            for rel in plan["deleted"]:
-                applied.pop(rel, None)
+        for rel in plan["deleted"]:
+            applied.pop(rel, None)
     except Exception as exc:  # noqa: BLE001 - recorded, then re-raised
         registry.save_manifest(source_id, "applied", applied)  # what did succeed before the failure stays recorded
-        change_ledger.record("apply_failed", source_id=source_id, tenant_id=record["tenant_id"],
-                             summary={"error": type(exc).__name__, "ingested": len(ingested_paths)}, now=when)
+        try:
+            change_ledger.record("apply_failed", source_id=source_id, tenant_id=record["tenant_id"],
+                                 summary={"error": type(exc).__name__, "ingested": len(ingested_paths)}, now=when)
+        except Exception:  # noqa: BLE001 - the original error is the one to report
+            logger.exception("could not record apply_failed for source %s", source_id)
         raise
     registry.save_manifest(source_id, "applied", applied)
     status = "partial" if failed else "applied"
     summary = {"status": status, "ingested": len(ingested_paths), "deleted": len(plan["deleted"]), "failed": failed,
+               "documents_deleted": len(deleted_docs),
                "counts": counts, "plan_sha256": plan["plan_sha256"], "approved_by": str(actor or "") if verdict["hold"] else None,
                "guard": verdict["reasons"]}
     entry = change_ledger.record("apply", source_id=source_id, tenant_id=record["tenant_id"], summary=summary, now=when)

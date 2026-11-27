@@ -8,6 +8,8 @@ column names. find_layout() looks at how many cells each row fills:
   a data row; rows above it are context: a one-cell row is the title, "label | value" rows are notes
 - a row below the header with an empty first cell that names a total (合計, 小計, Total ...) is a summary row:
   it stays in the data, flagged, so it is not mistaken for a record
+- a row whose cells all repeat one value is a title merged across the columns (Excel merges are expanded
+  into every covered cell), never the header
 - anything that does not look like this (plain tables, single-column lists, all-numeric data) keeps the first row
   as the header, exactly as before
 """
@@ -40,6 +42,11 @@ def _mostly_text(cells: Sequence[str]) -> bool:
     return bool(values) and sum(1 for v in values if not _NUMBER_RE.fullmatch(v)) >= 0.6 * len(values)
 
 
+def _repeated_single_value(cells: Sequence[str]) -> bool:
+    values = _filled(cells)
+    return len(values) >= 2 and len(set(values)) == 1
+
+
 def find_layout(rows: Sequence[Tuple[int, Sequence[str]]]) -> TableLayout:
     """rows: (row_number, cells) in sheet order (blank rows may be included)."""
     layout = TableLayout()
@@ -51,6 +58,8 @@ def find_layout(rows: Sequence[Tuple[int, Sequence[str]]]) -> TableLayout:
     for index, (_n, cells) in enumerate(rows):
         n = counts[index]
         nxt = next((counts[j] for j in range(index + 1, len(rows)) if counts[j] > 0), 0)
+        if _repeated_single_value(cells):
+            continue  # a merged title, see the module docstring
         if n >= max(2, int(0.8 * width + 0.999)) and _mostly_text(cells) and nxt >= max(1, width // 2):
             layout.header_index = index
             break
@@ -58,6 +67,8 @@ def find_layout(rows: Sequence[Tuple[int, Sequence[str]]]) -> TableLayout:
         return layout
     for _n, cells in rows[: layout.header_index]:
         values = _filled(cells)
+        if _repeated_single_value(cells):
+            values = values[:1]
         if len(values) == 1 and not layout.title:
             layout.title = values[0]
         elif len(values) >= 2:

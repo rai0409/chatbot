@@ -12,15 +12,26 @@ Also handled (v2_08):
 - footnotes / endnotes: the note text follows the paragraph that cites it
 - merged table cells: a horizontal span repeats its value for every grid
   column, a vertical merge repeats the value of the cell above
-- page headers and footers: one "header_footer" chunk with their distinct text
+- page headers and footers: one "header_footer" chunk with their distinct text.
+  It is stored but not searchable (chunk_role="header_footer", searchable=0)
+  unless DOCX_HEADER_FOOTER_SEARCHABLE=true; document number, revision,
+  effective date and confidentiality found in it become metadata of every
+  other chunk of the document (see header_footer_metadata)
 - tables nested in a cell: their text joins the cell (stage 9; was dropped)
 - images (word/media): OCR text as "image_text" chunks, only with
   OFFICE_OCR_IMAGES=true (stage 9)
+- multi-row table headers (2026-11): rows marked "repeat as header row"
+  (w:tblHeader), or a first row that groups columns (a horizontal span such
+  as 上限額 over 国内 | 海外, or a cell merged down into the next row), form
+  the header together; each column is labelled "上限額 国内". A first row
+  that is one cell spanning the whole table is the table title.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import unicodedata
 import xml.etree.ElementTree as ET  # element types only; parsing uses defusedxml  # nosec B405
 from defusedxml.ElementTree import fromstring as _safe_fromstring
 from rag_core.document_converters.limits import MAX_GRID_SPAN, open_office_zip, read_member
@@ -28,6 +39,7 @@ import zipfile
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from rag_core.document_converters.table_layout import _mostly_text
 from rag_core.document_converters.base import (
     build_chunk,
     compact,
@@ -176,10 +188,24 @@ def _cell_paragraphs(tc: ET.Element) -> Iterator[ET.Element]:
 
 
 def _table_cells(table: ET.Element) -> List[List[str]]:
+    return _table_grid(table)[0]
+
+
+def _table_grid(table: ET.Element) -> Tuple[List[List[str]], List[Dict[str, object]]]:
+    """Cell values per row (merges expanded) and per-row layout facts for header detection:
+    tbl_header (w:tblHeader), spans [(column, width)], v_restart / v_continue column sets."""
     rows: List[List[str]] = []
+    meta: List[Dict[str, object]] = []
     above: Dict[int, str] = {}
     for tr in table.findall(f"{_W}tr"):
         row: List[str] = []
+        info: Dict[str, object] = {
+            "tbl_header": tr.find(f"{_W}trPr/{_W}tblHeader") is not None
+            and _val(tr.find(f"{_W}trPr/{_W}tblHeader")) not in {"0", "false", "off"},
+            "spans": [],
+            "v_restart": set(),
+            "v_continue": set(),
+        }
         cells = [c for c in tr if c.tag in (f"{_W}tc", f"{_W}sdt")]
         flat: List[ET.Element] = []
         for cell in cells:
@@ -199,13 +225,56 @@ def _table_cells(table: ET.Element) -> List[List[str]]:
             column = len(row)
             if v_merge is not None and _val(v_merge) != "restart":
                 value = above.get(column, "")
+                info["v_continue"].add(column)  # type: ignore[union-attr]
             else:
                 value = compact(" ".join(_paragraph_text(p) for p in _cell_paragraphs(tc)))
+                if v_merge is not None:
+                    info["v_restart"].add(column)  # type: ignore[union-attr]
+            if span > 1:
+                info["spans"].append((column, span))  # type: ignore[union-attr]
             for offset in range(max(1, span)):
                 row.append(value)
                 above[column + offset] = value
         rows.append(row)
-    return rows
+        meta.append(info)
+    return rows, meta
+
+
+_MAX_HEADER_ROWS = 3
+
+
+def _table_header(rows: List[List[str]], meta: List[Dict[str, object]]) -> Tuple[str, int, List[str]]:
+    """(table title, index of the first header row, combined column labels); data starts after the header rows."""
+    title = ""
+    start = 0
+    width = max((len(r) for r in rows), default=0)
+    first = [v for v in rows[0] if v] if rows else []
+    if len(rows) >= 3 and width >= 2 and len(rows[0]) == width and len(set(rows[0])) == 1 and first:
+        title, start = rows[0][0], 1  # one cell across the whole table
+    marked = 0
+    while start + marked < len(rows) and meta[start + marked]["tbl_header"]:
+        marked += 1
+    if 0 < marked < len(rows) - start:
+        count = min(marked, _MAX_HEADER_ROWS)
+    else:
+        count = 1
+        while count < _MAX_HEADER_ROWS and start + count < len(rows) - 1:
+            upper, lower = meta[start + count - 1], meta[start + count]
+            groups = any(span < width for _c, span in upper["spans"])  # type: ignore[union-attr]
+            merged_down = bool(set(upper["v_restart"]) & set(lower["v_continue"]))  # type: ignore[arg-type]
+            if (groups or merged_down) and _mostly_text(rows[start + count]):
+                count += 1
+            else:
+                break
+    labels: List[str] = []
+    for c in range(width):
+        parts: List[str] = []
+        for r in range(start, start + count):
+            value = rows[r][c] if c < len(rows[r]) else ""
+            if value and (not parts or parts[-1] != value):
+                parts.append(value)
+        labels.append(" ".join(parts))
+    return title, start + count, labels
 
 
 def _header_footer_text(zf: zipfile.ZipFile) -> str:
@@ -216,6 +285,73 @@ def _header_footer_text(zf: zipfile.ZipFile) -> str:
         if text and text not in seen:
             seen.append(text)
     return "\n".join(seen)
+
+
+_DOC_NUMBER_RE = re.compile(
+    r"(?:文書番号|管理番号|文書No\.?|規程番号|Doc(?:ument)?\.?\s*(?:No\.?|Number)|No\.)\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9\-_/]*[A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_REVISION_RE = re.compile(
+    r"(?:第\s*(\d+)\s*版|(\d+)\s*版|Rev(?:ision)?\.?\s*[:：]?\s*([A-Za-z]?\d+(?:\.\d+)?)|改訂\s*[:：]?\s*(?:第)?\s*(\d+))",
+    re.IGNORECASE,
+)
+_DATE_PATTERNS = (
+    re.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日"),
+    re.compile(r"(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})"),
+)
+_REIWA_RE = re.compile(r"令和\s*(\d{1,2}|元)\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+_CONFIDENTIALITY = (
+    ("社外秘", "社外秘"),
+    ("部外秘", "部外秘"),
+    ("機密", "機密"),
+    ("confidential", "Confidential"),
+    ("internal", "Internal"),
+)
+
+
+def _iso(year: int, month: int, day: int) -> str:
+    if 1 <= month <= 12 and 1 <= day <= 31:
+        return f"{year:04d}-{month:02d}-{day:02d}"
+    return ""
+
+
+def header_footer_metadata(text: str) -> Dict[str, str]:
+    """Document number / revision / effective date / confidentiality from header+footer text.
+
+    Only keys that were found are returned (all values are strings)."""
+    norm = unicodedata.normalize("NFKC", text or "")
+    out: Dict[str, str] = {}
+    match = _DOC_NUMBER_RE.search(norm)
+    if match:
+        out["doc_number"] = match.group(1)
+    match = _REVISION_RE.search(norm)
+    if match:
+        out["revision"] = next(g for g in match.groups() if g)
+    iso = ""
+    match = _REIWA_RE.search(norm)
+    if match:
+        year = 1 if match.group(1) == "元" else int(match.group(1))
+        iso = _iso(2018 + year, int(match.group(2)), int(match.group(3)))
+    if not iso:
+        for pattern in _DATE_PATTERNS:
+            match = pattern.search(norm)
+            if match:
+                iso = _iso(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+                if iso:
+                    break
+    if iso:
+        out["effective_from"] = iso
+    lowered = norm.lower()
+    for needle, label in _CONFIDENTIALITY:
+        if needle.lower() in lowered:
+            out["confidentiality"] = label
+            break
+    return out
+
+
+def header_footer_searchable() -> bool:
+    """DOCX_HEADER_FOOTER_SEARCHABLE (default false): keep the header/footer chunk searchable."""
+    return str(os.getenv("DOCX_HEADER_FOOTER_SEARCHABLE", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _image_texts(zf: zipfile.ZipFile) -> List[Tuple[str, str]]:
@@ -296,11 +432,11 @@ def convert_docx(
             )
         elif element.tag == f"{_W}tbl":
             table_index += 1
-            cell_rows = _table_cells(element)
+            cell_rows, row_meta = _table_grid(element)
             if not cell_rows:
                 continue
-            headers = cell_rows[0]
-            data = [(row_no, cells) for row_no, cells in enumerate(cell_rows[1:], start=2)]
+            table_title, data_start, headers = _table_header(cell_rows, row_meta)
+            data = [(row_no, cells) for row_no, cells in enumerate(cell_rows[data_start:], start=data_start + 1)]
             heading_path = _heading_path()
             table_chunks = table_rows_to_chunks(
                 headers=headers,
@@ -312,15 +448,17 @@ def convert_docx(
                 doc_type=resolved_doc_type,
                 parser="stdlib_ooxml",
                 start_index=len(chunks) + 1,
-                extra_builder=lambda row_number, values, _t=table_index, _h=heading_path: {
+                table_title=table_title,
+                extra_builder=lambda row_number, values, _t=table_index, _h=heading_path, _n=data_start: {
                     "table_index": _t,
                     "heading_path": _h,
+                    "table_data_start_row": _n + 1,
                 },
             )
             for chunk in table_chunks:
                 if chunk["chunk_type"] == "row":
                     chunk["chunk_type"] = "table_row"
-                chunk["section_path"] = heading_path
+                chunk["section_path"] = heading_path + ([table_title] if table_title else [])
             chunks.extend(table_chunks)
 
     for image_no, (member, image_text) in enumerate(image_texts, start=1):
@@ -341,6 +479,11 @@ def convert_docx(
         )
 
     if header_footer:
+        meta = header_footer_metadata(header_footer)
+        if meta:
+            for chunk in chunks:
+                chunk.update(meta)
+        searchable = header_footer_searchable()
         chunks.append(
             build_chunk(
                 source_type="docx",
@@ -353,7 +496,12 @@ def convert_docx(
                 doc_type=resolved_doc_type,
                 parser="stdlib_ooxml",
                 title=source_doc,
-                extra={"heading_path": []},
+                extra={
+                    "heading_path": [],
+                    "chunk_role": "child" if searchable else "header_footer",
+                    "searchable": 1 if searchable else 0,
+                    **meta,
+                },
             )
         )
     return chunks

@@ -89,6 +89,10 @@ def test_collection_backend_and_generation_are_part_of_the_key(state, monkeypatc
     "name, value",
     [
         ("HYBRID_FUSION", "dbsf"),
+        ("SYNONYM_LANE_ENABLED", False), ("SYNONYM_LANE_MAX_VARIANTS", 7),
+        ("CROSS_ENCODER_REVISION", "new"), ("CROSS_ENCODER_BATCH_SIZE", 27),
+        ("CROSS_ENCODER_TIMEOUT_MS", 123), ("CROSS_ENCODER_BOOST_WEIGHT", 0.75),
+        ("LOCAL_EMBED_MODEL_REVISION", "new"), ("EMBED_MAX_SEQ_LENGTH", 333),
         ("HYBRID_DENSE_WEIGHT", 2.0),
         ("KEYWORD_BOOST_MAX_DELTA", 0.2),
         ("RAG_SOFT_DIST_OTHER", 0.5),
@@ -174,3 +178,32 @@ def test_colloquial_questions_do_not_share_cache_without_proven_equivalence(stat
     assert key("2025年度の申請") != key("2026年度の申請")
     assert key("申請が必要") != key("申請は不要")
     assert key("PR2の申請") != key("PR20の申請")
+
+
+def test_embedding_configuration_key_without_model_load(state, monkeypatch):
+    from rag_core import embedding_provider
+
+    monkeypatch.setenv("EMBED_PROVIDER", "local")
+    monkeypatch.setattr(embedding_provider, "_load_sentence_transformer_class", lambda _: pytest.fail("model load"))
+    base = _key()
+    monkeypatch.setattr(config, "EMBED_MAX_SEQ_LENGTH", 777)
+    assert _key() != base
+
+
+def test_calibration_file_changes_the_key(state, monkeypatch):
+    path = state / "calibration.json"
+    monkeypatch.setattr(config, "RAG_DIST_CALIBRATION_FILE", str(path))
+    absent = _key()
+    _write(path, "{}")
+    assert _key() != absent
+
+
+def test_calibration_identity_uses_loaded_dimension(state, monkeypatch):
+    from rag_core import embedding_provider
+
+    monkeypatch.setattr(config, "RAG_DIST_CALIBRATION_FILE", str(state / "calibration.json"))
+    monkeypatch.setattr(embedding_provider, "_load_sentence_transformer_class", lambda _: pytest.fail("model load"))
+    monkeypatch.setattr(embedding_provider, "loaded_embedding_dim", lambda _: None)
+    before = _key()
+    monkeypatch.setattr(embedding_provider, "loaded_embedding_dim", lambda _: 384)
+    assert _key() != before

@@ -12,6 +12,16 @@
 # =true runs scripts/verify_audit_chain.py (broken chain -> CRITICAL). The
 # exit code is the worst of all checks.
 #
+# 2026-11 ops hardening:
+#   - alerts are evaluated over the window since the previous snapshot (counter
+#     deltas, webapi.alerting.window_payload); KURADEN_ALERT_WINDOW=cumulative
+#     restores the old behaviour. The /metrics "ops" section (stuck collections,
+#     interrupted promotions, ledger chain, fingerprint, backup age, disk) is
+#     evaluated as current state.
+#   - WARN/CRITICAL and failures (metrics not reachable, checker crash) are sent
+#     through scripts/alert_notify.py, de-duplicated by state change
+#     (KURADEN_MONITOR_DIR/alert_state.json). KURADEN_NOTIFY=false turns it off.
+#
 # Local-only: no Docker, no deploy, no external network beyond the local
 # /metrics endpoint. Never reads .env; never prints secrets (the snapshot and
 # checker output carry only safe aggregate metrics).
@@ -44,6 +54,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 mkdir -p "$OUT_DIR/snapshots"
+
+notify_failure() {
+  # Best effort: a notification failure never changes the exit code.
+  if [[ "${KURADEN_NOTIFY:-true}" != "false" ]]; then
+    "$PYTHON" scripts/alert_notify.py --failure "$1" --state-dir "$OUT_DIR" >> "$OUT_DIR/notify.log" 2>&1 || true
+  fi
+}
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 # Unique suffix so rapid successive runs (e.g. tests) do not collide within the
 # same second; production runs at minute intervals.
@@ -61,7 +78,34 @@ else
   fi
   if ! printf '%s\n' "$CURL_CONFIG" | curl -K - -fsS "$METRICS_URL" -o "$SNAP_FILE" 2>/dev/null; then
     echo "${TS} ERROR could_not_fetch_metrics" >> "$OUT_DIR/monitor.log"
+    rm -f "$SNAP_FILE"
+    notify_failure could_not_fetch_metrics
     exit 2
+  fi
+fi
+
+clear_failure() { rm -f "$OUT_DIR/alert_state_failure_$1.json"; }
+clear_failure could_not_fetch_metrics
+
+# The previous snapshot (newest other than this one): the alert window starts there.
+PREV="$(ls -1t "$OUT_DIR/snapshots/"snapshot_*.json 2>/dev/null | grep -vxF "$SNAP_FILE" | head -n1 || true)"
+EVAL_FILE="$SNAP_FILE"
+if [[ -n "$PREV" && "${KURADEN_ALERT_WINDOW:-delta}" != "cumulative" ]]; then
+  EVAL_FILE="$OUT_DIR/window.json"
+  if ! "$PYTHON" - "$SNAP_FILE" "$PREV" "$EVAL_FILE" <<'PY' 2>>"$OUT_DIR/monitor.log"
+import json, sys
+from pathlib import Path
+sys.path.insert(0, ".")
+from webapi.alerting import window_payload
+cur = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+try:
+    prev = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    prev = None
+Path(sys.argv[3]).write_text(json.dumps(window_payload(cur, prev)), encoding="utf-8")
+PY
+  then
+    EVAL_FILE="$SNAP_FILE"
   fi
 fi
 
@@ -73,9 +117,17 @@ fi
 
 # Evaluate alerts.
 set +e
-"$PYTHON" scripts/alert_check.py "$SNAP_FILE" > "$OUT_DIR/last_result.txt" 2>&1
+"$PYTHON" scripts/alert_check.py "$EVAL_FILE" > "$OUT_DIR/last_result.txt" 2>&1
 CODE=$?
 set -e
+if (( CODE > 2 )); then
+  # The checker itself failed (not a severity): CRITICAL and a notification.
+  echo "EXTRA: alert_check failed (exit ${CODE})" >> "$OUT_DIR/last_result.txt"
+  notify_failure alert_check_failed
+  CODE=2
+else
+  clear_failure alert_check_failed
+fi
 
 # Optional extra checks; their output goes to last_result.txt (no secrets).
 if [[ -n "${KURADEN_FRESHNESS_MANIFEST:-}" ]]; then
@@ -100,5 +152,18 @@ if [[ -f "$LOG" ]]; then
   if (( SIZE > LOG_MAX_BYTES )); then mv "$LOG" "$LOG.1"; fi
 fi
 echo "${TS} status=${OVERALL} exit=${CODE}" >> "$LOG"
+
+# Notify on WARN/CRITICAL (and once on recovery), only when the state changed since the last notification.
+if [[ "${KURADEN_NOTIFY:-true}" != "false" ]]; then
+  NOTIFY_ARGS=("$SNAP_FILE" --state-dir "$OUT_DIR")
+  [[ -n "$PREV" && "${KURADEN_ALERT_WINDOW:-delta}" != "cumulative" ]] && NOTIFY_ARGS+=(--previous "$PREV")
+  "$PYTHON" scripts/alert_notify.py "${NOTIFY_ARGS[@]}" >> "$OUT_DIR/notify.log" 2>&1 || true
+  if [[ "$CODE" == "2" ]] && grep -q '^EXTRA:' "$OUT_DIR/last_result.txt"; then
+    # Extra checks (audit chain, freshness) are not in the snapshot: notify them as a monitoring failure.
+    notify_failure extra_check_failed
+  else
+    clear_failure extra_check_failed
+  fi
+fi
 
 exit "$CODE"

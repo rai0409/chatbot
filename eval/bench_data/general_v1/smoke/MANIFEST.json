@@ -1,0 +1,59 @@
+{
+  "schema": "general-benchmark-manifest-v1",
+  "name": "general_v1_smoke",
+  "version": "1.0.0",
+  "status": "pinned",
+  "description": "Tiny synthetic stand-in for general_v1 (same builders, committed inputs) so the pipeline runs end to end in tests with stub encoders. Not a measurement.",
+  "seed": 20261122,
+  "split": "dev",
+  "match_mode": "chunk",
+  "sources": {
+    "jagov_like": {
+      "kind": "jagovfaqs",
+      "license": "repository (synthetic)",
+      "input": "eval/bench_data/general_v1/smoke/jagov_like.jsonl",
+      "input_sha256": {
+        "jagov_like.jsonl": "3174af4a964f51f064ab660e9715a24cdfa402b79d07fae1450cacadf1601f90"
+      },
+      "question_chars": [
+        5,
+        120
+      ],
+      "answer_chars": [
+        10,
+        600
+      ],
+      "n_docs": 12,
+      "n_queries": 10
+    },
+    "synthetic_multiformat": {
+      "kind": "canonical_cases",
+      "license": "repository (synthetic)",
+      "cases": "eval/bench_data/general_v1/smoke/multiformat_cases.jsonl",
+      "chunks": "eval/bench_data/general_v1/smoke/multiformat_chunks.jsonl",
+      "input_sha256": {
+        "multiformat_cases.jsonl": "8f77db98bab0934c600c9073e546e2dd60f77d3c58e38e3c9f7ff58ec84a0866",
+        "multiformat_chunks.jsonl": "db058eaed067b94f8921a04ba78df6138b8fc00b1a3b8d6e2abe23fcd277f2b5"
+      }
+    }
+  },
+  "outputs": {
+    "dir": "data/bench/general_v1_smoke"
+  },
+  "expected_sha256": {
+    "eval_set": "a583671f0ab713bc0f499260fe3ad1fd204244fea1b8764567df3f2bf1d33b7f",
+    "chunks": "1bfb07cb1d907bbe0b573f138c3b4bb469d554d5c5458894c8b405f040e4fc41"
+  },
+  "composition_built": {
+    "jagov_like": {
+      "queries": 10,
+      "answerable": 10,
+      "chunks": 12
+    },
+    "synthetic_multiformat": {
+      "queries": 6,
+      "answerable": 5,
+      "chunks": 5
+    }
+  }
+}

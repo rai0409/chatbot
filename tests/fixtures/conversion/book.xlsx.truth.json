@@ -1,0 +1,101 @@
+{
+ "schema": "conversion-truth-v1",
+ "document": "book.xlsx",
+ "format": "xlsx",
+ "headings": [
+  "経費明細"
+ ],
+ "tables": [
+  {
+   "cells": [
+    [
+     "経費明細",
+     "",
+     "",
+     "",
+     ""
+    ],
+    [
+     "申請日",
+     "氏名",
+     "区分",
+     "金額",
+     "税込"
+    ],
+    [
+     "令和6年4月1日",
+     "山田太郎",
+     "交通費",
+     "1200",
+     "1320"
+    ],
+    [
+     "平成30年3月31日",
+     "佐藤次郎",
+     "",
+     "3500",
+     "3850"
+    ],
+    [
+     "R6.4.15",
+     "田中太郎",
+     "宿泊費",
+     "12000",
+     "13200"
+    ]
+   ],
+   "merged": [
+    {
+     "row": 0,
+     "col": 0,
+     "rowspan": 1,
+     "colspan": 5
+    },
+    {
+     "row": 2,
+     "col": 2,
+     "rowspan": 2,
+     "colspan": 1
+    }
+   ],
+   "title_rows": 1,
+   "header_rows": 1
+  }
+ ],
+ "typed_cells": [
+  {
+   "header": "申請日",
+   "value": "令和6年4月1日",
+   "kind": "era_date"
+  },
+  {
+   "header": "申請日",
+   "value": "平成30年3月31日",
+   "kind": "era_date"
+  },
+  {
+   "header": "申請日",
+   "value": "R6.4.15",
+   "kind": "era_date"
+  },
+  {
+   "header": "金額",
+   "value": "12000",
+   "kind": "number"
+  },
+  {
+   "header": "税込",
+   "value": "1320",
+   "kind": "formula"
+  }
+ ],
+ "excluded_text": [
+  "ヤマダ",
+  "タロウ",
+  "サトウ",
+  "ジロウ"
+ ],
+ "expected_warnings": [
+  "formula_without_cached_value"
+ ]
+}

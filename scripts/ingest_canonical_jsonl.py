@@ -9,6 +9,7 @@ if str(_ROOT) not in sys.path:
 
 import argparse
 import json
+import logging
 import os
 import sys
 import uuid
@@ -19,10 +20,11 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 import config
 from rag_core import embedder, store
 from rag_core.embedding_fingerprint import stamp_collection_metadata
+from rag_core.index_generation import fsync_dir
 from rag_core.ja_text import active_normalization_version
 from rag_core.utils import ensure_openai_client
 
-_ENABLED_VALUES = {"1", "true", "yes", "on"}
+_ENABLED_VALUES = {"1", "true", "yes", "y", "on"}  # the set of config._get_bool
 
 
 def _iter_jsonl(path: str) -> Iterable[Dict[str, Any]]:
@@ -131,6 +133,43 @@ def new_generation_id() -> str:
     return uuid.uuid4().hex
 
 
+def document_row_ids(collection, tenant: str, source: str) -> List[str]:
+    """Every row id of the document (tenant, source) under the _doc_key rule.
+
+    Rows are matched by tenant_id + source_doc, and also (legacy rows) by doc_id when source_doc is empty, and
+    without tenant_id for the default tenant, so a document indexed before source_doc / tenant_id existed is
+    replaced or deleted instead of staying behind as an orphan."""
+    tenant = str(tenant or "").strip() or "default"
+    source = str(source or "").strip()
+    if not source:
+        return []
+    ids: List[str] = []
+    seen: Set[str] = set()
+
+    def take(found: Iterable[str]) -> None:
+        for chunk_id in found:
+            if chunk_id not in seen:
+                seen.add(chunk_id)
+                ids.append(chunk_id)
+
+    res = collection.get(where={"$and": [{"tenant_id": tenant}, {"source_doc": source}]}, include=[])
+    take(str(i) for i in (res.get("ids") or []))
+    fallbacks = [{"doc_id": source}]
+    if tenant == "default":
+        fallbacks.append({"source_doc": source})
+    for where in fallbacks:
+        try:
+            res = collection.get(where=where, include=["metadatas"])
+        except Exception:  # noqa: BLE001 - a backend without the field index: the primary match stands
+            # Legacy rows matched only by this clause would stay behind after a delete/replace: say so.
+            logging.getLogger(__name__).warning("legacy row lookup %s failed; only the primary match is used",
+                                                sorted(where), exc_info=True)
+            continue
+        metas = res.get("metadatas") or []
+        take(str(i) for i, meta in zip(res.get("ids") or [], metas) if _doc_key(dict(meta or {})) == (tenant, source))
+    return ids
+
+
 def _delete_stale_document_rows(collection, doc_keys: Dict[Tuple[str, str], Set[str]]) -> int:
     # Runs after the new rows are upserted, so a document is never missing
     # from search while it is being replaced.
@@ -138,11 +177,9 @@ def _delete_stale_document_rows(collection, doc_keys: Dict[Tuple[str, str], Set[
     for (tenant, source), new_ids in doc_keys.items():
         if not source:
             continue
-        where = {"$and": [{"tenant_id": tenant}, {"source_doc": source}]}
-        res = collection.get(where=where, include=[])
-        stale = [i for i in (res.get("ids") or []) if i not in new_ids]
+        stale = [i for i in document_row_ids(collection, tenant, source) if i not in new_ids]
         for ids_chunk in _chunked(stale, 1000):
-            collection.delete(ids=ids_chunk, where=where)
+            collection.delete(ids=ids_chunk)
             deleted += len(ids_chunk)
     return deleted
 
@@ -317,58 +354,107 @@ def ingest_canonical_rows(
     }
 
 
+def _keyword_row(r: Dict[str, Any], generation_id: Optional[str]) -> Dict[str, Any]:
+    r = dict(r)
+    if generation_id:
+        r["index_generation"] = generation_id
+    # The keyword index tokenizes with the active normalization; a later
+    # change of NORMALIZATION_PROFILE is detected from this field.
+    r.setdefault("normalization_version", active_normalization_version())
+    return r
+
+
 def write_keyword_rows(
     path: str | Path,
     rows: Iterable[Dict[str, Any]],
     *,
     replace_documents: bool = True,
     generation_id: Optional[str] = None,
+    replaced_keys: Optional[Set[Tuple[str, str]]] = None,
+    new_ids: Optional[Set[str]] = None,
+    allow_unparseable: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Merge rows into a keyword-index JSONL and replace it atomically.
 
     Existing rows of the documents being written are dropped first (document
     level replacement), other documents are kept. The file is written to a
     temporary name and renamed, so readers never see a partial file.
+
+    replaced_keys + new_ids (both given): `rows` is consumed lazily (a generator), so a large promotion never
+    holds its keyword rows in memory; the caller already knows the documents and ids it writes.
     """
     target = Path(path)
-    new_rows = [dict(r) for r in rows if not r.get("__parse_error__") and str(r.get("id") or "").strip()]
-    for r in new_rows:
-        if generation_id:
-            r["index_generation"] = generation_id
-        # The keyword index tokenizes with the active normalization; a later
-        # change of NORMALIZATION_PROFILE is detected from this field.
-        r.setdefault("normalization_version", active_normalization_version())
+    if replaced_keys is not None and new_ids is not None:
+        replaced = set(replaced_keys) if replace_documents else set()
+        ids = set(new_ids)
+        counter = {"written": 0}
+
+        def stream() -> Iterable[Dict[str, Any]]:
+            for r in rows:
+                if r.get("__parse_error__") or not str(r.get("id") or "").strip():
+                    continue
+                counter["written"] += 1
+                yield _keyword_row(r, generation_id)
+
+        kept, dropped = _rewrite_keyword_corpus(
+            target, lambda old: str(old.get("id") or "") in ids or _doc_key(old) in replaced, stream(),
+            allow_unparseable=allow_unparseable,
+        )
+        return {"path": str(target), "written": counter["written"], "kept": kept, "replaced": dropped}
+    new_rows = [_keyword_row(r, generation_id) for r in rows if not r.get("__parse_error__") and str(r.get("id") or "").strip()]
     replaced = {_doc_key(r) for r in new_rows} if replace_documents else set()
-    new_ids = {str(r["id"]) for r in new_rows}
+    ids = {str(r["id"]) for r in new_rows}
     kept, dropped = _rewrite_keyword_corpus(
-        Path(path), lambda old: str(old.get("id") or "") in new_ids or _doc_key(old) in replaced, new_rows
+        target, lambda old: str(old.get("id") or "") in ids or _doc_key(old) in replaced, new_rows,
+        allow_unparseable=allow_unparseable,
     )
     return {"path": str(target), "written": len(new_rows), "kept": kept, "replaced": dropped}
 
 
-def remove_keyword_documents(path: str | Path, doc_keys: Iterable[Tuple[str, str]]) -> Dict[str, Any]:
+def remove_keyword_documents(path: str | Path, doc_keys: Iterable[Tuple[str, str]],
+                             allow_unparseable: Optional[bool] = None) -> Dict[str, Any]:
     """Drop every row of these (tenant_id, source_doc) documents (stage 15: document deletion)."""
     keys = set(doc_keys)
     if not Path(path).exists():
         return {"path": str(path), "kept": 0, "removed": 0}
-    kept, removed = _rewrite_keyword_corpus(Path(path), lambda old: _doc_key(old) in keys, [])
+    kept, removed = _rewrite_keyword_corpus(Path(path), lambda old: _doc_key(old) in keys, [],
+                                            allow_unparseable=allow_unparseable)
     return {"path": str(path), "kept": kept, "removed": removed}
+
+
+def iter_keyword_documents(path: str | Path, doc_keys: Iterable[Tuple[str, str]]) -> Iterable[Dict[str, Any]]:
+    """Rows of these documents, one at a time (promotion streams them)."""
+    keys = set(doc_keys)
+    if not Path(path).exists():
+        return
+    for row in _iter_jsonl(str(path)):
+        if not row.get("__parse_error__") and _doc_key(row) in keys:
+            yield row
 
 
 def read_keyword_documents(path: str | Path, doc_keys: Iterable[Tuple[str, str]]) -> List[Dict[str, Any]]:
     """Rows of these documents (stage 15: promotion copies them)."""
-    keys = set(doc_keys)
-    if not Path(path).exists():
-        return []
-    return [row for row in _iter_jsonl(str(path)) if not row.get("__parse_error__") and _doc_key(row) in keys]
+    return list(iter_keyword_documents(path, doc_keys))
 
 
-def _rewrite_keyword_corpus(target: Path, drop, new_rows: List[Dict[str, Any]]) -> Tuple[int, int]:
+class KeywordCorpusError(RuntimeError):
+    """The keyword corpus has lines that are not JSON objects; rewriting it would silently drop them."""
+
+
+def _rewrite_keyword_corpus(target: Path, drop, new_rows: Iterable[Dict[str, Any]],
+                            allow_unparseable: Optional[bool] = None) -> Tuple[int, int]:
     """(kept, dropped). Stage 14: one writer at a time (a sync and an async
     job, several workers), a temp name no other writer uses, and kept rows
-    streamed line by line instead of holding the whole corpus in memory."""
+    streamed line by line instead of holding the whole corpus in memory.
+
+    Lines that are not JSON objects used to vanish silently on every rewrite: they are counted and the rewrite is
+    refused (KeywordCorpusError) unless allow_unparseable / KEYWORD_REWRITE_ALLOW_UNPARSEABLE=true (then they are
+    dropped and logged). The new file is fsynced, renamed, and its directory fsynced."""
+    if allow_unparseable is None:
+        allow_unparseable = _env_flag("KEYWORD_REWRITE_ALLOW_UNPARSEABLE", False)
     kept = 0
     dropped = 0
+    unparseable = 0
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".{target.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}")
     with _exclusive(target.with_name(f".{target.name}.lock")):
@@ -382,20 +468,32 @@ def _rewrite_keyword_corpus(target: Path, drop, new_rows: List[Dict[str, Any]]) 
                             try:
                                 old = json.loads(line)
                             except ValueError:
+                                unparseable += 1
                                 continue
                             if not isinstance(old, dict):
+                                unparseable += 1
                                 continue
                             if drop(old):
                                 dropped += 1
                                 continue
                             out.write(line if line.endswith("\n") else line + "\n")
                             kept += 1
+                if unparseable and not allow_unparseable:
+                    raise KeywordCorpusError(
+                        f"{target.name}: {unparseable} line(s) are not JSON objects; refusing to rewrite (fix the file "
+                        "or set KEYWORD_REWRITE_ALLOW_UNPARSEABLE=true to drop them)"
+                    )
                 for r in new_rows:
                     out.write(json.dumps(r, ensure_ascii=False) + "\n")
+                out.flush()
+                os.fsync(out.fileno())
             os.replace(tmp, target)
+            fsync_dir(target.parent)
         finally:
             if tmp.exists():
                 tmp.unlink()
+    if unparseable:
+        print(f"warning: dropped {unparseable} unparseable line(s) from {target.name}", file=sys.stderr)
     return kept, dropped
 
 
@@ -409,6 +507,24 @@ def _exclusive(lock_path: Path):
             yield
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _production_mail_refusal(collection: Optional[str], rows: List[Dict[str, Any]]) -> str:
+    """Private mail never goes into the served (production) collection through this script (fail-closed)."""
+    from rag_core.mail_access import is_private_mail_record
+
+    try:
+        from webapi.ingestion_jobs import is_production_collection
+
+        production = is_production_collection(collection)
+    except Exception:  # noqa: BLE001 - cannot tell: treat as production
+        production = True
+    if not production:
+        return ""
+    mail = sum(1 for row in rows if not row.get("__parse_error__") and is_private_mail_record(row))
+    if mail:
+        return f"refusing {mail} private mail row(s) for the production collection (mail is quarantined)"
+    return ""
 
 
 def main() -> int:
@@ -430,6 +546,10 @@ def main() -> int:
     args = parser.parse_args()
 
     rows = list(_iter_jsonl(args.canonical_jsonl_path))
+    refusal = _production_mail_refusal(args.collection, rows)
+    if refusal:
+        print(f"error: {refusal}", file=sys.stderr)
+        return 1
     generation = new_generation_id()
     try:
         result = ingest_canonical_rows(

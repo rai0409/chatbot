@@ -378,3 +378,73 @@ def test_converted_chunks_flow_through_keyword_retrieval(monkeypatch, tmp_path):
     assert hits
     assert hits[0].metadata["chunk_type"] == "qa_pair"
     assert hits[0].metadata["source_type"] == "csv"
+
+
+# --- docx header/footer: stored, not searchable, metadata on body chunks ---------------
+
+
+def _write_docx_hf(path, body_xml, header, footer=None):
+    ns = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("word/document.xml", _docx_xml(body_xml))
+        zf.writestr("word/header1.xml", f'<?xml version="1.0"?><w:hdr {ns}>{_p(header)}</w:hdr>')
+        if footer:
+            zf.writestr("word/footer1.xml", f'<?xml version="1.0"?><w:ftr {ns}>{_p(footer)}</w:ftr>')
+
+
+def _hf_doc(tmp_path):
+    src = tmp_path / "kitei.docx"
+    _write_docx_hf(
+        src,
+        _p("第1章", style="Heading1") + _p("申請は月末までに行います。") + _tbl([["項目", "値"], ["担当", "山田太郎"]]),
+        header="株式会社サンプル 文書番号: KT-2026-014 第3版",
+        footer="令和8年4月1日 施行 社外秘",
+    )
+    return src
+
+
+def test_docx_header_footer_chunk_is_stored_but_not_searchable(tmp_path, monkeypatch):
+    monkeypatch.delenv("DOCX_HEADER_FOOTER_SEARCHABLE", raising=False)
+    chunks = convert_file_to_canonical_chunks(_hf_doc(tmp_path))
+    hf = [c for c in chunks if c["chunk_type"] == "header_footer"]
+    assert len(hf) == 1
+    assert hf[0]["chunk_role"] == "header_footer"
+    assert hf[0]["searchable"] == 0
+    assert "KT-2026-014" in hf[0]["text"]
+    where = retrieval._build_base_where()
+    assert not retrieval._meta_matches_where(hf[0], where)
+    body = [c for c in chunks if c["chunk_type"] != "header_footer"]
+    assert body and all(retrieval._meta_matches_where(c, where) for c in body)
+
+
+def test_docx_header_footer_metadata_on_all_body_chunks(tmp_path, monkeypatch):
+    monkeypatch.delenv("DOCX_HEADER_FOOTER_SEARCHABLE", raising=False)
+    chunks = convert_file_to_canonical_chunks(_hf_doc(tmp_path))
+    assert len(chunks) >= 3
+    for chunk in chunks:
+        assert chunk["doc_number"] == "KT-2026-014"
+        assert chunk["revision"] == "3"
+        assert chunk["effective_from"] == "2026-04-01"
+        assert chunk["confidentiality"] == "社外秘"
+
+
+def test_docx_header_footer_searchable_knob(tmp_path, monkeypatch):
+    monkeypatch.setenv("DOCX_HEADER_FOOTER_SEARCHABLE", "true")
+    chunks = convert_file_to_canonical_chunks(_hf_doc(tmp_path))
+    hf = [c for c in chunks if c["chunk_type"] == "header_footer"][0]
+    assert hf["searchable"] == 1 and hf["chunk_role"] == "child"
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("No. A-12 Rev.2 2026/04/01 Confidential", {"doc_number": "A-12", "revision": "2", "effective_from": "2026-04-01", "confidentiality": "Confidential"}),
+        ("管理番号 SOP-7 改訂 5 2026年4月3日 部外秘", {"doc_number": "SOP-7", "revision": "5", "effective_from": "2026-04-03", "confidentiality": "部外秘"}),
+        ("令和元年5月1日 Internal", {"effective_from": "2019-05-01", "confidentiality": "Internal"}),
+        ("株式会社サンプル", {}),
+    ],
+)
+def test_header_footer_metadata_patterns(text, expected):
+    from rag_core.document_converters.docx_converter import header_footer_metadata
+
+    assert header_footer_metadata(text) == expected

@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import uuid
 from datetime import datetime, timezone
@@ -73,11 +72,11 @@ def read_manifest(collection: str) -> Optional[Dict[str, Any]]:
 
 
 def write_manifest(manifest: Dict[str, Any]) -> Path:
+    from rag_core.index_generation import atomic_write_text
+
     path = manifest_path(str(manifest["collection"]))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    # Unique temp name + fsync of the file and its directory (two writers no longer share a temp file).
+    atomic_write_text(path, json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     return path
 
 

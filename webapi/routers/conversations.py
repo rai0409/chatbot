@@ -1,10 +1,11 @@
 """Conversation history: /chat/threads (moved from main.py, S7)."""
 from __future__ import annotations
 
-from typing import Optional
+import re
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictStr
 
 from rag_core.audit_log import set_audit_actor
 from rag_core.retrieval import normalize_tenant_id
@@ -27,6 +28,7 @@ class ConversationTurnRequest(BaseModel):
     answer_mode: Optional[str] = None
     abstained: Optional[bool] = False
     citations_count: Optional[int] = 0
+    source_docs: Optional[List[StrictStr]] = None  # client-provided metadata, not authorization evidence
     tenant_id: Optional[str] = None
 
 
@@ -48,6 +50,12 @@ def _require_conversation_history() -> None:
         raise HTTPException(status_code=404, detail="not found")
 
 
+def validate_thread_id(thread_id: str) -> str:
+    if not isinstance(thread_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", thread_id):
+        raise HTTPException(status_code=400, detail="invalid thread_id")
+    return thread_id
+
+
 @router.get("/chat/threads")
 def list_chat_threads(api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited), tenant_id: Optional[str] = None):
     _require_conversation_history()
@@ -60,6 +68,7 @@ def list_chat_threads(api_auth: ApiAuthContext = Depends(require_api_auth_rate_l
 @router.get("/chat/threads/{thread_id}")
 def get_chat_thread(thread_id: str, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited), tenant_id: Optional[str] = None):
     _require_conversation_history()
+    validate_thread_id(thread_id)
     tenant = normalize_tenant_id(tenant_id)
     enforce_tenant_authorization(api_auth, tenant)
     set_audit_actor(api_auth)
@@ -73,8 +82,13 @@ def append_chat_thread(req: ConversationTurnRequest, api_auth: ApiAuthContext = 
     enforce_tenant_authorization(api_auth, tenant)
     set_audit_actor(api_auth)
     enforce_role(api_auth, ROLE_USER)
-    if not str(req.thread_id or "").strip():
-        raise HTTPException(status_code=400, detail="thread_id is required")
+    validate_thread_id(req.thread_id)
+    try:
+        source_docs = conversation_store._clean_source_docs(req.source_docs)
+        if int(req.citations_count or 0) > 0 and not source_docs:
+            raise ValueError("citations require source_docs")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid source_docs") from exc
     record = conversation_store.append_turn(
         tenant,
         _conversation_identity(api_auth),
@@ -84,6 +98,7 @@ def append_chat_thread(req: ConversationTurnRequest, api_auth: ApiAuthContext = 
         answer_mode=req.answer_mode,
         abstained=bool(req.abstained),
         citations_count=int(req.citations_count or 0),
+        source_docs=source_docs,
     )
     return {"ok": True, "thread_id": record["thread_id"]}
 
@@ -91,6 +106,7 @@ def append_chat_thread(req: ConversationTurnRequest, api_auth: ApiAuthContext = 
 @router.delete("/chat/threads/{thread_id}")
 def delete_chat_thread(thread_id: str, api_auth: ApiAuthContext = Depends(require_api_auth_rate_limited), tenant_id: Optional[str] = None):
     _require_conversation_history()
+    validate_thread_id(thread_id)
     tenant = normalize_tenant_id(tenant_id)
     enforce_tenant_authorization(api_auth, tenant)
     set_audit_actor(api_auth)

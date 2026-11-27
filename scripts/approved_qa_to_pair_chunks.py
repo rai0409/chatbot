@@ -10,8 +10,36 @@ if str(_ROOT) not in sys.path:
 # --- end bootstrap ---
 
 import argparse
+import json
+from pathlib import Path
 
 from scripts.approved_qa_to_canonical_jsonl import convert_approved_qa_to_canonical
+
+
+def _stamp_status(output_path) -> int:
+    """Write status="approved" into every row (the converter writes approved records only).
+
+    rag_core.approved_similar searches pair rows with a status=approved clause
+    (APPROVED_SIMILAR_REQUIRE_STATUS, default true): rows ingested before this
+    field existed are not found until re-converted and re-ingested."""
+    path = Path(output_path)
+    if not path.is_file():
+        return 0
+    rows = []
+    stamped = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if isinstance(row, dict) and row.get("status") != "approved":
+            row["status"] = "approved"
+            stamped += 1
+        rows.append(row)
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    return stamped
 
 
 def convert_approved_qa_to_pair_chunks(*, input_path, output_path) -> dict:
@@ -19,9 +47,13 @@ def convert_approved_qa_to_pair_chunks(*, input_path, output_path) -> dict:
     # chunk schema (Q+A in text/searchable_text, deterministic
     # approved_qa_pair:<qa_id> ids, tenant_id propagation, citation
     # source_doc/source_pages, doc_type="approved_qa_pair" /
-    # chunk_type="qa_pair"). This entry point exists under the
-    # roadmap-facing name and adds nothing schema-wise.
-    return convert_approved_qa_to_canonical(input_path=input_path, output_path=output_path)
+    # chunk_type="qa_pair"). This entry point adds the status field the
+    # similar-candidate search filters on.
+    summary = convert_approved_qa_to_canonical(input_path=input_path, output_path=output_path)
+    stamped = _stamp_status(output_path)
+    if isinstance(summary, dict):
+        summary["status_stamped_records"] = stamped
+    return summary
 
 
 def main() -> int:

@@ -21,6 +21,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -34,6 +35,8 @@ import config
 from rag_core import approvals, audit_log
 from rag_core.approved_qa import MAX_APPROVED_ALIASES, _normalize_citation, validate_approved_qa_records
 from rag_core.question_normalization import normalize_question_for_exact_match
+
+logger = logging.getLogger(__name__)
 
 STATUSES = ("draft", "approved", "rejected")
 MAX_QUESTION_CHARS = 500
@@ -398,6 +401,7 @@ def save(payload: Dict[str, Any], *, by: Any, reason: Any, expected_updated_at: 
         _write(after)
         _log([{"at": now, "qa_id": record["qa_id"], "tenant_id": tenant, "action": "create" if before is None else "edit", "by": who["name"],
                "reason": why, "before": before, "after": record}])
+    _invalidate_answers(tenant)
     _audit("approved_qa_saved", record, who, why)
     return {**record, "reverted_to_draft": True} if reverted else dict(record)
 
@@ -437,6 +441,7 @@ def set_status(tenant_id: str, qa_id: str, status: str, *, by: Any, reason: Any)
         _check_no_new_errors(records, after)
         _write(after)
         _log([{"at": now, "qa_id": qa_id, "tenant_id": tenant, "action": "status", "by": who["name"], "reason": why, "before": before, "after": record}])
+    _invalidate_answers(tenant)
     _audit("approved_qa_status", record, who, why)
     return dict(record)
 
@@ -455,7 +460,19 @@ def delete(tenant_id: str, qa_id: str, *, by: Any, reason: Any) -> None:
             raise StoreError("an approved record is served to users: take it back to draft or reject it first, then delete")
         _write(records[:index] + records[index + 1:])
         _log([{"at": now, "qa_id": qa_id, "tenant_id": tenant, "action": "delete", "by": who["name"], "reason": why, "before": before, "after": None}])
+    _invalidate_answers(tenant)
     _audit("approved_qa_deleted", before, who, why)
+
+
+def _invalidate_answers(tenant_id: Any) -> None:
+    """Push invalidation: a changed approved record may change answers the cache holds for its tenant
+    (the cache key also follows the file state; this frees the entries at once, on every node with Redis)."""
+    try:
+        from rag_core import answer_cache
+
+        answer_cache.clear_tenant(_tenant(tenant_id))
+    except Exception:  # noqa: BLE001 - the file is already written; a stale entry still expires with the key
+        logger.warning("answer cache could not be invalidated after an approved-QA change", exc_info=True)
 
 
 def _audit(action: str, record: dict, who: Dict[str, Any], reason: str) -> None:
@@ -600,5 +617,7 @@ def import_rows(content: Any, *, default_tenant: str, allowed_tenants: Optional[
             _write(records)
             _log(log)
     if apply and log:
+        for tenant_changed in sorted({str(entry.get("tenant_id") or default) for entry in log}):
+            _invalidate_answers(tenant_changed)
         _audit("approved_qa_imported", {"qa_id": None, "tenant_id": default, "status": "draft"}, who, f"{why} ({len(log)} rows)")
     return {"applied": bool(apply), "counts": counts, "rows": results}

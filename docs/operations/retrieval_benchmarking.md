@@ -80,3 +80,35 @@ python -m eval.bench run --config <config with "split": "test">.json --final-tes
 ```
 
 A configuration is promoted to a default only after it passes the comparison on `dev` and the single `test` run.
+
+## HYBRID_PARALLEL: measure before enabling
+
+`HYBRID_PARALLEL` runs the dense and keyword lanes together. On a CPU-bound host (embedding threads plus lane workers
+competing for the same cores) it can be slower. Do not enable it from reasoning; run the measurement on the production PC:
+
+```
+python scripts/measure_hybrid_parallel.py --queries <queries>.jsonl --n 100 \
+    --workers 4 --peak 8 --expected-concurrency 4 --output reports/bench/hybrid_parallel/<run>.json
+```
+
+It runs hybrid retrieval for N queries at concurrency 1, `workers` and `peak`, with HYBRID_PARALLEL off and on, and prints
+p50/p95 latency and throughput per level plus a recommendation. Rule: enable only if p95 improves by at least 15 percent
+at the expected concurrency AND throughput does not drop by more than 5 percent. Otherwise keep it `false`.
+Status until someone runs it: UNEXECUTED (the tests use stub lanes only).
+
+Startup guard: with HYBRID_PARALLEL on, the first hybrid call logs one warning when `EMBED_NUM_THREADS +
+HYBRID_PARALLEL_WORKERS` exceeds the physical cores (`os.cpu_count() // 2`).
+
+## Statistics guards (compare tooling)
+
+- `--resamples` must be 1000 or more in `eval.rerank_promotion_gate`, `eval.bench.compare_runs` and `eval.bench jqara-compare` (an error otherwise).
+- Several candidates against one baseline: `python -m eval.bench compare` applies Holm correction (column `Holm p`).
+  `eval.rerank_promotion_gate` takes repeated `--candidate-config` and requires `--primary`; the other candidates are
+  reported as `exploratory` and can never promote.
+
+## Broad-except lint guard
+
+`ruff.toml` plus the CI step `ruff_broad_except` run `ruff check --select BLE001,S110` on the Python files changed against
+`origin/main` (`scripts/lint_changed_broad_except.py`, findings on untouched legacy lines are ignored). A broad
+`except Exception` that stays on purpose (best effort, logged, fail closed) is written
+`except Exception:  # noqa: BLE001  <short reason>`; otherwise narrow it.

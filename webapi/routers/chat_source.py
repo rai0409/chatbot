@@ -75,7 +75,7 @@ def chat_source(
     row = retrieval.chunk_row(chunk_id, staging) if staging else retrieval.chunk_row(chunk_id)
     if not row and not staging:
         row = _approved_source_row(chunk_id, tenant)
-    if not row or normalize_tenant_id(row.get("tenant_id")) != tenant or is_private_mail_record(row):
+    if not row or normalize_tenant_id(row.get("tenant_id")) != tenant or is_private_mail_record(row, chunk_id):
         raise HTTPException(status_code=404, detail="source not found")
     text = str(row.get("display_text") or row.get("text") or "")
     limit = 1500
