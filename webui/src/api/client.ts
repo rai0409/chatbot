@@ -1,10 +1,37 @@
 // Calls to the web API. The browser carries the administrator's session cookie; a request that changes something also
 // carries the CSRF token that the server put in the `admin_csrf` cookie (the same rule as the older admin pages).
+import { formatDetail } from "../lib/errors";
 import type { ApprovalDecision, ApprovalItem, SwitchRequest, SwitchResponse, SystemStatus } from "./types";
 
+/** A failed request. `detail` is readable text (a validation list is already in words); `body` is the server's own
+ *  `detail` value. Status 0 means the server was not reached. */
 export class ApiError extends Error {
-  constructor(public status: number, public detail: string) {
+  constructor(public status: number, public detail: string, public body?: unknown) {
     super(`${status}: ${detail}`);
+  }
+}
+
+/** The ApiError for an answer that is not ok (the body is read once). */
+export async function errorFrom(response: Response): Promise<ApiError> {
+  let detail = response.statusText;
+  let raw: unknown;
+  try {
+    const body = await response.json();
+    raw = body?.detail;
+    detail = formatDetail(raw) || detail;
+  } catch {
+    /* the body is not JSON: keep the status text */
+  }
+  return new ApiError(response.status, detail, raw);
+}
+
+/** fetch, with a failure to reach the server turned into ApiError(0) so that every screen says the same thing. */
+export async function send(path: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(path, init);
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    throw new ApiError(0, "network");
   }
 }
 
@@ -24,21 +51,12 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (method !== "GET" && method !== "HEAD") headers.set("X-CSRF-Token", csrfToken());
-  const response = await fetch(path, { ...init, headers, credentials: "same-origin" });
+  const response = await send(path, { ...init, headers, credentials: "same-origin" });
   if (response.status === 401) {
     goToLogin();
     throw new ApiError(401, "unauthorized");
   }
-  if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = await response.json();
-      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-    } catch {
-      /* the body is not JSON: keep the status text */
-    }
-    throw new ApiError(response.status, detail);
-  }
+  if (!response.ok) throw await errorFrom(response);
   return (await response.json()) as T;
 }
 

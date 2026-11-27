@@ -6,6 +6,7 @@ import { useLoad } from "../lib/useLoad";
 import { number } from "../lib/format";
 import { ReviewCard } from "./reviewQueue/ReviewCard";
 import "./reviewQueue/reviewQueue.css";
+import { TenantInput } from "../components/TenantInput";
 
 const DEFAULTS: ReviewFilters = { priority: "", status: "", tenant: "", limit: "100" };
 
@@ -47,7 +48,7 @@ export function ReviewQueuePage() {
         </label>
         <label>
           {j.tenant}
-          <input value={form.tenant} placeholder={j.tenantPlaceholder} onChange={set("tenant")} />
+          <TenantInput value={form.tenant} placeholder={j.tenantPlaceholder} onChange={set("tenant")} />
         </label>
         <label>
           {j.limit}

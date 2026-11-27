@@ -200,7 +200,8 @@ def test_chat_threads_tenant_to_pipeline_and_cache(monkeypatch, tmp_path):
     assert seen_tenants == ["tenant_a", "tenant_b"]  # third call was a cache hit
     assert first_a["answer_text"] == "tenant_a の回答"
     assert first_b["answer_text"] == "tenant_b の回答"
-    assert second_a == first_a
+    # 2026-11-27: a cache hit carries its own server request id.
+    assert {k: v for k, v in second_a.items() if k != "request_id"} == {k: v for k, v in first_a.items() if k != "request_id"}
     assert answer_cache.size() == 2  # one entry per tenant, never shared
 
 

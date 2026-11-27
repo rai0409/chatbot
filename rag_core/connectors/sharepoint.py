@@ -68,11 +68,20 @@ class ResyncRequired(GraphError):
     """HTTP 410: the delta link is no longer valid; start again from a full listing."""
 
 
-def _send(method: str, url: str, headers: Dict[str, str], body: Optional[bytes] = None) -> Tuple[int, bytes, Dict[str, str]]:
+def _read_bounded(response: Any, max_bytes: Optional[int]) -> bytes:
+    """The body; with max_bytes at most max_bytes + 1 bytes are read (one more than allowed tells "too large")
+    so an oversized download is never held in memory whole."""
+    if max_bytes is None:
+        return response.read()
+    return response.read(max(0, int(max_bytes)) + 1)
+
+
+def _send(method: str, url: str, headers: Dict[str, str], body: Optional[bytes] = None, *,
+          max_bytes: Optional[int] = None) -> Tuple[int, bytes, Dict[str, str]]:
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=_http_timeout()) as response:  # noqa: S310  # nosec B310 - https URLs of the Graph API / its download links
-            return response.status, response.read(), {k.lower(): v for k, v in response.headers.items()}
+            return response.status, _read_bounded(response, max_bytes), {k.lower(): v for k, v in response.headers.items()}
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read() or b"", {k.lower(): v for k, v in (exc.headers or {}).items()}
     except urllib.error.URLError as exc:
@@ -83,10 +92,12 @@ def transport_for(integration: str) -> Transport:
     """The transport of one integration. It is the only place where a request to Graph leaves, so the environment layer and
     the console switch of that integration (rag_core/integrations.py) are checked here, before anything is sent."""
 
-    def transport(method: str, url: str, headers: Dict[str, str], body: Optional[bytes] = None) -> Tuple[int, bytes, Dict[str, str]]:
+    def transport(method: str, url: str, headers: Dict[str, str], body: Optional[bytes] = None, *,
+                  max_bytes: Optional[int] = None) -> Tuple[int, bytes, Dict[str, str]]:
         integrations.require_egress(integration)
-        return _send(method, url, headers, body)
+        return _send(method, url, headers, body, max_bytes=max_bytes)
 
+    transport.bounded = True  # type: ignore[attr-defined]  # accepts max_bytes (GraphClient.download)
     return transport
 
 
@@ -132,12 +143,17 @@ class GraphClient:
         self._token, self._transport, self._sleep = token, transport, sleep
         self.max_retries, self.max_pages = max_retries, max_pages
 
-    def _request(self, url: str, *, authorized: bool = True) -> bytes:
+    def _request(self, url: str, *, authorized: bool = True, max_bytes: Optional[int] = None) -> bytes:
         headers = {"Accept": "application/json"}
         if authorized:
             headers["Authorization"] = f"Bearer {self._token()}"
+        # A transport marked "bounded" stops reading after max_bytes + 1 bytes; others return the whole body.
+        bounded = max_bytes is not None and getattr(self._transport, "bounded", False)
         for attempt in range(self.max_retries + 1):
-            status, body, response_headers = self._transport("GET", url, headers, None)
+            if bounded:
+                status, body, response_headers = self._transport("GET", url, headers, None, max_bytes=max_bytes)
+            else:
+                status, body, response_headers = self._transport("GET", url, headers, None)
             if status == 200:
                 return body
             if status == 410:
@@ -182,7 +198,8 @@ class GraphClient:
         raise GraphError("the delta feed has too many pages")
 
     def download(self, url: str, *, max_bytes: int) -> bytes:
-        data = self._request(url, authorized=False)  # the download URL carries its own short-lived authorization
+        # The download URL carries its own short-lived authorization. At most max_bytes + 1 bytes are read.
+        data = self._request(url, authorized=False, max_bytes=max_bytes)
         if len(data) > max_bytes:
             raise GraphError("a downloaded file is larger than the limit")
         return data

@@ -88,7 +88,9 @@ def set_limit(req: LimitRequest, request: Request, _admin_auth: None = Depends(r
     else:
         require_global(scope)
     try:
-        change = llm_quota.set_limit(req.name, req.value, by=admin_common.admin_label(scope), reason=req.reason, tenant_id=req.tenant_id)
+        # A tenant administrator may only tighten the installation's limit, never lift it (0) or raise it.
+        change = llm_quota.set_limit(req.name, req.value, by=admin_common.admin_label(scope), reason=req.reason,
+                                     tenant_id=req.tenant_id, within_global=scope is not None)
     except runtime_settings.SettingsError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     admin_common.audit_admin(scope, "llm_limit_set", limit=req.name, value=req.value, tenant_id=req.tenant_id, rev=change["rev"])
@@ -98,9 +100,17 @@ def set_limit(req: LimitRequest, request: Request, _admin_auth: None = Depends(r
 
 
 @router.get("/admin/llm-assignments")
-def assignments(_admin_auth: None = Depends(require_admin_auth)):
-    """The tiers of the model profiles file and who has which."""
-    return llm_assignments.list_assignments()
+def assignments(request: Request, _admin_auth: None = Depends(require_admin_auth)):
+    """The tiers of the model profiles file and who has which.
+
+    A tenant administrator sees the installation-wide rows (global, role) and the rows of their own tenants: not other
+    tenants' assignments, nor per-caller rows (caller fingerprints are not bound to a tenant here)."""
+    listed = llm_assignments.list_assignments()
+    scope = admin_common.request_scope(request)
+    if scope is not None:
+        listed["assignments"] = [row for row in listed["assignments"]
+                                 if row["kind"] in ("global", "role") or (row["kind"] == "tenant" and row["id"] in scope)]
+    return listed
 
 
 @router.post("/admin/llm-assignments")

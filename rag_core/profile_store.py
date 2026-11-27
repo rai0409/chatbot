@@ -268,11 +268,31 @@ def _read_pointer(profile_id: str) -> Dict[str, Any]:
 
 
 def _write_pointer(profile_id: str, data: Dict[str, Any]) -> None:
+    # A unique temporary name (threads of one process must not share one), fsynced, then renamed into place.
+    from rag_core.index_generation import atomic_write_text
+
+    atomic_write_text(pointer_path(profile_id), json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
+@contextlib.contextmanager
+def _pointer_lock(profile_id: str) -> Iterator[None]:
+    """Read-modify-write of the pointer by one writer at a time (activate / rollback / clear), across threads and
+    processes (the same pattern as index_generation._pointer_lock)."""
+    import fcntl
+
+    from rag_core.index_generation import LockTimeout, flock_exclusive
+
     path = pointer_path(profile_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    with open(path.with_name(f".{path.name}.lock"), "a+") as handle:
+        try:
+            flock_exclusive(handle, what="the active profile pointer")
+        except LockTimeout as exc:
+            raise ProfileStoreError(str(exc)) from None
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 @contextlib.contextmanager
@@ -319,6 +339,11 @@ def _state(active: Optional[Dict[str, Any]], history: List[Dict[str, Any]]) -> D
 
 def activate(profile_id: str, version: str, *, activated_by: str = "") -> Dict[str, Any]:
     verify_version(profile_id, version)
+    with _pointer_lock(profile_id):
+        return _activate_locked(profile_id, version, activated_by)
+
+
+def _activate_locked(profile_id: str, version: str, activated_by: str) -> Dict[str, Any]:
     state = _read_pointer(profile_id)
     current = state.get("active")
     if current and current["version"] == version:
@@ -332,6 +357,12 @@ def activate(profile_id: str, version: str, *, activated_by: str = "") -> Dict[s
 
 
 def rollback(profile_id: str, *, activated_by: str = "") -> Dict[str, Any]:
+    _check_profile_id(profile_id)
+    with _pointer_lock(profile_id):
+        return _rollback_locked(profile_id, activated_by)
+
+
+def _rollback_locked(profile_id: str, activated_by: str) -> Dict[str, Any]:
     state = _read_pointer(profile_id)
     history = list(state.get("history") or [])
     if not history:
@@ -352,6 +383,12 @@ def rollback(profile_id: str, *, activated_by: str = "") -> Dict[str, Any]:
 
 def clear(profile_id: str) -> Dict[str, Any]:
     """Read the profile from config/ again. The cleared version goes to the history, so rollback restores it."""
+    _check_profile_id(profile_id)
+    with _pointer_lock(profile_id):
+        return _clear_locked(profile_id)
+
+
+def _clear_locked(profile_id: str) -> Dict[str, Any]:
     state = _read_pointer(profile_id)
     current = state.get("active")
     history = list(state.get("history") or [])

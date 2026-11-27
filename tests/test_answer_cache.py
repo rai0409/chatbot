@@ -75,7 +75,9 @@ def test_enabled_second_call_hits_cache(monkeypatch, tmp_path):
     second = main.chat(main.ChatRequest(question="質問です"))
 
     assert len(calls) == 1
-    assert second == first
+    # 2026-11-27: a cache hit is a new answer event with its own server request id.
+    assert {k: v for k, v in second.items() if k != "request_id"} == {k: v for k, v in first.items() if k != "request_id"}
+    assert second["request_id"] != first["request_id"]
     assert answer_cache.size() == 1
 
 
@@ -208,7 +210,8 @@ def test_unverified_legacy_cache_is_not_republished(monkeypatch, tmp_path):
     answer_cache.put(key, {"answer_text": "古い未検証本文", "profile_validation": {"passed": True, "skipped": True}})
     first = main.chat(main.ChatRequest(question="質問です"))
     second = main.chat(main.ChatRequest(question="質問です"))
-    assert len(calls) == 1 and first == second
+    assert len(calls) == 1
+    assert {k: v for k, v in first.items() if k != "request_id"} == {k: v for k, v in second.items() if k != "request_id"}
     assert "古い未検証本文" not in first["answer_text"]
 
 

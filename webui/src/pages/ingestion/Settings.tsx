@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { ApiError } from "../../api/client";
 import { type IngestSetting, ingestionApi } from "../../api/ingestion";
 import { ErrorState, Loading } from "../../components/Feedback";
@@ -6,6 +6,7 @@ import { ji } from "../../i18n/ingestion";
 import { rememberActor, storedActor } from "../../lib/actor";
 import { dateTime, number } from "../../lib/format";
 import { useLoad } from "../../lib/useLoad";
+import { Dialog } from "../../components/Dialog";
 
 const s = ji.settings;
 
@@ -34,6 +35,7 @@ function failureText(e: unknown): string {
 function ChangeDialog({ dialog, busy, onSubmit, onCancel }: { dialog: Dialog; busy: boolean; onSubmit: (value: number | boolean | string | undefined, reason: string, actor: string) => void; onCancel: () => void }) {
   const { setting } = dialog;
   const [label] = labelOf(setting);
+  const reasonId = useId();
   const [raw, setRaw] = useState(String(setting.value));
   const [reason, setReason] = useState("");
   const [actor, setActor] = useState(storedActor);
@@ -58,8 +60,7 @@ function ChangeDialog({ dialog, busy, onSubmit, onCancel }: { dialog: Dialog; bu
   }
 
   return (
-    <div role="dialog" aria-modal="true" aria-labelledby="ing-set-title" className="dialog">
-      <h2 id="ing-set-title">{dialog.kind === "edit" ? s.dialogTitle(label) : s.resetTitle(label)}</h2>
+    <Dialog title={dialog.kind === "edit" ? s.dialogTitle(label) : s.resetTitle(label)} onCancel={onCancel} busy={busy}>
       {dialog.kind === "reset" && <p>{s.resetBody}</p>}
       {dialog.kind === "edit" && (
         <label>
@@ -85,8 +86,8 @@ function ChangeDialog({ dialog, busy, onSubmit, onCancel }: { dialog: Dialog; bu
       {dialog.kind === "edit" && setting.kind !== "bool" && setting.kind !== "choice" && <p className="muted">{s.range(setting.minimum, setting.maximum, setting.unit)}</p>}
       {setting.restart === "workers" && <p className="muted">{s.restartNote}</p>}
       <div>
-        <label htmlFor="ing-set-reason">{s.reasonLabel}</label>
-        <textarea id="ing-set-reason" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} rows={2} />
+        <label htmlFor={reasonId}>{s.reasonLabel}</label>
+        <textarea id={reasonId} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} rows={2} />
       </div>
       <label>
         {s.actorLabel}
@@ -103,7 +104,7 @@ function ChangeDialog({ dialog, busy, onSubmit, onCancel }: { dialog: Dialog; bu
       <button type="button" disabled={busy} onClick={onCancel}>
         {s.cancel}
       </button>
-    </div>
+    </Dialog>
   );
 }
 

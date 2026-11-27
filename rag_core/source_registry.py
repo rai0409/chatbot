@@ -4,9 +4,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, Iterator, List, Mapping, Optional
 
 import config
 
@@ -70,9 +73,47 @@ def _registry_file() -> Path:
 
 def _write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    # A unique temporary name: threads of one process must not write into each other's file.
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+_THREAD_LOCK = threading.RLock()
+_LOCK_STATE = threading.local()
+
+
+@contextmanager
+def _registry_lock() -> Iterator[None]:
+    """Exclusive access to the registry from its read to its write (threads and processes).
+
+    Re-entrant within a thread: only the outermost holder takes the file lock (a second flock on another
+    descriptor of the same file would block on itself)."""
+    import fcntl
+
+    with _THREAD_LOCK:
+        depth = getattr(_LOCK_STATE, "depth", 0)
+        if depth:
+            _LOCK_STATE.depth = depth + 1
+            try:
+                yield
+            finally:
+                _LOCK_STATE.depth = depth
+            return
+        lock_dir = sources_dir() / "locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        with open(lock_dir / "registry.lock", "a+") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            _LOCK_STATE.depth = 1
+            try:
+                yield
+            finally:
+                _LOCK_STATE.depth = 0
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def _load() -> Dict[str, Any]:
@@ -88,11 +129,13 @@ def _load() -> Dict[str, Any]:
 
 
 def _save(data: Dict[str, Any]) -> None:
-    current = _load()
-    if current["rev"] != data["rev"]:
-        raise SourceError("the source registry was changed by someone else; try again")
-    data["rev"] += 1
-    _write_json(_registry_file(), data)
+    # The callers hold _registry_lock from their _load(); the revision check stays for a writer that does not.
+    with _registry_lock():
+        current = _load()
+        if current["rev"] != data["rev"]:
+            raise SourceError("the source registry was changed by someone else; try again")
+        data["rev"] += 1
+        _write_json(_registry_file(), data)
 
 
 def get(source_id: str) -> Dict[str, Any]:
@@ -171,27 +214,29 @@ def create(
         if not _inside_allowed_roots(mirror_dir(source_id)):
             raise SourceError("the mirror folder of a remote source must be inside the allowed ingest roots "
                               "(put SOURCES_DIR under INGEST_ALLOWED_ROOTS)")
-    data = _load()
-    if source_id in data["sources"]:
-        raise SourceError(f"source '{source_id}' already exists")
     record = {
         "source_id": source_id, "tenant_id": tenant_id, "kind": kind, "path": stored_path,
         "options": dict(options or {}), "schedule_minutes": schedule_minutes, "collection": name, "enabled": True,
         "created_at": _now(now), "created_by": str(created_by or ""),
         "state": {"last_scan_at": None, "last_scan_run": None, "last_apply_at": None, "last_error": None},
     }
-    data["sources"][source_id] = record
-    _save(data)
+    with _registry_lock():
+        data = _load()
+        if source_id in data["sources"]:
+            raise SourceError(f"source '{source_id}' already exists")
+        data["sources"][source_id] = record
+        _save(data)
     return record
 
 
 def _update(source_id: str, change) -> Dict[str, Any]:
-    data = _load()
-    record = data["sources"].get(_check_id(source_id))
-    if record is None:
-        raise SourceError(f"source '{source_id}' not found")
-    change(record)
-    _save(data)
+    with _registry_lock():
+        data = _load()
+        record = data["sources"].get(_check_id(source_id))
+        if record is None:
+            raise SourceError(f"source '{source_id}' not found")
+        change(record)
+        _save(data)
     return record
 
 
@@ -208,10 +253,11 @@ def update_state(source_id: str, **fields: Any) -> Dict[str, Any]:
 
 def remove(source_id: str) -> None:
     """Unregister a source. Its collection, manifests and ledger entries are left as they are."""
-    data = _load()
-    if data["sources"].pop(_check_id(source_id), None) is None:
-        raise SourceError(f"source '{source_id}' not found")
-    _save(data)
+    with _registry_lock():
+        data = _load()
+        if data["sources"].pop(_check_id(source_id), None) is None:
+            raise SourceError(f"source '{source_id}' not found")
+        _save(data)
 
 
 def root_of(record: Mapping[str, Any]) -> Path:

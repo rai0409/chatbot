@@ -1,7 +1,47 @@
 // Every text of the console lives here, by key, so that a wording changes in one place (and a second language is a
 // second file). Reason codes come from the server (rag_core/integrations.py) and are shown through this catalog.
 export const ja = {
-  app: { title: "管理コンソール", loading: "読み込み中…", retry: "再読み込み", logout: "ログアウト" },
+  app: {
+    title: "管理コンソール",
+    loading: "読み込み中…",
+    retry: "再読み込み",
+    logout: "ログアウト",
+    newVersion: "新しい版が公開されました。再読み込みしてください",
+    reload: "再読み込みする",
+    screenFailed: "画面を表示できませんでした。再読み込みしてください。問題が続くときは管理者に連絡してください。",
+    tenant: "テナント",
+    tenantHelp: "操作の対象にするテナント。各画面のテナント欄の初期値になります。",
+    tenantNone: "（未選択）",
+    tenantHint: "例: default",
+  },
+  // The words for a failed request (lib/errors.ts): the HTTP status decides, a 400/422 also lists what was wrong.
+  errors: {
+    network: "サーバーに接続できませんでした。ネットワークを確認して、もう一度お試しください。",
+    unauthorized: "ログインが必要です。ログインし直してください。",
+    forbidden: "権限がありません。",
+    notFound: "対象が見つかりませんでした。",
+    conflict: "競合: 他の操作で更新されました。画面を更新してやり直してください。",
+    tooLarge: "サイズ超過: 送信するデータが大きすぎます。",
+    tooMany: "要求が多すぎます。しばらく待ってから、もう一度お試しください。",
+    server: "サーバーでエラーが発生しました。しばらく待ってから、もう一度お試しください。",
+    invalid: "入力内容に問題があります",
+    field: {
+      missing: "必須です",
+      tooLong: (max?: number) => (max ? `長すぎます（最大 ${max}）` : "長すぎます"),
+      tooShort: (min?: number) => (min ? `短すぎます（最小 ${min}）` : "短すぎます"),
+      number: "数値で入力してください",
+      integer: "整数で入力してください",
+      boolean: "はい・いいえで指定してください",
+      pattern: "形式が正しくありません",
+      choice: "選択肢から選んでください",
+      min: (limit?: unknown) => (limit !== undefined ? `${String(limit)} 以上にしてください` : "小さすぎます"),
+      max: (limit?: unknown) => (limit !== undefined ? `${String(limit)} 以下にしてください` : "大きすぎます"),
+      json: "JSON として読めません",
+      string: "文字列で入力してください",
+      list: "一覧で指定してください",
+      invalid: "値が正しくありません",
+    },
+  },
   menu: { overview: "概況", documents: "文書", quality: "回答の品質", contracts: "契約", operations: "運用" },
   nav: {
     dashboard: "ダッシュボード",

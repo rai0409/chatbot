@@ -599,7 +599,9 @@ def import_rows(content: Any, *, default_tenant: str, allowed_tenants: Optional[
                 if clean["doc_version"]:
                     record["doc_version"] = clean["doc_version"]
                 _move_aliases(record)
-                record["updated_at"], record["updated_by"] = now, who["name"] if who else "import"
+                # The importer is the editor: the previous editor's id and verified flag must not stay on a record
+                # whose answer this import rewrote (an approver could otherwise approve their own CSV edit).
+                _stamp(record, who or {"name": "import", "id": None, "verified": False}, now)
                 if existing is not None:
                     records[existing] = record
                 else:

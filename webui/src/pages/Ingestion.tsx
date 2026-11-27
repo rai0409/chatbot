@@ -8,6 +8,8 @@ import { useLoad } from "../lib/useLoad";
 import { JobView } from "./ingestion/JobView";
 import { SettingsSection } from "./ingestion/Settings";
 import { ConfirmDialog, type Outcome, ResultView, StatusBadge, failureMessage, lines } from "./ingestion/parts";
+import { TenantInput } from "../components/TenantInput";
+import { useTenant } from "../lib/tenant";
 
 const ALLOWED = /\.(pdf|docx|xlsx|csv|pptx)$/i;
 
@@ -23,7 +25,8 @@ interface Uploaded {
 function RawSection({ onChanged }: { onChanged: () => void }) {
   const [files, setFiles] = useState<Uploaded[]>([]);
   const [paths, setPaths] = useState("");
-  const [tenant, setTenant] = useState("");
+  const chosenTenant = useTenant().tenant;
+  const [tenant, setTenant] = useState(chosenTenant);
   const [collection, setCollection] = useState("");
   const [execute, setExecute] = useState(false);
   const [asyncJob, setAsyncJob] = useState(false);
@@ -154,7 +157,7 @@ function RawSection({ onChanged }: { onChanged: () => void }) {
         )}
         <label style={{ display: "block", marginTop: 12 }}>
           {ji.files.paths}
-          <textarea value={paths} onChange={(e) => setPaths(e.target.value)} placeholder="eval/cases/sample_docs/sample_manual.docx" rows={3} style={{ width: "100%" }} />
+          <textarea value={paths} onChange={(e) => setPaths(e.target.value)} placeholder={ji.hints.paths} rows={3} style={{ width: "100%" }} />
         </label>
       </section>
 
@@ -163,11 +166,11 @@ function RawSection({ onChanged }: { onChanged: () => void }) {
         <div className="toolbar">
           <label>
             {ji.raw.tenant}
-            <input type="text" value={tenant} onChange={(e) => setTenant(e.target.value)} placeholder="pilot_tenant_a" />
+            <TenantInput value={tenant} onChange={(e) => setTenant(e.target.value)} placeholder={ji.hints.tenant} />
           </label>
           <label>
             {ji.raw.collection}
-            <input type="text" value={collection} onChange={(e) => setCollection(e.target.value)} placeholder="pilot_staging_v1" />
+            <input type="text" value={collection} onChange={(e) => setCollection(e.target.value)} placeholder={ji.hints.collection} />
           </label>
         </div>
         <div className="toolbar">
@@ -218,10 +221,11 @@ type Pending = { kind: "promote" | "delete"; title: string };
 
 /** Section 3: promote a staging collection to the served one, and delete documents. Every action has a check (no change) and a run. */
 function PromoteDeleteSection({ onChanged }: { onChanged: () => void }) {
-  const [pTenant, setPTenant] = useState("");
+  const chosenTenant = useTenant().tenant;
+  const [pTenant, setPTenant] = useState(chosenTenant);
   const [pCollection, setPCollection] = useState("");
   const [pOutcome, setPOutcome] = useState<Outcome | null>(null);
-  const [dTenant, setDTenant] = useState("");
+  const [dTenant, setDTenant] = useState(chosenTenant);
   const [dCollection, setDCollection] = useState("");
   const [dDocs, setDDocs] = useState("");
   const [dOutcome, setDOutcome] = useState<Outcome | null>(null);
@@ -275,11 +279,11 @@ function PromoteDeleteSection({ onChanged }: { onChanged: () => void }) {
       <div className="toolbar">
         <label>
           {ji.promote.tenant}
-          <input type="text" value={pTenant} onChange={(e) => setPTenant(e.target.value)} placeholder="pilot_tenant_a" />
+          <TenantInput value={pTenant} onChange={(e) => setPTenant(e.target.value)} placeholder={ji.hints.tenant} />
         </label>
         <label>
           {ji.promote.collection}
-          <input type="text" value={pCollection} onChange={(e) => setPCollection(e.target.value)} placeholder="pilot_staging_v1" />
+          <input type="text" value={pCollection} onChange={(e) => setPCollection(e.target.value)} placeholder={ji.hints.collection} />
         </label>
       </div>
       <div className="toolbar">
@@ -298,7 +302,7 @@ function PromoteDeleteSection({ onChanged }: { onChanged: () => void }) {
       <div className="toolbar">
         <label>
           {ji.remove.tenant}
-          <input type="text" value={dTenant} onChange={(e) => setDTenant(e.target.value)} placeholder="pilot_tenant_a" />
+          <TenantInput value={dTenant} onChange={(e) => setDTenant(e.target.value)} placeholder={ji.hints.tenant} />
         </label>
         <label>
           {ji.remove.collection}
@@ -336,7 +340,8 @@ function PromoteDeleteSection({ onChanged }: { onChanged: () => void }) {
 /** The dry-run check of normalized chunk JSONL files (changes nothing). */
 function DryRunSection({ onChanged }: { onChanged: () => void }) {
   const [inputs, setInputs] = useState("");
-  const [tenant, setTenant] = useState("");
+  const chosenTenant = useTenant().tenant;
+  const [tenant, setTenant] = useState(chosenTenant);
   const [collection, setCollection] = useState("");
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [busy, setBusy] = useState(false);
@@ -365,16 +370,16 @@ function DryRunSection({ onChanged }: { onChanged: () => void }) {
       </p>
       <label style={{ display: "block" }}>
         {ji.dry.inputs}
-        <textarea value={inputs} onChange={(e) => setInputs(e.target.value)} placeholder="eval/cases/manufacturing_pilot/manufacturing_chunks.jsonl" rows={3} style={{ width: "100%" }} />
+        <textarea value={inputs} onChange={(e) => setInputs(e.target.value)} placeholder={ji.hints.chunks} rows={3} style={{ width: "100%" }} />
       </label>
       <div className="toolbar">
         <label>
           {ji.dry.tenant}
-          <input type="text" value={tenant} onChange={(e) => setTenant(e.target.value)} placeholder="pilot_tenant_a" />
+          <TenantInput value={tenant} onChange={(e) => setTenant(e.target.value)} placeholder={ji.hints.tenant} />
         </label>
         <label>
           {ji.dry.collection}
-          <input type="text" value={collection} onChange={(e) => setCollection(e.target.value)} placeholder="pilot_collection_v1" />
+          <input type="text" value={collection} onChange={(e) => setCollection(e.target.value)} placeholder={ji.hints.collection} />
         </label>
       </div>
       <button type="button" disabled={busy} onClick={() => void run()}>

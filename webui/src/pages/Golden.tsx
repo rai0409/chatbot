@@ -1,12 +1,15 @@
 import { useState } from "react";
-import { ApiError } from "../api/client";
 import { goldenApi, type GoldenCase } from "../api/golden";
 import { ErrorState, Loading } from "../components/Feedback";
 import { jaGolden } from "../i18n/golden";
+import { describeError } from "../lib/errors";
 import { dateTime } from "../lib/format";
 import { useLoad } from "../lib/useLoad";
 import { CaseForm } from "./golden/CaseForm";
 import "./golden/golden.css";
+import { Dialog } from "../components/Dialog";
+import { TenantInput } from "../components/TenantInput";
+import { useTenant } from "../lib/tenant";
 
 const g = jaGolden;
 const TENANT_KEY = "console.goldenTenant";
@@ -37,8 +40,9 @@ type Filter = "all" | "enabled" | "disabled";
 type Form = { editing: GoldenCase | null } | null;
 
 export function GoldenPage() {
-  const [draft, setDraft] = useState(savedTenant);
-  const [tenant, setTenant] = useState(savedTenant);
+  const chosen = useTenant().tenant;
+  const [draft, setDraft] = useState(() => chosen || savedTenant());
+  const [tenant, setTenant] = useState(() => chosen || savedTenant());
   const [filter, setFilter] = useState<Filter>("all");
   const [form, setForm] = useState<Form>(null);
   const [removing, setRemoving] = useState<GoldenCase | null>(null);
@@ -59,13 +63,7 @@ export function GoldenPage() {
   }
 
   function describe(e: unknown, fallback: string): string {
-    if (e instanceof ApiError) {
-      if (e.status === 403) return g.notAllowed;
-      if (e.status === 409) return g.conflict;
-      if (e.status === 404) return g.notFound;
-      if (e.status === 400 && e.detail) return `${fallback}: ${e.detail}`;
-    }
-    return fallback;
+    return describeError(e, fallback, { 403: g.notAllowed, 409: g.conflict, 404: g.notFound });
   }
 
   async function toggle(item: GoldenCase) {
@@ -131,7 +129,7 @@ export function GoldenPage() {
       <form className="toolbar" onSubmit={commitTenant}>
         <label>
           {g.tenant}
-          <input value={draft} maxLength={64} onChange={(e) => setDraft(e.target.value)} aria-describedby="golden-tenant-help" />
+          <TenantInput value={draft} onChange={(e) => setDraft(e.target.value)} aria-describedby="golden-tenant-help" />
         </label>
         <button type="submit">{g.load}</button>
       </form>
@@ -250,17 +248,16 @@ export function GoldenPage() {
       )}
 
       {removing && (
-        <div role="dialog" aria-modal="true" aria-labelledby="golden-delete-title" className="dialog">
-          <h2 id="golden-delete-title">{g.deleteTitle(removing.case_id)}</h2>
+        <Dialog title={g.deleteTitle(removing.case_id)} onCancel={() => setRemoving(null)} busy={busy}>
           <p>{removing.question}</p>
           <p className="muted">{g.deleteBody}</p>
-          <button type="button" disabled={busy} onClick={() => void remove()}>
+          <button type="button" className="danger" disabled={busy} onClick={() => void remove()}>
             {g.deleteConfirm}
           </button>{" "}
-          <button type="button" onClick={() => setRemoving(null)}>
+          <button type="button" data-autofocus onClick={() => setRemoving(null)}>
             {g.cancel}
           </button>
-        </div>
+        </Dialog>
       )}
     </section>
   );

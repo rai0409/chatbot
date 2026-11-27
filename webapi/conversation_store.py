@@ -129,17 +129,23 @@ def append_turn(
     abstained: bool = False,
     citations_count: int = 0,
     source_docs: Optional[List[str]] = None,
+    provenance: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     # Persist one Q/A turn scoped to (tenant, identity). Only the caller's own
     # text is stored; no keys/secrets. Returns the stored record.
+    # provenance: "server" when answer_mode / citations / source_docs come from the server evidence record of
+    # request_id, "client" when the caller supplied them (legacy); None keeps the legacy record shape.
     source_docs = _clean_source_docs(source_docs)
     if int(citations_count or 0) > 0 and not source_docs:
         raise ValueError("citations require source_docs")
+    if provenance not in (None, "client", "server"):
+        raise ValueError("invalid provenance")
     if _pg():
         return _pg_append_turn(
             tenant_id, identity, thread_id, question=question, answer_text=answer_text,
             answer_mode=answer_mode, abstained=abstained, citations_count=citations_count,
-            source_docs=source_docs,
+            source_docs=source_docs, provenance=provenance, request_id=request_id,
         )
     path = _thread_path(tenant_id, identity, thread_id)
     record = {
@@ -152,6 +158,7 @@ def append_turn(
         "citations_count": int(citations_count or 0),
         "source_docs": _clean_source_docs(source_docs),
     }
+    _stamp_provenance(record, provenance, request_id)
     with _tenant_lock(path.parent.parent):
         _apply_markers(record, _read_markers(path.parent.parent))
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -159,6 +166,45 @@ def append_turn(
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         _purge_locked(path.parent, None, None)
     return record
+
+
+def _stamp_provenance(record: Dict[str, Any], provenance: Optional[str], request_id: Optional[str]) -> None:
+    if provenance:
+        record["provenance"] = provenance
+        if request_id:
+            record["request_id"] = str(request_id)[:128]
+
+
+def _turn_expired(record: Dict[str, Any], now: float) -> bool:
+    # CONVERSATION_RETENTION_DAYS applied on read: a turn past the limit is never returned, even before a purge
+    # (purge_all or the owner's next append) removes it.
+    days = _retention_days()
+    if days <= 0:
+        return False
+    try:
+        ts = float(record.get("ts") or 0)
+    except (TypeError, ValueError):
+        return False
+    return bool(ts) and ts < now - days * 86400
+
+
+def _thread_expired(turns: List[Dict[str, Any]], now: float) -> bool:
+    # CONVERSATION_HISTORY_MAX_AGE_DAYS applied on read: a thread whose last turn is older is not returned.
+    stamps = []
+    for rec in turns:
+        try:
+            stamps.append(float(rec.get("ts") or 0))
+        except (TypeError, ValueError):
+            continue
+    newest = max(stamps, default=0.0)
+    return bool(newest) and newest < now - _max_age_days() * 86400
+
+
+def _visible(turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    now = _clock()
+    if _thread_expired(turns, now):
+        return []
+    return [rec for rec in turns if not _turn_expired(rec, now)]
 
 
 def get_thread(tenant_id: str, identity: str, thread_id: str) -> List[Dict[str, Any]]:
@@ -180,7 +226,7 @@ def get_thread(tenant_id: str, identity: str, thread_id: str) -> List[Dict[str, 
             if isinstance(rec, dict) and rec.get("thread_id") == thread_id:
                 _apply_markers(rec, markers)
                 turns.append(rec)
-        return turns[-_MAX_TURNS_PER_THREAD:]
+        return _visible(turns)[-_MAX_TURNS_PER_THREAD:]
 
 
 def list_threads(tenant_id: str, identity: str) -> List[Dict[str, Any]]:
@@ -195,6 +241,9 @@ def list_threads(tenant_id: str, identity: str) -> List[Dict[str, Any]]:
                 records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
                 if not records or any(not isinstance(r, dict) or not isinstance(r.get("thread_id"), str)
                                       or _storage_key(r["thread_id"]) != path.stem for r in records):
+                    continue
+                records = _visible(records)
+                if not records:
                     continue
                 out.append({"thread_id": records[0]["thread_id"], "updated_at": path.stat().st_mtime,
                             "turns": len(records), "title": str(records[0].get("question") or "")[:120]})
@@ -231,6 +280,22 @@ def purge(
     owner = _owner_dir(tenant_id, identity)
     with _tenant_lock(owner.parent):
         return _purge_locked(owner, max_threads, max_age_days)
+
+
+def purge_all() -> int:
+    """Apply retention to every owner of every tenant (for a periodic job; the per-owner purge otherwise only runs
+    on that owner's next append). Returns threads + turns removed."""
+    if _pg():
+        return _pg_purge_all()
+    base = _root() / ".v2"
+    if not base.exists():
+        return 0
+    removed = 0
+    for tenant_dir in sorted(p for p in base.iterdir() if p.is_dir()):
+        with _tenant_lock(tenant_dir):
+            for owner in sorted(p for p in tenant_dir.iterdir() if p.is_dir()):
+                removed += _purge_locked(owner, None, None)
+    return removed
 
 
 def _purge_locked(owner: Path, max_threads: Optional[int], max_age_days: Optional[int]) -> int:
@@ -463,7 +528,7 @@ def _owner_key(tenant_id: str, identity: str) -> tuple:
 
 
 def _pg_append_turn(tenant_id, identity, thread_id, *, question, answer_text, answer_mode, abstained, citations_count,
-                    source_docs=None):
+                    source_docs=None, provenance=None, request_id=None):
     tenant, owner = _owner_key(tenant_id, identity)
     record = {
         "ts": _clock(),
@@ -475,6 +540,7 @@ def _pg_append_turn(tenant_id, identity, thread_id, *, question, answer_text, an
         "citations_count": int(citations_count or 0),
         "source_docs": _clean_source_docs(source_docs),
     }
+    _stamp_provenance(record, provenance, request_id)
     with _pg_transaction(tenant) as conn:
         _apply_markers(record, _pg_markers(conn, tenant))
         conn.execute(
@@ -519,7 +585,7 @@ def _pg_get_thread(tenant_id, identity, thread_id):
             if isinstance(record, dict) and record.get("thread_id") == thread_id:
                 _apply_markers(record, markers)
                 turns.append(record)
-        return turns
+        return _visible(turns)
 
 
 def _pg_list_threads(tenant_id, identity):
@@ -544,6 +610,18 @@ def _pg_delete_thread(tenant_id, identity, thread_id):
             (tenant, owner, _storage_key(thread_id)),
         )
     return bool(cur.rowcount)
+
+
+def _pg_purge_all() -> int:
+    with _pg_conn() as conn:
+        if not _pg_schema_exists(conn):
+            return 0
+        owners = conn.execute("SELECT DISTINCT tenant_id, identity FROM conversation_turns").fetchall()
+    removed = 0
+    for tenant, owner in owners:
+        with _pg_transaction(tenant) as conn:
+            removed += _pg_purge_locked(conn, tenant, owner)
+    return removed
 
 
 def _pg_purge(tenant_id, identity, *, max_threads=None, max_age_days=None):

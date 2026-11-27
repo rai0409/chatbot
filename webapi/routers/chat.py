@@ -2,6 +2,7 @@
 with their request models and helpers (moved from main.py, S7)."""
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ from pydantic import BaseModel, Field, validator
 
 import config
 from rag_core import answer_cache
+from rag_core import answer_evidence
 from rag_core import approved_similar
 from rag_core import approved_similar_feature_reranker
 from rag_core import embedding_provider
@@ -1329,6 +1331,97 @@ def _keyword_index_refreshing() -> bool:
         return True  # unknown: do not cache
 
 
+_CACHE_EXCLUDED_FIELDS = {"conversation_context", "trace_id", "request_id", "feedback_token"}
+
+
+def _chat_cache_key(question: str, *, api_auth: Any, answer_policy: Dict[str, Any], top_k: int,
+                    max_context_chars: int, tenant_id: str, rag_profile_id: str) -> Optional[tuple]:
+    """The answer-cache key of a /chat request, or None when this answer must not use the cache.
+
+    The caller's access scope is part of the key (answer_cache.access_scope_digest); a caller whose scope cannot be
+    determined while retrieval is ACL-filtered is not cached (fail closed). The tenant answer policy's LLM switch is
+    part of the key too, so a tenant switched to "no LLM" is not served answers an LLM wrote before."""
+    scope = answer_cache.access_scope_digest(api_auth)
+    if scope is None:
+        metrics_registry.increment("chat_cache_skip_total", "access_scope_unknown")
+        return None
+    key = answer_cache.build_key(
+        question, top_k=top_k, max_context_chars=max_context_chars, tenant_id=tenant_id,
+        rag_profile_id=rag_profile_id, principal_digest=scope,
+    )
+    # The namespace stays the last elements of the key.
+    return (*key, ("allow_llm_calls", bool(answer_policy.get("allow_llm_calls", True))), *_ANSWER_CACHE_NAMESPACE)
+
+
+def _cache_entry(payload: Dict[str, Any], *, evidence: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    entry = {k: v for k, v in payload.items() if k not in _CACHE_EXCLUDED_FIELDS}
+    if evidence is not None:
+        entry[answer_cache.ORIGIN_FIELD] = answer_evidence.origin_for_cache(evidence)
+    return entry
+
+
+def _cache_hit_payload(cached: Dict[str, Any], *, request_id: str, trace_id: Optional[str],
+                       conversation_trace: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    # The stored copy holds no per-request fields: this request's own ids and conversation context are added
+    # back (stage 14); the internal origin is never sent.
+    hit = answer_cache.strip_internal(dict(cached))
+    hit["request_id"] = request_id
+    if trace_id:
+        hit["trace_id"] = trace_id
+    if conversation_trace:
+        hit["conversation_context"] = conversation_trace
+    return hit
+
+
+def _cache_origin(cached: Dict[str, Any]) -> Dict[str, Any]:
+    origin = cached.get(answer_cache.ORIGIN_FIELD)
+    return dict(origin) if isinstance(origin, dict) else {}
+
+
+def _record_answer_evidence(request_id: str, tenant_id: str, payload: Dict[str, Any], *,
+                            trace: Optional[Dict[str, Any]] = None, collection: Optional[str] = None,
+                            cache_key: Optional[tuple] = None, served_from_cache: bool = False,
+                            origin: Optional[Dict[str, Any]] = None, trace_id: Optional[str] = None,
+                            streamed: bool = False, api_auth: Any = None) -> Optional[Dict[str, Any]]:
+    if not answer_evidence.enabled():
+        return None
+    try:
+        record = answer_evidence.build_evidence(
+            request_id=request_id, tenant_id=tenant_id, payload=payload, trace=trace, collection=collection,
+            cache_key_digest=answer_cache.key_digest(cache_key) if cache_key is not None else None,
+            served_from_cache=served_from_cache, origin=origin, trace_id=trace_id, streamed=streamed,
+            access_scope=answer_cache.access_scope_digest(api_auth),
+        )
+        return record if answer_evidence.record_evidence(record) else None
+    except Exception:  # noqa: BLE001  evidence never breaks an answer; logged
+        logging.exception("answer evidence not recorded request_id=%s", request_id)
+
+
+def _server_request_id(trace: Optional[Dict[str, Any]]) -> str:
+    # The pipeline's own id (server-generated) names the answer; a client trace_id never does.
+    value = str((trace or {}).get("request_id") or "").strip()
+    return value or answer_evidence.new_request_id()
+
+
+def _run_in_captured_context(iterator):
+    """Advance a streamed generator in ONE context captured now (after set_audit_actor).
+
+    Starlette runs each next() of a sync generator in a worker thread with a fresh copy of the request context, so a
+    ContextVar set in the endpoint (the audit actor used by quota, model selection and audit) was lost after the
+    first step."""
+    ctx = contextvars.copy_context()
+
+    def run():
+        while True:
+            try:
+                item = ctx.run(next, iterator)
+            except StopIteration:
+                return
+            yield item
+
+    return run()
+
+
 def _cacheable(payload: Dict[str, Any], guard_reason: Any, used_fallback: Any) -> bool:
     if guard_reason is not None or used_fallback or not _cache_validation_passed(payload):
         return False
@@ -1405,19 +1498,21 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         if approved is not None:
             payload = _approved_chat_payload(approved)
             approved_mode = _approved_answer_mode(approved)
-            approved_trace_id = req.trace_id or uuid.uuid4().hex
-            payload["request_id"] = approved_trace_id
-            payload["trace_id"] = approved_trace_id
+            approved_request_id = answer_evidence.new_request_id()
+            payload["request_id"] = approved_request_id
+            payload["trace_id"] = req.trace_id or approved_request_id
             append_audit_event(
                 "chat",
                 {
-                    "request_id": approved_trace_id,
-                    "trace_id": approved_trace_id,
+                    "request_id": approved_request_id,
+                    "trace_id": payload["trace_id"],
                     "tenant_id": approved.tenant_id,
                     "question": req.question,
                     **_approved_audit_fields(approved, req.question),
+                    "cited_source_docs": answer_evidence.cited_source_docs(payload.get("citations")),
                 },
             )
+            _record_answer_evidence(approved_request_id, tenant_id, payload, trace_id=req.trace_id, api_auth=api_auth)
             _record_chat_outcome_metrics(answer_mode=approved_mode)
             return payload
 
@@ -1426,10 +1521,13 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         )
         if approved_exact_payload is not None:
             approved_exact_payload.update(_collection_meta(staging_collection))
+            exact_request_id = answer_evidence.new_request_id()
+            approved_exact_payload["request_id"] = exact_request_id
+            approved_exact_payload["trace_id"] = req.trace_id or approved_exact_payload.get("trace_id") or exact_request_id
             append_audit_event(
                 "chat",
                 {
-                    "request_id": req.trace_id,
+                    "request_id": exact_request_id,
                     "trace_id": req.trace_id,
                     "tenant_id": tenant_id,
                     "question": req.question,
@@ -1438,8 +1536,10 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
                     "approved_qa_id": approved_exact_payload.get("approved_qa_id"),
                     "retrieval_source": "approved_qa_exact",
                     "citations_count": len(approved_exact_payload.get("citations") or []),
+                    "cited_source_docs": answer_evidence.cited_source_docs(approved_exact_payload.get("citations")),
                 },
             )
+            _record_answer_evidence(exact_request_id, tenant_id, approved_exact_payload, trace_id=req.trace_id, api_auth=api_auth)
             _record_chat_outcome_metrics(answer_mode="approved_exact_match")
             return approved_exact_payload
 
@@ -1452,44 +1552,45 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         cache_key = None
         # Any rag profile is cacheable: its files are part of the key (answer_cache._profile_state).
         if answer_cache.enabled() and not staging_collection and not req.deep:
-            cache_key = answer_cache.build_key(
-                question_for_answer,
-                top_k=effective_top_k,
-                max_context_chars=effective_max_context_chars,
-                tenant_id=tenant_id,
-                rag_profile_id=rag_profile_id,
+            cache_key = _chat_cache_key(
+                question_for_answer, api_auth=api_auth, answer_policy=answer_policy, top_k=effective_top_k,
+                max_context_chars=effective_max_context_chars, tenant_id=tenant_id, rag_profile_id=rag_profile_id,
             )
-            cache_key = (*cache_key, *_ANSWER_CACHE_NAMESPACE)
-            cached = answer_cache.get(cache_key)
-            if cached is not None and not _cache_validation_passed(cached):
+            cached = answer_cache.get(cache_key) if cache_key is not None else None
+            if cached is not None and (not _cache_validation_passed(cached) or
+                    (answer_evidence.enabled() and not answer_evidence.valid_cache_origin(
+                        _cache_origin(cached), payload=cached, tenant_id=tenant_id,
+                        cache_key_digest=answer_cache.key_digest(cache_key), access_scope=answer_cache.access_scope_digest(api_auth)))):
                 cached = None
             if cached is not None:
+                # A cache hit is a new answer event: a new request id, with the origin request referenced.
+                hit_request_id = answer_evidence.new_request_id()
+                origin = _cache_origin(cached)
+                hit = _cache_hit_payload(cached, request_id=hit_request_id, trace_id=req.trace_id,
+                                         conversation_trace=conversation_trace)
                 append_audit_event(
                     "chat",
                     {
-                        "request_id": req.trace_id,
+                        "request_id": hit_request_id,
                         "trace_id": req.trace_id,
                         "tenant_id": tenant_id,
                         "question": req.question,
                         "guard_reason": cached.get("guard_reason"),
                         "used_fallback": cached.get("used_fallback"),
                         "citations_count": len(cached.get("citations") or []),
+                        "cited_source_docs": answer_evidence.cited_source_docs(hit.get("citations")),
                         "cache_hit": True,
+                        "origin_request_id": origin.get("request_id"),
                     },
                 )
+                _record_answer_evidence(hit_request_id, tenant_id, hit, cache_key=cache_key, served_from_cache=True,
+                                        origin=origin, trace_id=req.trace_id, api_auth=api_auth)
                 metrics_registry.increment("chat_cache_hit_total")
                 # The stored payload carries its answer mode; a cached
                 # fallback is not counted as a grounded answer.
                 _record_chat_outcome_metrics(answer_mode=str(cached.get("answer_mode") or "grounded"))
-                # The stored copy holds no per-request fields: this request's own
-                # ids and conversation context are added back (stage 14).
-                hit = dict(cached)
-                if req.trace_id:
-                    hit["trace_id"] = req.trace_id
-                if conversation_trace:
-                    hit["conversation_context"] = conversation_trace
                 records_hook.record_chat(api_auth, request, tenant_id=tenant_id, question=req.question, payload=hit,
-                                         trace_id=req.trace_id, source="cache")
+                                         request_id=hit_request_id, trace_id=req.trace_id, source="cache")
                 return hit
 
         llm_context = _extractive_only_context(answer_policy, tenant_id)
@@ -1509,9 +1610,10 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         answer_kwargs["rag_profile_id"] = rag_profile_id
         with search_mode.deep_mode(bool(req.deep)), llm_context():
             ans, trace = answer_query_with_trace(question_for_answer, **answer_kwargs)
+        request_id = _server_request_id(trace)
         chat_event = {
-            "request_id": trace.get("request_id"),
-            "trace_id": req.trace_id or trace.get("request_id"),
+            "request_id": request_id,
+            "trace_id": req.trace_id or request_id,
             "tenant_id": tenant_id,
             "question": req.question,
             "normalized_query": trace.get("normalized_query"),
@@ -1536,6 +1638,11 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         )
         payload = ans.to_dict()
         payload.update(_collection_meta(staging_collection))
+        payload["request_id"] = request_id
+        if req.trace_id:
+            payload["trace_id"] = req.trace_id
+        # The documents actually cited (top_source_docs above are the post-rerank candidates).
+        chat_event["cited_source_docs"] = answer_evidence.cited_source_docs(payload.get("citations"))
         payload["answer_mode"] = trace.get("answer_mode") or (
             "fallback" if (ans.guard_reason or ans.used_fallback) else "grounded"
         )
@@ -1552,18 +1659,18 @@ def chat(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api_auth_r
         payload["profile_validation"] = _profile_validation_or_skipped(trace)
         _mark_for_review(payload, chat_event, answer_policy)
         append_audit_event("chat", chat_event)
-        if cache_key is not None and _cacheable(payload, ans.guard_reason, ans.used_fallback):
+        evidence = _record_answer_evidence(request_id, tenant_id, payload, trace=trace, collection=staging_collection,
+                                           cache_key=cache_key, trace_id=req.trace_id, api_auth=api_auth)
+        if cache_key is not None and (not answer_evidence.enabled() or evidence is not None) and _cacheable(payload, ans.guard_reason, ans.used_fallback):
             # Only clean grounded answers are cacheable; guard/no-answer and
             # extractive-fallback responses are never cached.
             # Stage 14: without the caller's conversation context (it holds that
             # user's earlier question) or request ids; another caller in the
-            # tenant asking the same wording must not see them.
-            answer_cache.put(cache_key, {
-                k: v for k, v in payload.items()
-                if k not in {"conversation_context", "trace_id", "request_id", "feedback_token"}
-            })
+            # tenant asking the same wording must not see them. The internal
+            # origin (request, generation, key digest) is kept for provenance.
+            answer_cache.put(cache_key, _cache_entry(payload, evidence=evidence))
         records_hook.record_chat(api_auth, request, tenant_id=tenant_id, question=req.question, payload=payload, trace=trace,
-                                 trace_id=req.trace_id)
+                                 request_id=request_id, trace_id=req.trace_id)
         return payload
     except Exception as exc:
         request_stats.error_requests += 1
@@ -1631,19 +1738,21 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
             if approved is not None:
                 payload = _approved_chat_payload(approved)
                 approved_mode = _approved_answer_mode(approved)
-                approved_trace_id = req.trace_id or uuid.uuid4().hex
-                payload["request_id"] = approved_trace_id
-                payload["trace_id"] = approved_trace_id
+                approved_request_id = answer_evidence.new_request_id()
+                payload["request_id"] = approved_request_id
+                payload["trace_id"] = req.trace_id or approved_request_id
                 append_audit_event(
                     "chat",
                     {
-                        "request_id": approved_trace_id,
-                        "trace_id": approved_trace_id,
+                        "request_id": approved_request_id,
+                        "trace_id": payload["trace_id"],
                         "tenant_id": approved.tenant_id,
                         "question": req.question,
                         **_approved_audit_fields(approved, req.question),
+                        "cited_source_docs": answer_evidence.cited_source_docs(payload.get("citations")),
                     },
                 )
+                _record_answer_evidence(approved_request_id, tenant_id, payload, trace_id=req.trace_id, streamed=True, api_auth=api_auth)
                 _record_chat_outcome_metrics(answer_mode=approved_mode)
                 yield _sse_event("approved", payload)
                 return
@@ -1653,10 +1762,17 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
             )
             if approved_exact_payload is not None:
                 approved_exact_payload.update(_collection_meta(staging_collection))
+                exact_request_id = answer_evidence.new_request_id()
+                approved_exact_payload["request_id"] = exact_request_id
+                approved_exact_payload["trace_id"] = (
+                    req.trace_id or approved_exact_payload.get("trace_id") or exact_request_id
+                )
+                _record_answer_evidence(exact_request_id, tenant_id, approved_exact_payload, trace_id=req.trace_id,
+                                        streamed=True, api_auth=api_auth)
                 append_audit_event(
                     "chat",
                     {
-                        "request_id": req.trace_id,
+                        "request_id": exact_request_id,
                         "trace_id": req.trace_id,
                         "tenant_id": tenant_id,
                         "question": req.question,
@@ -1665,6 +1781,7 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                         "approved_qa_id": approved_exact_payload.get("approved_qa_id"),
                         "retrieval_source": "approved_qa_exact",
                         "citations_count": len(approved_exact_payload.get("citations") or []),
+                        "cited_source_docs": answer_evidence.cited_source_docs(approved_exact_payload.get("citations")),
                         "streamed": True,
                     },
                 )
@@ -1681,32 +1798,37 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
             # Stage 14: the answer cache of /chat (same key, same rules); a deep request never uses it.
             cache_key = None
             if answer_cache.enabled() and not staging_collection and not req.deep:
-                cache_key = answer_cache.build_key(
-                    question_for_answer, top_k=effective_top_k,
-                    max_context_chars=effective_max_context_chars, tenant_id=tenant_id,
-                    rag_profile_id=rag_profile_id,
+                cache_key = _chat_cache_key(
+                    question_for_answer, api_auth=api_auth, answer_policy=answer_policy, top_k=effective_top_k,
+                    max_context_chars=effective_max_context_chars, tenant_id=tenant_id, rag_profile_id=rag_profile_id,
                 )
-                cache_key = (*cache_key, *_ANSWER_CACHE_NAMESPACE)
-                cached = answer_cache.get(cache_key)
-                if cached is not None and not _cache_validation_passed(cached):
+                cached = answer_cache.get(cache_key) if cache_key is not None else None
+                if cached is not None and (not _cache_validation_passed(cached) or
+                        (answer_evidence.enabled() and not answer_evidence.valid_cache_origin(
+                            _cache_origin(cached), payload=cached, tenant_id=tenant_id,
+                            cache_key_digest=answer_cache.key_digest(cache_key), access_scope=answer_cache.access_scope_digest(api_auth)))):
                     cached = None
                 if cached is not None:
-                    hit = dict(cached)
-                    if req.trace_id:
-                        hit["trace_id"] = req.trace_id
-                    if conversation_trace:
-                        hit["conversation_context"] = conversation_trace
+                    hit_request_id = answer_evidence.new_request_id()
+                    origin = _cache_origin(cached)
+                    hit = _cache_hit_payload(cached, request_id=hit_request_id, trace_id=req.trace_id,
+                                             conversation_trace=conversation_trace)
                     append_audit_event("chat", {
-                        "request_id": req.trace_id, "trace_id": req.trace_id, "tenant_id": tenant_id,
+                        "request_id": hit_request_id, "trace_id": req.trace_id, "tenant_id": tenant_id,
                         "question": req.question, "guard_reason": hit.get("guard_reason"),
                         "used_fallback": hit.get("used_fallback"),
-                        "citations_count": len(hit.get("citations") or []), "cache_hit": True, "streamed": True,
+                        "citations_count": len(hit.get("citations") or []),
+                        "cited_source_docs": answer_evidence.cited_source_docs(hit.get("citations")),
+                        "cache_hit": True, "streamed": True, "origin_request_id": origin.get("request_id"),
                     })
+                    _record_answer_evidence(hit_request_id, tenant_id, hit, cache_key=cache_key,
+                                            served_from_cache=True, origin=origin, trace_id=req.trace_id, streamed=True, api_auth=api_auth)
                     metrics_registry.increment("chat_cache_hit_total")
                     _record_chat_outcome_metrics(answer_mode=str(hit.get("answer_mode") or "grounded"))
                     # Same interaction record as the /chat cache hit (the stream used to skip it).
                     records_hook.record_chat(api_auth, request, tenant_id=tenant_id, question=req.question,
-                                             payload=hit, trace_id=req.trace_id, source="cache")
+                                             payload=hit, request_id=hit_request_id, trace_id=req.trace_id,
+                                             source="cache")
                     yield _sse_event("final", hit)
                     return
             llm_context = _extractive_only_context(answer_policy, tenant_id)
@@ -1731,8 +1853,12 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
             )):
                 if name == "final":
                     result, trace = payload
+                    request_id = _server_request_id(trace)
                     final_payload = result.to_dict()
                     final_payload.update(_collection_meta(staging_collection))
+                    final_payload["request_id"] = request_id
+                    if req.trace_id:
+                        final_payload["trace_id"] = req.trace_id
                     if conversation_trace:
                         final_payload["conversation_context"] = conversation_trace
                     final_payload["answer_mode"] = trace.get("answer_mode")
@@ -1745,18 +1871,17 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                     final_payload["service_notice"] = records_hook.service_notice(trace)
                     final_payload["profile_validation"] = _profile_validation_or_skipped(trace)
                     _mark_for_review(final_payload, None, answer_policy)
-                    if cache_key is not None and _cacheable(final_payload, result.guard_reason, result.used_fallback):
-                        answer_cache.put(cache_key, {
-                            k: v for k, v in final_payload.items()
-                            if k not in {"conversation_context", "trace_id", "request_id", "feedback_token"}
-                        })
+                    evidence = _record_answer_evidence(request_id, tenant_id, final_payload, trace=trace, collection=staging_collection,
+                                                       cache_key=cache_key, trace_id=req.trace_id, streamed=True, api_auth=api_auth)
+                    if cache_key is not None and (not answer_evidence.enabled() or evidence is not None) and _cacheable(final_payload, result.guard_reason, result.used_fallback):
+                        answer_cache.put(cache_key, _cache_entry(final_payload, evidence=evidence))
                     yield _sse_event("final", final_payload)
                 else:
                     yield _sse_event(name, payload)
             if result is not None and trace is not None:
                 stream_event = {
-                    "request_id": trace.get("request_id"),
-                    "trace_id": req.trace_id or trace.get("request_id"),
+                    "request_id": request_id,
+                    "trace_id": req.trace_id or request_id,
                     "tenant_id": tenant_id,
                     "question": req.question,
                     "normalized_query": trace.get("normalized_query"),
@@ -1765,6 +1890,7 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                     "used_fallback": trace.get("final_used_fallback", result.used_fallback),
                     "citations_count": trace.get("citations_count", len(result.citations)),
                     "top_source_docs": _top_source_docs(trace.get("after_rerank")),
+                    "cited_source_docs": answer_evidence.cited_source_docs(final_payload.get("citations")),
                     "latency_ms": trace.get("latency_ms"),
                     "answer_mode": trace.get("answer_mode"),
                     "streamed": True,
@@ -1783,7 +1909,7 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
                     guard_reason=final_payload.get("guard_reason"),
                 )
                 records_hook.record_chat(api_auth, request, tenant_id=tenant_id, question=req.question, payload=final_payload,
-                                         trace=trace, trace_id=req.trace_id, source="stream")
+                                         trace=trace, request_id=request_id, trace_id=req.trace_id, source="stream")
                 _record_chat_outcome_metrics(
                     answer_mode=trace.get("answer_mode"),
                     guard_reason=trace.get("final_guard_reason") or result.guard_reason,
@@ -1814,7 +1940,7 @@ def chat_stream(req: ChatRequest, api_auth: ApiAuthContext = Depends(require_api
             logging.exception("chat_stream failed trace_id=%s", req.trace_id)
             yield _sse_event("error", content)
 
-    return StreamingResponse(_events(), media_type="text/event-stream")
+    return StreamingResponse(_run_in_captured_context(_events()), media_type="text/event-stream")
 
 
 @router.post("/chat/product-preview")
@@ -2194,12 +2320,17 @@ def chat_feedback(req: ProductFeedbackRequest, api_auth: ApiAuthContext = Depend
         feedback_token=feedback_token,
         feedback_type=feedback_type,
     )
+    # linked: request_id names a server evidence record of this tenant (an answer this server gave); a made-up or
+    # another tenant's id stays unlinked.
+    linked = bool(req.request_id and answer_evidence.lookup_evidence(req.request_id, normalize_tenant_id(req.tenant_id), access_scope=answer_cache.access_scope_digest(api_auth)))
+    event["linked"] = linked
     stored = append_feedback_audit_event(event)
     response: Dict[str, Any] = {
         "ok": True,
         "feedback_token": event["feedback_token"],
         "feedback_type": feedback_type,
         "stored": stored,
+        "linked": linked,
     }
     if not stored:
         response["warning"] = "feedback_logging_failed"
@@ -2264,7 +2395,7 @@ def search(req: SearchRequest, api_auth: ApiAuthContext = Depends(require_api_au
             **_collection_meta(staging_collection),
             "tenant_id": tenant_id,
             "hits": [
-                {"text": h.text, "metadata": h.metadata, "score": h.score}
+                {"text": h.text, "metadata": {k: v for k, v in h.metadata.items() if k not in {"_evidence_source_row_sha256", "_evidence_parent_generation"}}, "score": h.score}
                 for h in hits
             ]
         }

@@ -3,6 +3,8 @@ import { ApiError } from "../../api/client";
 import { type ImportResult, approvedQaApi } from "../../api/approvedQa";
 import { jaApprovedQa as q } from "../../i18n/approvedQa";
 import { rememberActor, storedActor } from "../../lib/actor";
+import { TenantInput } from "../../components/TenantInput";
+import { useTenant } from "../../lib/tenant";
 
 function toBase64(buffer: ArrayBuffer): string {
   let binary = "";
@@ -13,7 +15,8 @@ function toBase64(buffer: ArrayBuffer): string {
 
 /** Import the CSV of the Excel template: a check that writes nothing, then the import (drafts only). The file goes as bytes, so a Shift_JIS file keeps its encoding. */
 export function ImportPanel({ tenantDefault, onImported, onClose }: { tenantDefault: string; onImported: () => void; onClose: () => void }) {
-  const [tenant, setTenant] = useState(tenantDefault || "default");
+  const chosen = useTenant().tenant;
+  const [tenant, setTenant] = useState(tenantDefault || chosen || "default");
   const [conflict, setConflict] = useState("skip");
   const [reason, setReason] = useState("");
   const [actor, setActor] = useState(storedActor);
@@ -70,7 +73,7 @@ export function ImportPanel({ tenantDefault, onImported, onClose }: { tenantDefa
         {fileName && <span className="muted">{fileName}</span>}
         <label>
           {q.importDefaultTenant}
-          <input value={tenant} onChange={(e) => setTenant(e.target.value)} maxLength={64} />
+          <TenantInput value={tenant} onChange={(e) => setTenant(e.target.value)} />
         </label>
         <label>
           {q.importConflict}

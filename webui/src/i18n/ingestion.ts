@@ -13,6 +13,13 @@ export const jaIngestion = {
     requestFailed: "要求に失敗しました。",
     notFound: "対象が見つかりません。",
   },
+  // Examples shown in empty fields (not real names).
+  hints: {
+    tenant: "例: default",
+    collection: "例: staging_v1",
+    paths: "例: docs/manual.docx",
+    chunks: "例: chunks/sample.jsonl",
+  },
   files: {
     heading: "1. 文書を選ぶ",
     note: "PDF / DOCX / XLSX / CSV / PPTX をドラッグ＆ドロップするか、サーバー上のパスを指定します。アップロードした文書はサーバーの取込用フォルダに保存されます（INGEST_UPLOAD_DIR）。",

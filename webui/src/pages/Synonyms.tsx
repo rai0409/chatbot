@@ -81,10 +81,14 @@ export function SynonymsPage() {
           setApplied({ status, token });
         }}
       >
-        <label>
-          {j.token}
-          <input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} />
-        </label>
+        {/* The console runs signed in; the legacy token is only for a credential without the right (kept for 403). */}
+        <details className="syn-token" open={noRights || token !== ""}>
+          <summary>{j.tokenSection}</summary>
+          <label>
+            {j.token}
+            <input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} />
+          </label>
+        </details>
         <label>
           {j.status}
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -146,7 +150,7 @@ export function SynonymsPage() {
                   <tr key={item.candidate_id}>
                     <th scope="row">{item.canonical || ""}</th>
                     <td>{(item.synonyms || []).join(j.separator)}</td>
-                    <td>{item.method || ""}</td>
+                    <td>{item.method ? (j.methods[item.method] ?? item.method) : ""}</td>
                     <td>
                       <span className={`badge syn-${item.status}`}>{j.statusOptions[item.status] ?? item.status}</span>
                     </td>

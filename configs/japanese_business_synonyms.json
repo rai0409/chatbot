@@ -205,5 +205,24 @@
         "育休"
       ]
     }
-  ]
+  ],
+  "query_expansion": {
+    "description": "Used only by query expansion (rag_core/query_preprocess.py, QUERY_BUSINESS_SYNONYMS); approved-QA similarity ignores this key. The groups above mix synonyms with broader words, narrower compounds and directional phrases, which is fine for overlap scoring but pulls retrieval toward a neighbouring document when appended to the query. exclude_terms neither trigger an expansion nor are added. Measured with tools/ab_query_ja_flags_20261127.py (retrieval_v3 near_duplicate cases).",
+    "exclude_terms": [
+      "窓口",
+      "連絡先",
+      "経費",
+      "精算",
+      "出張申請",
+      "出張旅費",
+      "旅費精算",
+      "給与明細",
+      "リモート",
+      "扶養に入る",
+      "扶養から外れる",
+      "健康診断書",
+      "パスワード再設定",
+      "パスワードリセット"
+    ]
+  }
 }

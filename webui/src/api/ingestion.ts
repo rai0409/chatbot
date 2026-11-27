@@ -1,5 +1,5 @@
 // Calls of the document ingestion screen (webapi/main.py, "Document ingestion UI + job status").
-import { ApiError, LOGIN_URL, csrfToken, request } from "./client";
+import { ApiError, LOGIN_URL, csrfToken, errorFrom, request, send } from "./client";
 
 /** A report from the server. Its keys depend on the job, so it is kept open and shown as it is. */
 export type Report = Record<string, unknown>;
@@ -111,7 +111,7 @@ function post<T>(path: string, body: unknown): Promise<T> {
 /** The file goes as the raw body (no multipart), with the tenant it is stored for. */
 async function upload(file: File, tenant: string): Promise<UploadResult> {
   const query = `filename=${encodeURIComponent(file.name)}&tenant=${encodeURIComponent(tenant)}`;
-  const response = await fetch(`/admin/ingestion/upload?${query}`, {
+  const response = await send(`/admin/ingestion/upload?${query}`, {
     method: "PUT",
     headers: { "Content-Type": "application/octet-stream", "X-CSRF-Token": csrfToken(), Accept: "application/json" },
     credentials: "same-origin",
@@ -121,16 +121,7 @@ async function upload(file: File, tenant: string): Promise<UploadResult> {
     window.location.assign(`${LOGIN_URL}?next=${encodeURIComponent(window.location.pathname)}`);
     throw new ApiError(401, "unauthorized");
   }
-  if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = await response.json();
-      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-    } catch {
-      /* not JSON */
-    }
-    throw new ApiError(response.status, detail);
-  }
+  if (!response.ok) throw await errorFrom(response);
   return (await response.json()) as UploadResult;
 }
 

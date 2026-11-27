@@ -11,15 +11,27 @@ them out), they are estimated from the text length and the line says so (`estima
 from __future__ import annotations
 
 import json
+import logging
+import threading
+import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 import config
 from rag_core import audit_log, availability
 
 OUTCOMES = ("ok", "error", "refused", "breaker_open")
+
+logger = logging.getLogger(__name__)
+
+# Failed usage writes (disk full, permissions). Counted for /metrics; while the latest write of a call failed (and
+# for LLM_USAGE_FAILURE_HOLD_SECONDS after it), recording_healthy() is False and llm_quota.check fails closed when
+# a limit is configured: the use that the limits are computed from is not being recorded.
+_HEALTH_LOCK = threading.Lock()
+_HEALTH: Dict[str, Any] = {"failures": 0, "last_failure": None, "last_success": None}
+_DEFAULT_FAILURE_HOLD_SECONDS = 60.0
 
 
 def _dir() -> Path:
@@ -51,16 +63,60 @@ def _append(payload: Dict[str, Any], now: datetime) -> None:
             handle.write(line)
 
 
+def write_failure_count() -> int:
+    """Usage lines that could not be written since the process started."""
+    return int(_HEALTH["failures"])
+
+
+def _failure_hold_seconds() -> float:
+    try:
+        return max(0.0, float(getattr(config, "LLM_USAGE_FAILURE_HOLD_SECONDS", _DEFAULT_FAILURE_HOLD_SECONDS)))
+    except (TypeError, ValueError):
+        return _DEFAULT_FAILURE_HOLD_SECONDS
+
+
+def recording_healthy(*, now: Optional[float] = None) -> bool:
+    """False while usage recording is failing: the latest call write failed and the hold time since has not passed.
+
+    The hold lets a later call try again (a refused call writes nothing, so it could never recover otherwise)."""
+    with _HEALTH_LOCK:
+        failed, succeeded = _HEALTH["last_failure"], _HEALTH["last_success"]
+    if failed is None or (succeeded is not None and succeeded >= failed):
+        return True
+    return (time.monotonic() if now is None else now) - failed >= _failure_hold_seconds()
+
+
+def _note_write(ok: bool) -> None:
+    with _HEALTH_LOCK:
+        if ok:
+            _HEALTH["last_success"] = time.monotonic()
+        else:
+            _HEALTH["failures"] += 1
+            _HEALTH["last_failure"] = time.monotonic()
+
+
+def reset_health() -> None:
+    """Forget the recorded write failures (tests)."""
+    with _HEALTH_LOCK:
+        _HEALTH.update(failures=0, last_failure=None, last_success=None)
+
+
 def record_call(
     *, feature: str, tenant_id: str, profile: str, model: str, host: str, location: str, outcome: str,
     input_tokens: int = 0, output_tokens: int = 0, estimated: bool = False, latency_ms: int = 0,
     error_type: str = "", cost: float = 0.0, now: Optional[datetime] = None, batch: bool = False,
+    actor: Optional[Mapping[str, Any]] = None,
 ) -> None:
-    """Never raises: the usage log must not break an answer. `batch`: made through a provider's batch API (rag_core/llm_batch.py)."""
+    """Never raises: the usage log must not break an answer. `batch`: made through a provider's batch API (rag_core/llm_batch.py).
+
+    `actor` (key_fingerprint, role): who asked, when it is not the caller of the current request (a batch collected later
+    by someone else). Default: the current request's caller. A failed write is counted and logged (write_failure_count,
+    recording_healthy)."""
     if not enabled():
         return
     stamp = now or datetime.now(timezone.utc)
-    actor = audit_log._ACTOR.get() or {}
+    if actor is None:
+        actor = audit_log._ACTOR.get() or {}
     payload = {
         "t": stamp.isoformat(), "event": "call", "tenant_id": tenant_id, "feature": feature, "profile": profile,
         "model": model, "host": host, "location": location, "outcome": outcome,
@@ -70,8 +126,11 @@ def record_call(
     }
     try:
         _append(payload, stamp)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001  the usage log must not break an answer; counted and logged instead
+        _note_write(False)
+        logger.warning("llm usage line could not be written: %s", type(exc).__name__)
+    else:
+        _note_write(True)
 
 
 def record_breaker(key: str, old: str, new: str, at: float) -> None:
@@ -81,8 +140,10 @@ def record_breaker(key: str, old: str, new: str, at: float) -> None:
     stamp = datetime.fromtimestamp(at, tz=timezone.utc)
     try:
         _append({"t": stamp.isoformat(), "event": "breaker", "key": key, "from": old, "to": new}, stamp)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001  a breaker listener must not raise; counted and logged instead
+        with _HEALTH_LOCK:
+            _HEALTH["failures"] += 1  # counted, but not a quota health signal (no call use was lost)
+        logger.warning("llm breaker line could not be written: %s", type(exc).__name__)
 
 
 def read(days: int = 1, *, today: Optional[date] = None) -> Iterable[Dict[str, Any]]:

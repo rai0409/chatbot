@@ -33,16 +33,20 @@ def test_two_tenants_can_hold_the_same_qa_id(monkeypatch, tmp_path):
     from scripts import ingest_canonical_jsonl as ingest
 
     monkeypatch.setattr(config, "VECTORSTORE_DIR", str(tmp_path))
-    col = QdrantCollection(f"pair_{uuid.uuid4().hex[:8]}", client=qdrant_client.QdrantClient(":memory:"))
-    monkeypatch.setattr(ingest.store, "get_vectorstore", lambda **kwargs: col)
-    monkeypatch.setattr(ingest.embedder, "is_local_provider", lambda: True)
-    monkeypatch.setattr(ingest.embedder, "embed_documents", lambda texts, client=None: [[1.0, 0.0] for _ in texts])
-    for tenant in ("tenant_a", "tenant_b"):
-        ingest.ingest_canonical_rows([approved_qa_record_to_canonical_row(_record(tenant=tenant))])
-    assert sorted(col.get(include=[])["ids"]) == [
-        "tenant_a:approved_qa_pair:qa_x",
-        "tenant_b:approved_qa_pair:qa_x",
-    ]
+    client = qdrant_client.QdrantClient(":memory:")
+    try:
+        col = QdrantCollection(f"pair_{uuid.uuid4().hex[:8]}", client=client)
+        monkeypatch.setattr(ingest.store, "get_vectorstore", lambda **kwargs: col)
+        monkeypatch.setattr(ingest.embedder, "is_local_provider", lambda: True)
+        monkeypatch.setattr(ingest.embedder, "embed_documents", lambda texts, client=None: [[1.0, 0.0] for _ in texts])
+        for tenant in ("tenant_a", "tenant_b"):
+            ingest.ingest_canonical_rows([approved_qa_record_to_canonical_row(_record(tenant=tenant))])
+        assert sorted(col.get(include=[])["ids"]) == [
+            "tenant_a:approved_qa_pair:qa_x",
+            "tenant_b:approved_qa_pair:qa_x",
+        ]
+    finally:
+        client.close()
 
 
 @pytest.mark.parametrize(

@@ -3,6 +3,8 @@ import { ApiError, api } from "../api/client";
 import type { ApprovalDecision, ApprovalItem, Integration, SystemStatus } from "../api/types";
 import { ErrorState, Loading } from "../components/Feedback";
 import { reasonText, t } from "../i18n/ja";
+import { Dialog } from "../components/Dialog";
+import { dateTime } from "../lib/format";
 
 // The integrations that have a console switch (the others, llm and oidc, keep the switches they already have).
 const SWITCHABLE = new Set(["sharepoint", "outlook_draft", "smtp", "slack"]);
@@ -179,7 +181,7 @@ export function SystemStatusPage() {
                     {item.requested_by.verified && <span className="muted"> （{t.system.verified}）</span>}
                   </td>
                   <td>{item.reason}</td>
-                  <td>{item.expires_at.slice(0, 16).replace("T", " ")}</td>
+                  <td>{dateTime(item.expires_at)}</td>
                   <td>
                     <button type="button" disabled={busy || !actor.trim()} onClick={() => decide(item, "approve")}>
                       {t.system.approve}
@@ -228,10 +230,14 @@ export function SystemStatusPage() {
       </table>
 
       {pending && (
-        <div role="dialog" aria-modal="true" aria-labelledby="switch-title" className="dialog">
-          <h2 id="switch-title">
-            {pending.integration.label}: {pending.enable ? t.system.turnOn : t.system.turnOff}
-          </h2>
+        <Dialog
+          title={`${pending.integration.label}: ${pending.enable ? t.system.turnOn : t.system.turnOff}`}
+          busy={busy}
+          onCancel={() => {
+            setPending(null);
+            setReason("");
+          }}
+        >
           <label>
             {t.system.reasonLabel}
             <textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} rows={3} />
@@ -258,7 +264,7 @@ export function SystemStatusPage() {
           >
             {t.system.cancel}
           </button>
-        </div>
+        </Dialog>
       )}
     </section>
   );

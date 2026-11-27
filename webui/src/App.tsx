@@ -1,49 +1,29 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
-import { AccessPage } from "./pages/Access";
-import { AuditPage } from "./pages/Audit";
-import { ChangesPage } from "./pages/Changes";
-import { ContractsPage } from "./pages/Contracts";
-import { DashboardPage } from "./pages/Dashboard";
-import { ExtractionPage } from "./pages/Extraction";
-import { ApprovedQaPage } from "./pages/ApprovedQa";
-import { BackupsPage } from "./pages/Backups";
-import { GoldenPage } from "./pages/Golden";
-import { IngestionPage } from "./pages/Ingestion";
-import { LimitsPage } from "./pages/Limits";
-import { RecordsPage } from "./pages/Records";
-import { ReviewQueuePage } from "./pages/ReviewQueue";
-import { SourcesPage } from "./pages/Sources";
-import { SynonymsPage } from "./pages/Synonyms";
-import { SystemStatusPage } from "./pages/SystemStatus";
-import { UsagePage } from "./pages/Usage";
+import { PAGE_LOADERS, lazyPage } from "./routes";
+import { TenantProvider } from "./lib/tenant";
 
-// One route for each entry of the menu (src/menu.ts). A page is one file in src/pages.
+/** One route for each entry of the menu (src/menu.ts); each screen is loaded when first opened (src/routes.tsx). */
+export function AppRoutes() {
+  return (
+    <Routes>
+      <Route element={<AppShell />}>
+        {Object.keys(PAGE_LOADERS).map((path) => {
+          const Page = lazyPage(path);
+          return path === "/" ? <Route key={path} index element={<Page />} /> : <Route key={path} path={path.slice(1)} element={<Page />} />;
+        })}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
+  );
+}
+
 export function App() {
   return (
     <BrowserRouter basename="/console">
-      <Routes>
-        <Route element={<AppShell />}>
-          <Route index element={<DashboardPage />} />
-          <Route path="system" element={<SystemStatusPage />} />
-          <Route path="usage" element={<UsagePage />} />
-          <Route path="limits" element={<LimitsPage />} />
-          <Route path="ingestion" element={<IngestionPage />} />
-          <Route path="sources" element={<SourcesPage />} />
-          <Route path="extraction" element={<ExtractionPage />} />
-          <Route path="synonyms" element={<SynonymsPage />} />
-          <Route path="records" element={<RecordsPage />} />
-          <Route path="review" element={<ReviewQueuePage />} />
-          <Route path="approved-qa" element={<ApprovedQaPage />} />
-          <Route path="golden" element={<GoldenPage />} />
-          <Route path="changes" element={<ChangesPage />} />
-          <Route path="contracts" element={<ContractsPage />} />
-          <Route path="audit" element={<AuditPage />} />
-          <Route path="access" element={<AccessPage />} />
-          <Route path="backups" element={<BackupsPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
+      <TenantProvider>
+        <AppRoutes />
+      </TenantProvider>
     </BrowserRouter>
   );
 }

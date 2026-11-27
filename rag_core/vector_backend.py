@@ -30,6 +30,9 @@ backoff), upserts and deletes go in batches (QDRANT_UPSERT_BATCH, default
 256), several query vectors use one batch request, collection existence is
 cached for QDRANT_EXISTS_CACHE_SECONDS (default 60), and tenant_id is a
 tenant-optimised payload index (Qdrant >= 1.11). health() is on /admin/health.
+close_clients() closes the cached clients (application shutdown, CLIs, tests).
+QDRANT_PATH is locked by one process: a second process gets a clear error
+(use WEB_CONCURRENCY=1 or QDRANT_URL).
 """
 
 from __future__ import annotations
@@ -115,7 +118,7 @@ def _client():
         client = _CLIENT.get(key)
         if client is None:
             if path:
-                client = QdrantClient(path=path)
+                client = _open_local_client(QdrantClient, path)
             else:
                 kwargs: Dict[str, Any] = {
                     "url": url,
@@ -133,6 +136,42 @@ def _client():
                     client = QdrantClient(**kwargs)
             _CLIENT[key] = client
         return client
+
+
+def _open_local_client(factory, path: str):
+    """Open the embedded (QDRANT_PATH) client; its storage folder is locked by one process."""
+    try:
+        return factory(path=path)
+    except RuntimeError as exc:
+        if "already accessed" not in str(exc):
+            raise
+        raise RuntimeError(
+            f"QDRANT_PATH={path} is already opened by another process. The embedded Qdrant mode is "
+            "single-process: run the API with WEB_CONCURRENCY=1 (one worker) and no other CLI on the same "
+            "path, or use a Qdrant server (QDRANT_URL) for several workers or nodes."
+        ) from exc
+
+
+def close_clients() -> None:
+    """Close every cached Qdrant client and forget the per-client caches.
+
+    Called at application shutdown (after the ingestion jobs have stopped) and by
+    CLIs and tests, so the embedded mode releases its folder lock and the HTTP /
+    gRPC connections are not left to the interpreter teardown.
+    """
+    with _CLIENT_LOCK:
+        clients = list(_CLIENT.values())
+        _CLIENT.clear()
+        _EXISTS.clear()
+        _META_CACHE.clear()
+        for client in clients:
+            close = getattr(client, "close", None)
+            if close is None:
+                continue
+            try:
+                close()
+            except Exception:  # noqa: BLE001 - shutdown must close the remaining clients
+                logger.warning("closing a Qdrant client failed", exc_info=True)
 
 
 def health() -> Dict[str, Any]:

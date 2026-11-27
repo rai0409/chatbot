@@ -3,6 +3,7 @@ import { ApiError } from "../api/client";
 import { extractionApi, type ItemFilter, type LineRef, type PageLine, type ReviewItem } from "../api/extraction";
 import { ErrorState, Loading } from "../components/Feedback";
 import { jaExtraction as x } from "../i18n/extraction";
+import { describeError } from "../lib/errors";
 import { dateTime, number } from "../lib/format";
 import { rememberActor, storedActor } from "../lib/actor";
 import { useLoad } from "../lib/useLoad";
@@ -10,6 +11,8 @@ import { ConfirmDialog } from "./extraction/ConfirmDialog";
 import { LineEditor } from "./extraction/LineEditor";
 import { PageViewer } from "./extraction/PageViewer";
 import "./extraction/extraction.css";
+import { TenantInput } from "../components/TenantInput";
+import { useTenant } from "../lib/tenant";
 
 const ITEM_LIMIT = 100; // the server's default limit; the legacy page did not pass one
 const FIRST: ItemFilter = { tenant: "default", maxConfidence: "", includeReviewed: false, sourceDoc: "" };
@@ -25,21 +28,22 @@ function confidenceText(value: number | null): string {
 }
 
 function failure(base: string, e: unknown): string {
-  if (e instanceof ApiError) {
-    if (e.status === 409) return x.conflict;
-    if (e.status === 403) return x.forbidden;
-    if (e.status === 404) return x.notFound;
-    if (e.status === 400 && e.detail) return x.failedWith(base, e.detail);
-  }
-  return base;
+  return describeError(e, base, {
+    409: x.conflict,
+    403: x.forbidden,
+    404: x.notFound,
+    400: (err) => (err.detail ? x.failedWith(base, err.detail) : base),
+    422: (err) => (err.detail ? x.failedWith(base, err.detail) : base),
+  });
 }
 
 export function ExtractionPage() {
-  const [tenantInput, setTenantInput] = useState(FIRST.tenant);
+  const chosen = useTenant().tenant || FIRST.tenant;
+  const [tenantInput, setTenantInput] = useState(chosen);
   const [maxInput, setMaxInput] = useState("");
   const [reviewedInput, setReviewedInput] = useState(false);
   const [formProblem, setFormProblem] = useState("");
-  const [filter, setFilter] = useState<ItemFilter>(FIRST);
+  const [filter, setFilter] = useState<ItemFilter>(() => ({ ...FIRST, tenant: chosen }));
   const [target, setTarget] = useState<LineRef | null>(null);
   const [editing, setEditing] = useState(false);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -201,7 +205,7 @@ export function ExtractionPage() {
       <form className="toolbar" onSubmit={apply}>
         <label>
           {x.tenant}
-          <input value={tenantInput} onChange={(e) => setTenantInput(e.target.value)} maxLength={64} size={14} />
+          <TenantInput value={tenantInput} onChange={(e) => setTenantInput(e.target.value)} size={14} />
         </label>
         <label>
           {x.maxConfidence}

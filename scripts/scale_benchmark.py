@@ -600,9 +600,22 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _close_vector_clients() -> None:
+    """Close the cached Qdrant / Chroma clients (embedded mode releases its lock)."""
+    vector_backend = sys.modules.get("rag_core.vector_backend")
+    if vector_backend is not None:
+        vector_backend.close_clients()
+    store = sys.modules.get("rag_core.store")
+    if store is not None:
+        store.reset_vectorstore_clients()
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    finally:
+        _close_vector_clients()
     return 0
 
 

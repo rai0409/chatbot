@@ -2,6 +2,8 @@ import { type FormEvent, useId, useState } from "react";
 import { GLOBAL_ONLY, LIMIT_NAMES, limitsApi, type LimitChange, type LimitName } from "../../api/limits";
 import { jaLimits as j } from "../../i18n/limits";
 import { failureText, isForbidden } from "./common";
+import { Dialog } from "../../components/Dialog";
+import { TenantInput } from "../../components/TenantInput";
 
 const f = j.limits.form;
 const VALUE_RE = /^\d+(\.\d+)?$/;
@@ -50,8 +52,8 @@ export function LimitForm({ initialName, initialTenant, onDone, onCancel, onForb
   }
 
   return (
-    <form role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} className="dialog lm-form" onSubmit={submit} noValidate>
-      <h2 id={`${id}-title`}>{f.title}</h2>
+    <Dialog title={f.title} onCancel={onCancel} busy={busy} className="lm-dialog">
+      <form className="lm-form" onSubmit={submit} noValidate>
       <label>
         {f.name}
         <select value={name} onChange={(e) => setName(e.target.value as LimitName)}>
@@ -72,7 +74,7 @@ export function LimitForm({ initialName, initialTenant, onDone, onCancel, onForb
       {globalOnly && <p className="muted">{f.globalOnlyHelp}</p>}
       <label>
         {f.tenantId}
-        <input type="text" value={tenantScope ? tenant : ""} disabled={!tenantScope} maxLength={64} autoComplete="off" onChange={(e) => setTenant(e.target.value)} />
+        <TenantInput value={tenantScope ? tenant : ""} disabled={!tenantScope} onChange={(e) => setTenant(e.target.value)} />
       </label>
       {!globalOnly && <p className="muted">{f.tenantIdHelp}</p>}
       <label>
@@ -100,6 +102,7 @@ export function LimitForm({ initialName, initialTenant, onDone, onCancel, onForb
           {j.cancel}
         </button>
       </div>
-    </form>
+      </form>
+    </Dialog>
   );
 }

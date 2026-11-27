@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
-import { ApiError } from "../../api/client";
 import { jaContracts as c } from "../../i18n/contracts";
 import { reasonText } from "../../i18n/ja";
+import { describeError } from "../../lib/errors";
 
 export const INTEGRATION_OFF = "integration_off:";
 
@@ -17,13 +17,11 @@ export function integrationOffReason(detail: string | undefined | null): string 
 
 /** A failure in words: 409 (changed by someone else), 403, 404, or the server's own message. */
 export function failureText(prefix: string, e: unknown): string {
-  if (e instanceof ApiError) {
-    if (e.status === 409) return c.conflict + (e.detail ? `（${e.detail}）` : "");
-    if (e.status === 403) return `${prefix}: ${c.forbidden}`;
-    if (e.status === 404) return `${prefix}: ${c.notFound}`;
-    return `${prefix}: ${e.detail || e.status}`;
-  }
-  return prefix;
+  return describeError(e, prefix, {
+    409: (err) => c.conflict + (err.detail ? `（${err.detail}）` : ""),
+    403: `${prefix}: ${c.forbidden}`,
+    404: `${prefix}: ${c.notFound}`,
+  });
 }
 
 export function daysText(left: number): string {

@@ -13,7 +13,10 @@ import config
 from rag_core import audit_log
 
 # kind of the console -> file of the audit log
-FILES = {"admin": "events.jsonl", "chat": "chat_events.jsonl", "feedback": "feedback_events.jsonl"}
+FILES = {
+    "admin": "events.jsonl", "chat": "chat_events.jsonl", "feedback": "feedback_events.jsonl",
+    "evidence": "evidence_events.jsonl",
+}
 MAX_SCAN = 50000
 
 

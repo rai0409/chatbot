@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 import config
+from rag_core import llm_usage
 from rag_core.audit_log import write_failure_count
 from rag_core.review_actions import latest_review_statuses
 from webapi import admin_common
@@ -154,6 +155,33 @@ def _load_review_items(
     }
 
 
+def review_item_tenants(review_id: str) -> List[str]:
+    """The tenants of every queued review item with this id, from the whole queue (no row cap).
+
+    The review action route authorizes against this: a capped read would miss items past the cap and skip the
+    tenant check. Unreadable lines are ignored (they cannot be authorized)."""
+    wanted = str(review_id or "").strip()
+    tenants: List[str] = []
+    source_path = _review_queue_path()
+    if not wanted or not source_path.exists():
+        return tenants
+    with source_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                record = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict) or str(record.get("review_id") or "").strip() != wanted:
+                continue
+            tenant = str(record.get("tenant_id") or "").strip() or "default"
+            if tenant not in tenants:
+                tenants.append(tenant)
+    return tenants
+
+
 # --- Admin browser login (stage 9) -------------------------------------------
 # Admin auth is fail-closed and browsers cannot send X-Admin-Token on a page
 # navigation, so the admin pages were unreachable from a browser. /admin/login
@@ -262,6 +290,10 @@ def admin_metrics_summary(_admin_auth: None = Depends(require_admin_auth)):
     if audit_failures:
         counters = dict(counters)
         counters["audit_write_failures_total"] = {"total": audit_failures}
+    usage_failures = llm_usage.write_failure_count()
+    if usage_failures:
+        counters = dict(counters)
+        counters["llm_usage_write_failures_total"] = {"total": usage_failures}
     return {"counters": counters, "scope": metrics_registry.scope(), "alerts": evaluate_alerts({"counters": counters})}
 
 

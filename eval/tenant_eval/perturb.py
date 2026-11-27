@@ -2,11 +2,20 @@
 
 Every kind is a rule, not a model: the same question and seed always give the same variant. A kind that cannot apply to
 a question (no ASCII letters for "fullwidth", no katakana for "katakana_hiragana") gives no variant for it.
+
+"abbreviate" and "synonym_swap" (2026-11-27) use the generic dictionaries of the query pipeline: abbreviate replaces a
+dictionary expansion in the question with its abbreviation (configs/query_rules/abbreviations_ja.json read in reverse,
+育児休業 -> 育休); synonym_swap replaces a term of a group in configs/japanese_business_synonyms.json with another member
+of the group (never with a member on the other side of a negative_mismatch_pair, never with a member that contains
+the term or is contained in it). They measure QUERY_ABBREVIATIONS / QUERY_BUSINESS_SYNONYMS.
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from eval.tenant_eval.stats import clopper_pearson_upper
@@ -15,8 +24,11 @@ from rag_core.ja_text import extract_salient_terms_ja
 
 KINDS = (
     "fullwidth", "spacing", "filler", "casual_ending", "typo_swap", "typo_drop", "katakana_hiragana", "punctuation",
-    "keywords_only",
+    "keywords_only", "abbreviate", "synonym_swap",
 )
+_REPO = Path(__file__).resolve().parents[2]
+ABBREVIATIONS_PATH = _REPO / "configs" / "query_rules" / "abbreviations_ja.json"
+SYNONYMS_PATH = _REPO / "configs" / "japanese_business_synonyms.json"
 FILLERS = ("えっと、", "すみません、", "ちょっと教えてほしいのですが、")
 _RUN = re.compile(r"[一-龥ぁ-んァ-ヶ]+")
 _KATAKANA_RUN = re.compile(r"[ァ-ヶー]{3,}")
@@ -94,10 +106,96 @@ def _keywords_only(text: str, seed: str) -> Optional[str]:
     return " ".join(terms) if terms else None
 
 
+@lru_cache(maxsize=4)
+def _abbreviation_pairs(path: str) -> tuple:
+    """((expansion, abbr), ...) as written in the dictionary (not normalized: the question keeps its own form)."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ()
+    pairs = []
+    for entry in data.get("entries") or [] if isinstance(data, dict) else []:
+        if not isinstance(entry, dict) or entry.get("enabled") is False:
+            continue
+        abbr, expansion = str(entry.get("abbr") or "").strip(), str(entry.get("expansion") or "").strip()
+        if len(abbr) >= 2 and expansion and expansion != abbr:
+            pairs.append((expansion, abbr))
+    return tuple(pairs)
+
+
+@lru_cache(maxsize=4)
+def _synonym_groups(path: str) -> tuple:
+    """(groups, mismatch sides) of the generic business dictionary."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return (), ()
+    groups = []
+    for group in data.get("synonym_groups") or []:
+        if isinstance(group, dict):
+            terms = [str(t).strip() for t in [group.get("canonical"), *(group.get("terms") or [])] if str(t or "").strip()]
+            if len(set(terms)) >= 2:
+                groups.append(tuple(dict.fromkeys(terms)))
+    sides = []
+    for pair in data.get("negative_mismatch_pairs") or []:
+        if isinstance(pair, dict):
+            sides.append((tuple(pair.get("left") or ()), tuple(pair.get("right") or ())))
+    return tuple(groups), tuple(sides)
+
+
+def _occurrences(text: str, terms) -> List[str]:
+    """Terms found in the text, longest first, skipping a term inside a longer one already found."""
+    found: List[str] = []
+    for term in sorted(set(terms), key=lambda t: (-len(t), t)):
+        if term and term in text and not any(term in longer for longer in found):
+            found.append(term)
+    return found
+
+
+def _abbreviate(text: str, seed: str) -> Optional[str]:
+    pairs = _abbreviation_pairs(str(ABBREVIATIONS_PATH))
+    by_expansion: Dict[str, List[str]] = {}
+    for expansion, abbr in pairs:
+        by_expansion.setdefault(expansion, []).append(abbr)
+    hits = _occurrences(text, by_expansion)
+    if not hits:
+        return None
+    expansion = sorted(hits)[_pick(text, "abbreviate", seed, len(hits))]
+    abbrs = sorted(by_expansion[expansion])
+    abbr = abbrs[_pick(text + expansion, "abbreviate", seed, len(abbrs))]
+    return text.replace(expansion, abbr, 1)
+
+
+def _crosses(term: str, replacement: str, sides) -> bool:
+    for left, right in sides:
+        for a, b in ((left, right), (right, left)):
+            if any(s in term for s in a) and any(s in replacement for s in b):
+                return True
+    return False
+
+
+def _synonym_swap(text: str, seed: str) -> Optional[str]:
+    groups, sides = _synonym_groups(str(SYNONYMS_PATH))
+    options = []
+    for term in _occurrences(text, {t for g in groups for t in g if len(t) >= 2}):
+        for group in groups:
+            if term not in group:
+                continue
+            for other in group:
+                if other == term or other in term or term in other or other in text or _crosses(term, other, sides):
+                    continue
+                options.append((term, other))
+    if not options:
+        return None
+    term, other = sorted(set(options))[_pick(text, "synonym_swap", seed, len(set(options)))]
+    return text.replace(term, other, 1)
+
+
 _RULES = {
     "fullwidth": _fullwidth, "spacing": _spacing, "filler": _filler, "casual_ending": _casual_ending,
     "typo_swap": _typo_swap, "typo_drop": _typo_drop, "katakana_hiragana": _katakana_hiragana,
-    "punctuation": _punctuation, "keywords_only": _keywords_only,
+    "punctuation": _punctuation, "keywords_only": _keywords_only, "abbreviate": _abbreviate,
+    "synonym_swap": _synonym_swap,
 }
 
 

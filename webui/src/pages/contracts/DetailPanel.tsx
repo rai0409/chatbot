@@ -6,6 +6,7 @@ import { dateTime } from "../../lib/format";
 import { jaContracts as c } from "../../i18n/contracts";
 import { useLoad } from "../../lib/useLoad";
 import { IntegrationOff, daysText, displayValue, failureText, integrationOffReason, kindText, type Notice } from "./helpers";
+import { Dialog } from "../../components/Dialog";
 
 interface Props {
   tenant: string;
@@ -217,12 +218,11 @@ function DraftDialog({ deadline, busy, onCreate, onCancel }: { deadline: Deadlin
   const [mailbox, setMailbox] = useState("");
   const ok = mailbox.trim().length > 0;
   return (
-    <div role="dialog" aria-modal="true" aria-labelledby="draft-title" className="dialog">
-      <h2 id="draft-title">{c.draftTitle}</h2>
+    <Dialog title={c.draftTitle} onCancel={onCancel} busy={busy}>
       <p>{kindText(deadline.kind, deadline.label)}</p>
       <label>
         {c.draftMailbox}
-        <input type="email" value={mailbox} onChange={(e) => setMailbox(e.target.value)} maxLength={320} autoComplete="off" autoFocus />
+        <input type="email" value={mailbox} onChange={(e) => setMailbox(e.target.value)} maxLength={320} autoComplete="off" data-autofocus />
       </label>
       <p className="muted">{c.draftHelp}</p>
       <button type="button" disabled={busy || !ok} onClick={() => onCreate(mailbox.trim())}>
@@ -231,6 +231,6 @@ function DraftDialog({ deadline, busy, onCreate, onCancel }: { deadline: Deadlin
       <button type="button" onClick={onCancel}>
         {c.cancel}
       </button>
-    </div>
+    </Dialog>
   );
 }

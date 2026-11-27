@@ -93,6 +93,16 @@
 - `build_key(..., principal_digest="")`: 利用者ごとに見える文書が違う検索（ACL）を入れるときは、
   **呼び出し側が利用者の権限のダイジェストを必ず渡す**。渡さないと、ある利用者だけが読める文書から作った
   回答が同じテナントの別の利用者に返る。
+- 2026-11-27: `/chat` と `/chat/stream` は `answer_cache.access_scope_digest(api_auth)` を `principal_digest` に渡す。
+  今の検索はテナント単位（メールは全員から除外）なので値は空で、テナント内で 1 件を共有する。
+  `MAIL_SEARCH_ENABLED` または `RETRIEVAL_ACL_SCOPED=1` のときは、認証情報の `acl_principals` / `principals` /
+  `groups` のダイジェストがキーに入り、権限の違う利用者は別のエントリになる。権限が分からない利用者の回答は
+  キャッシュを読まず書かない（`chat_cache_skip_total{access_scope_unknown}`）。
+- テナントの回答方針の `allow_llm_calls` もキーに入る。「LLM を使わない」に切り替えたテナントに、
+  それ以前に LLM が書いた回答は返らない。
+- キャッシュの各エントリは内部の `_origin`（作った要求の `request_id`、索引世代、キーの要約）を持ち、応答には出さない。
+  キャッシュから返した応答には新しい `request_id` を付け、根拠記録（`docs/operations/answer_evidence.md`）の
+  `origin_request_id` が元の要求を指す。
 - Redis のキーは `ac:<tenant>:<sha256>`。`answer_cache.clear_tenant(tenant_id)` でそのテナントだけ消す
   （`clear()` は全体）。承認済み QA の変更で呼ばれる。
 - `ANSWER_CACHE_STATE_MEMO_MS`: キーの元になるファイル状態・設定の要約を保持する時間（既定 `APP_ENV=production`

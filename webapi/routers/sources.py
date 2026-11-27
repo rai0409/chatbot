@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from rag_core import change_ledger as source_changes, source_apply, source_registry, source_sync
+from rag_core import change_ledger as source_changes, ingest_input_guard, source_apply, source_registry, source_sync
 from webapi import admin_common
 from webapi.admin_auth import require_admin_auth, require_scope
 
@@ -61,6 +61,14 @@ def _owned_source(source_id: str, scope) -> Dict[str, Any]:
     return record
 
 
+def _check_root_tenant(path, tenant_id: str) -> None:
+    # A folder source must not cover other tenants' uploads or source mirrors (ingest_input_guard).
+    try:
+        ingest_input_guard.check_path(path, tenant_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
 def _source_row(record: Dict[str, Any]) -> Dict[str, Any]:
     # Never the server path or the options of the source.
     row = {key: record[key] for key in ("source_id", "tenant_id", "kind", "collection", "schedule_minutes", "enabled", "state")}
@@ -94,9 +102,7 @@ def sources_create(req: SourceCreateRequest, request: Request = None, _admin_aut
     scope = _request_scope(request)
     require_scope(scope, req.tenant_id)
     if req.kind == "folder" and req.path:
-        from webapi.routers.ingestion import _check_upload_tenant
-
-        _check_upload_tenant([req.path], req.tenant_id)
+        _check_root_tenant(req.path, req.tenant_id)
     try:
         record = source_registry.create(
             req.source_id, tenant_id=req.tenant_id, kind=req.kind, path=req.path, options=req.options,
@@ -112,6 +118,8 @@ def sources_create(req: SourceCreateRequest, request: Request = None, _admin_aut
 def sources_scan(source_id: str, request: Request = None, _admin_auth: None = Depends(require_admin_auth)):
     scope = _request_scope(request)
     record = _owned_source(source_id, scope)
+    # Re-checked on every scan: a source registered before this rule existed may cover other tenants' folders.
+    _check_root_tenant(source_registry.root_of(record), record["tenant_id"])
     try:
         result = source_sync.scan_source(source_id)
     except Exception as exc:  # noqa: BLE001 - a connector failure is reported without its details

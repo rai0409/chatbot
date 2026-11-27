@@ -50,6 +50,14 @@ class QuotaExceeded(RuntimeError):
         self.limit, self.scope, self.allowed, self.used = limit, scope, allowed, used
 
 
+class UsageRecordingFailed(QuotaExceeded):
+    """Usage is not being recorded (llm_usage.recording_healthy): with a limit configured the use cannot be counted,
+    so the call is refused (fail closed) instead of running unmetered."""
+
+    def __init__(self) -> None:
+        super().__init__("usage_recording", "global", 0.0, 0.0)
+
+
 def _zero() -> Dict[str, float]:
     return {"calls": 0, "tokens": 0, "cost": 0.0}
 
@@ -132,8 +140,12 @@ def limit_for(name: str, tenant_id: Optional[str] = None) -> Dict[str, Any]:
     return {"value": env_default(name), "source": "environment"}
 
 
-def set_limit(name: str, value: Optional[float], *, by: str, reason: str, tenant_id: Optional[str] = None) -> Dict[str, Any]:
-    """Set a limit (None removes it, so the next level applies). 0 means no limit."""
+def set_limit(name: str, value: Optional[float], *, by: str, reason: str, tenant_id: Optional[str] = None,
+              within_global: bool = False) -> Dict[str, Any]:
+    """Set a limit (None removes it, so the next level applies). 0 means no limit.
+
+    within_global (a tenant administrator's change): a tenant value may only tighten the installation's value. When a
+    global (or environment) limit is in force, the tenant value must be more than 0 (0 would lift it) and at most it."""
     if name not in LIMITS:
         raise runtime_settings.SettingsError(f"the limit is one of: {', '.join(LIMITS)}")
     if tenant_id and name in GLOBAL_ONLY:
@@ -141,6 +153,11 @@ def set_limit(name: str, value: Optional[float], *, by: str, reason: str, tenant
     if value is not None:
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise runtime_settings.SettingsError("a limit is a number, 0 or more (0 = no limit)")
+        if tenant_id and within_global:
+            ceiling = limit_for(name)["value"]  # the installation's value (global setting, else environment)
+            if ceiling > 0 and (value <= 0 or value > ceiling):
+                raise runtime_settings.SettingsError(
+                    f"a tenant limit must be more than 0 and at most the installation's limit ({ceiling:g})")
     return runtime_settings.set_value(KEY_PREFIX + name, value, by=by, reason=reason, tenant_id=tenant_id)
 
 
@@ -161,10 +178,11 @@ def check(feature: str, tenant_id: str, user: Optional[str], *, now: Optional[da
         return
     clock = now or datetime.now(timezone.utc)
     _fresh(clock)
-    for name, (who, _what) in LIMITS.items():
-        allowed = limit_for(name, tenant_id)["value"]
-        if allowed <= 0:
-            continue
+    in_force = [(name, who, allowed) for name, (who, _what) in LIMITS.items()
+                if (allowed := limit_for(name, tenant_id)["value"]) > 0]
+    if in_force and not llm_usage.recording_healthy():
+        raise UsageRecordingFailed()  # the use is not being counted: a limit could be passed unseen
+    for name, who, allowed in in_force:
         used = _used(name, tenant_id, user)
         if used is not None and used >= allowed:
             raise QuotaExceeded(name, who, allowed, used)
@@ -172,7 +190,10 @@ def check(feature: str, tenant_id: str, user: Optional[str], *, now: Optional[da
 
 def snapshot(tenant_id: Optional[str] = None, *, tenants: Optional[List[str]] = None, now: Optional[datetime] = None,
              top: int = 50) -> Dict[str, Any]:
-    """Today's use against the limits, for the console. `tenants` limits it to an administrator's tenants (None: all)."""
+    """Today's use against the limits, for the console. `tenants` limits it to an administrator's tenants (None: all).
+
+    With `tenants` given (a tenant administrator) the installation-wide use is left out: "global" is {} and no
+    global warning is listed (it would tell one tenant how much all the others use)."""
     clock = now or datetime.now(timezone.utc)
     _fresh(clock)
     warn = float(getattr(config, "LLM_QUOTA_WARN_RATIO", 0.8))
@@ -188,8 +209,12 @@ def snapshot(tenant_id: Optional[str] = None, *, tenants: Optional[List[str]] = 
         base = limit_for(name, tenant_id)
         limits.append({"name": name, "scope": who, "unit": what, "value": base["value"], "source": base["source"],
                        "environment_default": env_default(name)})
+    found = warnings(tenant_rows, user_rows, total, warn)
+    if allowed_tenants is not None:
+        found = [w for w in found if w["scope"] != "global"]
     return {"day_starts_at": _local_day_start(clock).isoformat(), "warn_ratio": warn, "limits": limits, "tenants": tenant_rows,
-            "users": user_rows[:top], "global": total, "warnings": warnings(tenant_rows, user_rows, total, warn)}
+            "users": user_rows[:top], "global": total if allowed_tenants is None else {}, "warnings": found,
+            "usage_recording_healthy": llm_usage.recording_healthy()}
 
 
 def warnings(tenant_rows: Dict[str, Dict[str, float]], user_rows: List[Dict[str, Any]], total: Dict[str, float], warn: float) -> List[Dict[str, Any]]:

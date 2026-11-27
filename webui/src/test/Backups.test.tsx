@@ -98,6 +98,7 @@ describe("the backup page", () => {
   it("shows a clear message to an administrator who is not allowed", async () => {
     routes({ "GET /admin/backups": () => jsonResponse({ detail: "x" }, 403) });
     render(<BackupsPage />);
-    expect(await screen.findByText("バックアップの情報を取得できませんでした。")).toBeInTheDocument();
+    // A 403 keeps the screen's sentence and says why (lib/useLoad.ts).
+    expect(await screen.findByText("バックアップの情報を取得できませんでした: 権限がありません。")).toBeInTheDocument();
   });
 });

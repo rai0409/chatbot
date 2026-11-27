@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { t } from "../i18n/ja";
+import { Dialog } from "./Dialog";
 
 interface Props {
   title: string;
@@ -19,8 +20,7 @@ export function ReasonDialog({ title, label = t.system.reasonLabel, help = t.sys
   const [text, setText] = useState("");
   const ok = !required || text.trim().length > 0;
   return (
-    <div role="dialog" aria-modal="true" aria-labelledby="dialog-title" className="dialog">
-      <h2 id="dialog-title">{title}</h2>
+    <Dialog title={title} onCancel={onCancel} busy={busy}>
       <label>
         {label}
         <textarea value={text} onChange={(e) => setText(e.target.value)} maxLength={300} rows={3} />
@@ -32,6 +32,6 @@ export function ReasonDialog({ title, label = t.system.reasonLabel, help = t.sys
       <button type="button" onClick={onCancel}>
         {t.system.cancel}
       </button>
-    </div>
+    </Dialog>
   );
 }

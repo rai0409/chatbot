@@ -6,6 +6,7 @@ import { useLoad } from "../../lib/useLoad";
 import { ErrorState, Loading } from "../../components/Feedback";
 import { amount, Notice } from "./common";
 import { LimitForm } from "./LimitForm";
+import { TenantInput } from "../../components/TenantInput";
 
 const l = j.limits;
 
@@ -183,7 +184,7 @@ export function LimitsTab() {
       <form className="toolbar" onSubmit={apply}>
         <label>
           {l.tenantFilter}
-          <input type="text" value={tenantInput} maxLength={64} autoComplete="off" aria-describedby="lm-tenant-help" onChange={(e) => setTenantInput(e.target.value)} />
+          <TenantInput value={tenantInput} aria-describedby="lm-tenant-help" onChange={(e) => setTenantInput(e.target.value)} />
         </label>
         <button type="submit">{l.tenantApply}</button>
       </form>

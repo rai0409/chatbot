@@ -5,8 +5,6 @@ import logging
 from threading import Lock
 from typing import Any, Dict, Optional
 
-import chromadb
-
 import config
 from rag_core import embedding_provider
 
@@ -23,18 +21,47 @@ _CLIENT_CACHE: Dict[str, Any] = {}
 _CLIENT_LOCK = Lock()
 
 
+def __getattr__(name: str):
+    # chromadb is imported on first use, so a Qdrant-only deployment never loads
+    # it; ``store.chromadb`` still resolves (tests patch its PersistentClient).
+    if name == "chromadb":
+        import chromadb
+
+        return chromadb
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def _get_persistent_client(path: str):
     with _CLIENT_LOCK:
         client = _CLIENT_CACHE.get(path)
         if client is None:
+            import chromadb
+
             client = chromadb.PersistentClient(path=path)
             _CLIENT_CACHE[path] = client
         return client
 
 
 def reset_vectorstore_clients() -> None:
+    """Close and forget the cached Chroma clients (shutdown, tests, CLIs).
+
+    chromadb >= 1.x releases the shared system (SQLite handles) when the last
+    client of a path is closed; older clients without close() are only dropped.
+    """
     with _CLIENT_LOCK:
+        clients = list(_CLIENT_CACHE.values())
         _CLIENT_CACHE.clear()
+        for client in clients:
+            close = getattr(client, "close", None)
+            if close is None:
+                continue
+            try:
+                close()
+            except Exception:  # noqa: BLE001 - shutdown must close the remaining clients
+                logger.warning("closing a Chroma client failed", exc_info=True)
+
+
+close_vectorstore_clients = reset_vectorstore_clients
 
 # Legacy collections without a fingerprint stamp already warned about, keyed by
 # collection name, so the warning is emitted once per process instead of per query.

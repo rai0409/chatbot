@@ -43,7 +43,7 @@ def sha256_of(path: Path, *, chunk: int = 1024 * 1024) -> str:
 class ScanResult:
     manifest: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     skipped: Dict[str, Any] = field(default_factory=lambda: {
-        "unsupported": 0, "hidden": 0, "symlink": 0, "too_large": [], "unreadable": []})
+        "unsupported": 0, "hidden": 0, "symlink": 0, "protected": 0, "too_large": [], "unreadable": []})
     hashed: int = 0  # files read and hashed during this scan
 
 
@@ -54,16 +54,24 @@ def _skip_name(name: str) -> bool:
 def scan_folder(
     root: Path, *, previous: Optional[Mapping[str, Mapping[str, Any]]] = None, extensions: Optional[Iterable[str]] = None,
     size_limit: Optional[int] = None, hasher: Callable[[Path], str] = sha256_of,
-    force_rehash: bool = False,
+    force_rehash: bool = False, exclude: Optional[Iterable[Path]] = None,
 ) -> ScanResult:
     """relative posix path -> {"size", "mtime_ns", "sha256"} of the supported files under root.
 
     Default fast mode reuses a previous SHA when size and mtime match; this
     does NOT guarantee detecting same-metadata content changes. Registered source
     synchronization requests force_rehash=True for reliable ingest decisions.
-    A missing or unmounted directory raises SourceUnavailable, never an empty scan."""
+    A missing or unmounted directory raises SourceUnavailable, never an empty scan.
+
+    `exclude` (default: the per-tenant upload and mirror folders, see ingest_input_guard) are folders the walk
+    never enters from above, so a scan of an ancestor folder cannot reach other tenants' documents."""
     if not root.is_dir():
         raise SourceUnavailable("the source folder is not available")
+    if exclude is None:
+        from rag_core import ingest_input_guard
+
+        exclude = ingest_input_guard.protected_roots()
+    excluded = {Path(p).resolve() for p in exclude}
     allowed = frozenset(e.lower().lstrip(".") for e in (extensions or supported_extensions()))
     limit = size_limit or max_file_bytes()
     previous = previous or {}
@@ -76,6 +84,8 @@ def scan_folder(
                 result.skipped["hidden"] += 1
             elif (here / name).is_symlink():
                 result.skipped["symlink"] += 1
+            elif (here / name).resolve() in excluded:
+                result.skipped["protected"] += 1
             else:
                 kept_dirs.append(name)
         dirs[:] = kept_dirs

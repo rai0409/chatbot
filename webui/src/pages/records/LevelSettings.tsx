@@ -5,6 +5,8 @@ import { ReasonDialog } from "../../components/ReasonDialog";
 import { jaRecords } from "../../i18n/records";
 import { useLoad } from "../../lib/useLoad";
 import { failureText } from "./errors";
+import { Dialog } from "../../components/Dialog";
+import { TenantInput } from "../../components/TenantInput";
 
 const r = jaRecords.level;
 const rank = (level: RecordLevel) => LEVELS.indexOf(level);
@@ -193,13 +195,13 @@ function LevelDialog({
   }
 
   return (
-    <form role="dialog" aria-modal="true" aria-labelledby="level-dialog-title" className="dialog" onSubmit={submit}>
-      <h2 id="level-dialog-title">{title}</h2>
+    <Dialog title={title} onCancel={onCancel} busy={busy}>
+      <form onSubmit={submit}>
       {target.askTenant && (
         <>
           <label className="block" style={{ display: "flex", flexDirection: "column" }}>
             {r.tenantId}
-            <input value={tenant} maxLength={64} onChange={(e) => setTenant(e.target.value)} />
+            <TenantInput value={tenant} onChange={(e) => setTenant(e.target.value)} />
           </label>
           <p className="muted">{r.tenantIdHelp}</p>
         </>
@@ -234,6 +236,7 @@ function LevelDialog({
       <button type="button" onClick={onCancel}>
         {jaRecords.common.cancel}
       </button>
-    </form>
+      </form>
+    </Dialog>
   );
 }

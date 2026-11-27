@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Sequence
 
+from rag_core.secure_compare import same_secret
 from rag_core.source_metadata import bounded_safe_string, normalize_citation, normalize_source_metadata, normalize_source_pages
 
 
@@ -114,7 +115,7 @@ def verify_feedback_token(token: str, tenant_id: str | None, *, now: float | Non
     _version, nonce, expires_text, signature = parts
     tenant = str(tenant_id or "default").strip() or "default"
     expected = _token_signature(secret, nonce, int(expires_text), tenant)
-    if not hmac.compare_digest(expected, signature):
+    if not same_secret(expected, signature):
         return "invalid"
     if (time.time() if now is None else now) > int(expires_text):
         return "expired"

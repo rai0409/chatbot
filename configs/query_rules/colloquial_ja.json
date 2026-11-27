@@ -1,6 +1,6 @@
 {
-  "version": "colloquial-ja-v2",
-  "description": "Query cleanup rules applied after index normalization (lower case, NFKC). Patterns are Python regular expressions applied in order, repeated up to 3 times. Verb endings such as できますか are kept (removing ますか would leave a verb stem). Tenants may add rules in configs/query_rules/tenants/<tenant_id>.json with the same keys. Entries may also be objects {\"type\": \"rewrite\", \"pattern\": ..., \"replace\": ...} (a substitution; loaders that only know string rules skip them). The rewrite rules turn a colloquial definition question (VPNってなに) into the formal form (VPNとは) before the って rule would strip it to vpnなに. Both 〜 and ~ (NFKC of ～) are accepted as the elongation mark.",
+  "version": "colloquial-ja-v3",
+  "description": "Query cleanup rules applied after index normalization (lower case, NFKC). Patterns are Python regular expressions applied in order, repeated up to 3 times. Verb endings such as できますか are kept (removing ますか would leave a verb stem). Tenants may add rules in configs/query_rules/tenants/<tenant_id>.json with the same keys. Entries may also be objects {\"type\": \"rewrite\", \"pattern\": ..., \"replace\": ...} (a substitution; loaders that only know string rules skip them). The rewrite rules turn a colloquial definition question (VPNってなに) into the formal form (VPNとは) before the って rule would strip it to vpnなに. Both 〜 and ~ (NFKC of ～) are accepted as the elongation mark. The top-level \"rewrite\" list (colloquial-ja-v3, 2026-11-27) is what rag_core/query_preprocess.py applies before stripping (re.sub, first match per rule): how-to questions become \"Xの手順\", \"Xしたいんだけど\" becomes X, \"Xってどこ\" becomes \"Xの場所\", \"Xできるの?\" keeps \"Xできる\" and \"Xのやり方\" becomes \"Xの方法\". The rewrites run only on the retrieval query (approved-QA matching does not use them). Negations (できない), formal questions (Xはどこですか) and quoted terms are left alone; tests/test_query_ja_improvements_20261127.py has positive and negative cases for each rule.",
   "strip_prefix": [
     "^(?:あの|あのー|えっと|えーと|ええと|ちょっと|すみません|すいません|すみませんが|質問です|質問なんですが)[、,。\\s]*",
     "^(?:お疲れ様です|お疲れさまです|おつかれさまです|お世話になります|お世話になっております|こんにちは|こんばんは|おはようございます)[、,。\\s]*",
@@ -28,5 +28,32 @@
     },
     "(?<=[一-龥ァ-ヴーa-z0-9])(?<![送持待言行作取使払貼知買売立入切乗残守直戻])って(?=(?:何|なに|なん|いつ|どこ|どう|誰|だれ|いくら|何時|どの|どれ|どっち))",
     "(?:なんでした|なんだった|でした|だった)(?:か)?[?？。!！\\s]*$"
+  ],
+  "rewrite": [
+    {
+      "name": "howto_to_procedure",
+      "pattern": "^(?P<x>[^\\s「」].*?)(?<!けど)(?<!けれど)(?<!が)(?<!」)(?:するには|には|って|は|を)?\\s*(?:どう(?:やる|やれば|すれば|やったら|したら)(?:いい|良い|よい)?(?:の|んですか|んだっけ|のかな|かな)?|どうやるの)[?？。!！\\s]*$",
+      "replace": "\\g<x>の手順"
+    },
+    {
+      "name": "want_to_do",
+      "pattern": "^(?P<x>[^\\s「」].*?)(?:を|が)?したい(?:んだけど|んですけど|んですが|のですが|けど)[、,。?？!！\\s]*$",
+      "replace": "\\g<x>"
+    },
+    {
+      "name": "where_is",
+      "pattern": "^(?P<x>[^\\s「」].*?)(?<!」)って(?:どこ)(?:にある|にあります|で(?:もらえる|もらえます))?(?:の|んですか|ですか|でしょうか|かな|んだっけ|だっけ)?[?？。!！\\s]*$",
+      "replace": "\\g<x>の場所"
+    },
+    {
+      "name": "can_i_plain",
+      "pattern": "^(?P<x>[^\\s「」].*?)できる(?:の|んですか|んだっけ|のかな|かな)[?？。!！\\s]*$",
+      "replace": "\\g<x>できる"
+    },
+    {
+      "name": "yarikata_to_houhou",
+      "pattern": "(?<=[^\\s「」])のやり方(?=(?:を|が|は|って)?(?:教えて|おしえて|知りたい|[?？。!！\\s]|$))",
+      "replace": "の方法"
+    }
   ]
 }

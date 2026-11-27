@@ -24,6 +24,7 @@ import os
 import re
 import tempfile
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, Optional
@@ -137,7 +138,8 @@ def delete_mail(tenant: str, collection: str, *, source_doc: str = "", message_i
     owner = ij.get_collection(target)
     if owner is not None and owner["owner_tenant"] != tenant:
         raise PermissionError("collection is owned by another tenant")
-    with ij._collection_write_lock(target):
+    # A committing call writes the state store: a backup must not copy it half-written (maintenance lock).
+    with (ij.maintenance_shared() if commit else nullcontext()), ij._collection_write_lock(target):
         state = load_mail_state(tenant, target)
         plan = plan_mail_deletion(state, tenant, source_doc=source_doc, message_id=message_id)
         if commit and plan["found"]:
@@ -208,7 +210,8 @@ def run_mail_job(
         elif not execute or not rows:
             record.update({"status": "ok", "ok": True, "nothing_to_write": not rows})
         else:
-            with ij._collection_write_lock(target):
+            # The maintenance lock first (as the document jobs): a backup never sees a half-written collection.
+            with ij.maintenance_shared(), ij._collection_write_lock(target):
                 # Repeat ownership validation under the lock, then fail closed
                 # on backend connection errors BEFORE claiming a collection.
                 _validate(inputs, tenant, target)

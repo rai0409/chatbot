@@ -121,8 +121,10 @@ def test_parent_and_neighbor_cannot_reintroduce_mail(tmp_path, monkeypatch):
         def get(self, where):
             return {"ids": ["tenant:email:abc:h1", "p2"], "documents": ["private", "public neighbor"],
                     "metadatas": [
-                        {"tenant_id": "acme", "type": "pdf", "doc_id": "pub.pdf", "chunk_index": 2},
-                        {"id": "p2", "tenant_id": "acme", "type": "pdf", "doc_id": "pub.pdf", "chunk_index": 2},
+                        # Neighbors are siblings of the seed's section (same parent_chunk_id, 2026-11-27).
+                        {"tenant_id": "acme", "type": "pdf", "doc_id": "pub.pdf", "chunk_index": 2, "parent_chunk_id": "parent"},
+                        {"id": "p2", "tenant_id": "acme", "type": "pdf", "doc_id": "pub.pdf", "chunk_index": 2,
+                         "parent_chunk_id": "parent"},
                     ]}
 
     monkeypatch.setattr(retrieval.store, "get_vectorstore", lambda **kw: FakeStore())

@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 import config
 from rag_core import embedding_provider
 from rag_core import vector_backend
+from rag_core import llm_usage
 from rag_core.audit_log import write_failure_count
 from rag_core.qa import distance_guard_calibration
 from rag_core.retrieval import keyword_index_status
@@ -221,7 +222,7 @@ def require_metrics_access(request: Request) -> None:
     # Production: /metrics needs "Authorization: Bearer <METRICS_TOKEN>".
     if not production_guard.is_production():
         return
-    import hmac
+    from rag_core.secure_compare import same_secret
 
     expected = str(os.getenv("METRICS_TOKEN", "")).strip()
     header = str(request.headers.get("authorization") or "")
@@ -230,7 +231,7 @@ def require_metrics_access(request: Request) -> None:
         raise HTTPException(status_code=503, detail="metrics token is not configured")
     if not provided:
         raise HTTPException(status_code=401, detail="metrics authentication required")
-    if not hmac.compare_digest(provided, expected):
+    if not same_secret(provided, expected):
         raise HTTPException(status_code=403, detail="invalid metrics credentials")
 
 
@@ -255,6 +256,11 @@ def metrics(format: Optional[str] = None, _metrics_auth: None = Depends(require_
         # Audit writes that failed (disk full, permissions): alert on > 0.
         payload["counters"] = dict(payload["counters"])
         payload["counters"]["audit_write_failures_total"] = {"total": audit_failures}
+    usage_failures = llm_usage.write_failure_count()
+    if usage_failures:
+        # LLM usage lines that could not be written: the daily limits are computed from them (alert on > 0).
+        payload["counters"] = dict(payload["counters"])
+        payload["counters"]["llm_usage_write_failures_total"] = {"total": usage_failures}
     ops_raw = os.getenv("METRICS_OPS_STATE")
     if ops_raw is None or not ops_raw.strip() or config._get_bool("METRICS_OPS_STATE", default=True):
         payload["ops"] = ops_state()

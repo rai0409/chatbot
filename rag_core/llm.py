@@ -184,6 +184,11 @@ def complete(
     def request(chat_client: Any, profile: llm_profiles.Profile) -> Any:
         limit = int(max_tokens or profile.max_tokens or getattr(config, "LLM_FEATURE_MAX_TOKENS", 512))
         timeout = float(profile.timeout_seconds or getattr(config, "CHAT_COMPLETION_TIMEOUT_SECONDS", 30.0))
+        # The SDK's own retries are off (as in qa._create_chat_completion): this loop is the only retry policy, so
+        # one call costs at most `attempts` requests of `timeout` each. Only this request's clone is changed.
+        with_options = getattr(chat_client, "with_options", None)
+        if callable(with_options):
+            chat_client = with_options(max_retries=0)
         for attempt in range(attempts):
             try:
                 return chat_client.chat.completions.create(

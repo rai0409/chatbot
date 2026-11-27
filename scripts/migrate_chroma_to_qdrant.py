@@ -30,43 +30,58 @@ from rag_core.vector_backend import QdrantCollection
 
 def migrate(collection_name: str, *, target_name: Optional[str] = None, batch: int = 256, dry_run: bool = False) -> Dict[str, Any]:
     client = chromadb.PersistentClient(path=config.VECTORSTORE_DIR)
-    source = client.get_collection(name=collection_name)
-    total = int(source.count())
-    target = QdrantCollection(target_name or collection_name)
-    copied = 0
-    offset = 0
-    while offset < total:
-        res = source.get(limit=batch, offset=offset, include=["documents", "metadatas", "embeddings"])
-        ids: List[str] = list(res.get("ids") or [])
-        if not ids:
-            break
-        embeddings = res.get("embeddings")
-        if embeddings is None or len(embeddings) != len(ids):
-            raise RuntimeError("chroma returned rows without embeddings; cannot migrate without re-embedding")
+    try:
+        source = client.get_collection(name=collection_name)
+        total = int(source.count())
+        target = QdrantCollection(target_name or collection_name)
+        copied = 0
+        offset = 0
+        while offset < total:
+            res = source.get(limit=batch, offset=offset, include=["documents", "metadatas", "embeddings"])
+            ids: List[str] = list(res.get("ids") or [])
+            if not ids:
+                break
+            embeddings = res.get("embeddings")
+            if embeddings is None or len(embeddings) != len(ids):
+                raise RuntimeError("chroma returned rows without embeddings; cannot migrate without re-embedding")
+            if not dry_run:
+                target.upsert(
+                    ids=ids,
+                    documents=list(res.get("documents") or [""] * len(ids)),
+                    embeddings=[list(map(float, e)) for e in embeddings],
+                    metadatas=list(res.get("metadatas") or [{}] * len(ids)),
+                )
+            copied += len(ids)
+            offset += len(ids)
+        metadata = {k: v for k, v in dict(source.metadata or {}).items() if not str(k).startswith("hnsw:")}
         if not dry_run:
-            target.upsert(
-                ids=ids,
-                documents=list(res.get("documents") or [""] * len(ids)),
-                embeddings=[list(map(float, e)) for e in embeddings],
-                metadatas=list(res.get("metadatas") or [{}] * len(ids)),
-            )
-        copied += len(ids)
-        offset += len(ids)
-    metadata = {k: v for k, v in dict(source.metadata or {}).items() if not str(k).startswith("hnsw:")}
-    if not dry_run:
-        target.modify(metadata=metadata)
-    target_count = target.count() if not dry_run else None
-    report = {
-        "source": collection_name,
-        "target": target.name,
-        "source_count": total,
-        "copied": copied,
-        "target_count": target_count,
-        "dry_run": dry_run,
-        "metadata_keys": sorted(metadata),
-    }
-    report["ok"] = dry_run or target_count == total
-    return report
+            target.modify(metadata=metadata)
+        target_count = target.count() if not dry_run else None
+        report = {
+            "source": collection_name,
+            "target": target.name,
+            "source_count": total,
+            "copied": copied,
+            "target_count": target_count,
+            "dry_run": dry_run,
+            "metadata_keys": sorted(metadata),
+        }
+        report["ok"] = dry_run or target_count == total
+        return report
+    finally:
+        close = getattr(client, "close", None)
+        if close is not None:
+            close()  # chromadb >= 1.x: releases the SQLite handles of the source store
+
+
+def _close_vector_clients() -> None:
+    """Close the cached Qdrant / Chroma clients (embedded mode releases its lock)."""
+    vector_backend = sys.modules.get("rag_core.vector_backend")
+    if vector_backend is not None:
+        vector_backend.close_clients()
+    store = sys.modules.get("rag_core.store")
+    if store is not None:
+        store.reset_vectorstore_clients()
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -76,7 +91,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--batch", type=int, default=256)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
-    report = migrate(args.collection, target_name=args.target, batch=args.batch, dry_run=args.dry_run)
+    try:
+        report = migrate(args.collection, target_name=args.target, batch=args.batch, dry_run=args.dry_run)
+    finally:
+        _close_vector_clients()
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["ok"] else 1
 

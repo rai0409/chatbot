@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -62,7 +63,6 @@ from webapi.routers import infra as infra_router
 from webapi.routers.admin_core import (
     _ADMIN_LOGIN_LIMITER,
     AdminLoginRequest,
-    _load_review_items,
     admin_home_page,
     admin_login,
     admin_login_page,
@@ -170,6 +170,30 @@ def _warm_cross_encoder() -> None:
         logging.warning("cross-encoder warm-up failed", exc_info=True)
 
 
+def _start_conversation_purge() -> Optional["asyncio.Task[None]"]:
+    """Apply the conversation retention to every owner periodically, not only when the same person writes again."""
+    from webapi import conversation_store
+
+    if not conversation_store.conversation_history_enabled():
+        return None
+    try:
+        interval = max(60, int(os.getenv("CONVERSATION_PURGE_INTERVAL_SECONDS", "3600")))
+    except ValueError:
+        interval = 3600
+
+    async def _loop() -> None:
+        while True:
+            try:
+                removed = await asyncio.to_thread(conversation_store.purge_all)
+                if removed:
+                    logging.info("conversation retention purge removed %s", removed)
+            except Exception:  # noqa: BLE001 - a failed purge is retried at the next interval
+                logging.exception("conversation retention purge failed")
+            await asyncio.sleep(interval)
+
+    return asyncio.get_running_loop().create_task(_loop())
+
+
 @asynccontextmanager
 async def _lifespan(_app):
     # Stage 14: jobs of a process that was stopped (deploy, crash) are marked
@@ -190,6 +214,14 @@ async def _lifespan(_app):
     except Exception:  # noqa: BLE001 - never block startup on the job registry
         logging.exception("operation recovery failed")
     _warm_cross_encoder()
+    try:
+        # Approved answers whose cited source document is no longer served are not answered from (fail open when unknown).
+        from rag_core.approved_qa_exact_lookup import install_default_source_doc_exists_check
+
+        install_default_source_doc_exists_check()
+    except Exception:  # noqa: BLE001 - never block startup on an optional check
+        logging.exception("approved QA source check registration failed")
+    purge_task = _start_conversation_purge()
     try:
         from webapi import mail_ingestion_jobs
 
@@ -213,10 +245,21 @@ async def _lifespan(_app):
     except Exception:  # noqa: BLE001
         logging.exception("distance guard calibration check failed")
     yield
+    if purge_task is not None:
+        purge_task.cancel()
     try:
+        # Waits up to INGEST_SHUTDOWN_GRACE_SECONDS for running jobs, so their upserts finish before the clients close.
         ingestion_jobs.shutdown(wait=False)
     finally:
-        state_backend.close_all()
+        try:
+            from rag_core import store, vector_backend
+
+            vector_backend.close_clients()
+            store.reset_vectorstore_clients()  # closes cached Chroma clients; imports no chromadb in Qdrant-only mode
+        except Exception:  # noqa: BLE001  shutdown must still close the shared state connections
+            logging.exception("closing vector store clients failed")
+        finally:
+            state_backend.close_all()
 
 
 app = FastAPI(
@@ -227,6 +270,30 @@ app = FastAPI(
 )
 # Request body size limit and security headers on every response.
 app.add_middleware(HardeningMiddleware)
+
+
+class _StaticGZipMiddleware:
+    """Gzip only the console's static files (the bundle is ~560 KB raw, ~160 KB gzip).
+
+    API responses are left uncompressed on purpose: they can carry tokens next to user-controlled text, which a
+    compressed response leaks by size (BREACH). Server-sent events are excluded by GZipMiddleware itself.
+    """
+
+    _PREFIXES = ("/console/", "/static/")
+
+    def __init__(self, app_: object) -> None:
+        from starlette.middleware.gzip import GZipMiddleware
+
+        self._plain = app_
+        self._gzip = GZipMiddleware(app_, minimum_size=1024)
+
+    async def __call__(self, scope, receive, send) -> None:
+        path = str(scope.get("path") or "") if scope.get("type") == "http" else ""
+        target = self._gzip if path.startswith(self._PREFIXES) else self._plain
+        await target(scope, receive, send)
+
+
+app.add_middleware(_StaticGZipMiddleware)
 # The routes that live in routers (webapi/routers), one module per area.
 app.include_router(system_router.router)
 app.include_router(console_router.router)
@@ -360,16 +427,19 @@ def admin_review_action(req: ReviewActionRequest, request: Request = None, _admi
         raise HTTPException(status_code=400, detail="invalid action_type")
     if status_after is not None and status_after not in ALLOWED_STATUS_AFTER:
         raise HTTPException(status_code=400, detail="invalid status_after")
-    queued = [
-        item for item in _load_review_items(limit=500)["items"] if str(item.get("review_id") or "") == review_id
-    ]
-    if queued and all(str(item.get("tenant_id") or "default") != (req.tenant_id or "default") for item in queued):
-        raise HTTPException(status_code=403, detail="review item belongs to another tenant")
-    # Stage 15: the item's own tenant (the queue), not only the request body.
+    # Stage 15: the item's own tenant (the queue), not only the request body. The whole queue is searched
+    # (no row cap): an item past a cap would otherwise skip the tenant check.
+    from webapi.routers.admin_core import review_item_tenants
+
     scope = _request_scope(request)
     require_scope(scope, req.tenant_id or "default")
-    for item in queued:
-        require_scope(scope, item.get("tenant_id") or "default")
+    queued_tenants = review_item_tenants(review_id)
+    if not queued_tenants:
+        raise HTTPException(status_code=404, detail="review item not found")
+    if (req.tenant_id or "default") not in queued_tenants:
+        raise HTTPException(status_code=403, detail="review item belongs to another tenant")
+    for tenant in queued_tenants:
+        require_scope(scope, tenant)
 
     event = build_review_action_event(
         review_id=review_id,

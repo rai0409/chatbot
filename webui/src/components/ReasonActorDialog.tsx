@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { rememberActor, storedActor } from "../lib/actor";
+import { Dialog } from "./Dialog";
 
 interface Props {
   title: string;
@@ -21,6 +22,7 @@ export function ReasonActorDialog({ title, body, confirmLabel, cancelLabel, reas
   const [reason, setReason] = useState("");
   const [actor, setActor] = useState(storedActor);
   const [problem, setProblem] = useState("");
+  const reasonId = useId();
 
   function submit() {
     if ((!reasonOptional && !reason.trim()) || !actor.trim()) return setProblem(needBoth);
@@ -29,13 +31,12 @@ export function ReasonActorDialog({ title, body, confirmLabel, cancelLabel, reas
   }
 
   return (
-    <div role="dialog" aria-modal="true" aria-labelledby="rad-title" className="dialog">
-      <h2 id="rad-title">{title}</h2>
+    <Dialog title={title} onCancel={onCancel} busy={busy}>
       {body && <p>{body}</p>}
       {!reasonOptional && (
         <div>
-          <label htmlFor="rad-reason">{reasonLabel}</label>
-          <textarea id="rad-reason" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} rows={2} />
+          <label htmlFor={reasonId}>{reasonLabel}</label>
+          <textarea id={reasonId} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} rows={2} />
         </div>
       )}
       <label>
@@ -53,6 +54,6 @@ export function ReasonActorDialog({ title, body, confirmLabel, cancelLabel, reas
       <button type="button" disabled={busy} onClick={onCancel}>
         {cancelLabel}
       </button>
-    </div>
+    </Dialog>
   );
 }

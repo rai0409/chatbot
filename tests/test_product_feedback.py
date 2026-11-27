@@ -37,6 +37,8 @@ def test_chat_feedback_good_feedback_returns_ok_and_writes_jsonl(monkeypatch, tm
         "feedback_token": "fb-token-1",
         "feedback_type": "good",
         "stored": True,
+        # 2026-11-27: no server evidence record for this request id.
+        "linked": False,
     }
     lines = _feedback_path(tmp_path).read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1

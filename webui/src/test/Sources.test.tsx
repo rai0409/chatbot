@@ -142,7 +142,9 @@ describe("the sources page: scan, plan, history", () => {
     page();
     fireEvent.click(await screen.findByRole("button", { name: "計画: manuals" }));
     const region = await screen.findByRole("region", { name: /計画: manuals/ });
-    expect(region).toHaveTextContent(SHA);
+    // The fingerprint is shortened for reading; the whole value stays in the title (what the server compares).
+    expect(region).toHaveTextContent(SHA.slice(0, 12));
+    expect(within(region).getByTitle(SHA)).toBeInTheDocument();
     expect(within(region).getByRole("note")).toHaveTextContent("承認するまで反映されません");
     expect(region).toHaveTextContent("削除（12）");
   });
@@ -154,8 +156,8 @@ describe("the sources page: scan, plan, history", () => {
     });
     page();
     fireEvent.click(await screen.findByRole("button", { name: "履歴: policies" }));
-    const row = await screen.findByRole("row", { name: /apply/ });
-    expect(row).toHaveTextContent("applied");
+    const row = await screen.findByRole("row", { name: /^3 .*反映/ }); // the kind is translated ("apply" → 反映)
+    expect(row).toHaveTextContent("status: applied");
     expect(screen.getByText("履歴を表示しました")).toBeInTheDocument();
   });
 });
@@ -201,7 +203,7 @@ describe("the sources page: apply, hold and approval", () => {
     fireEvent.click(within(confirmDelete).getByRole("button", { name: "反映" }));
     const dialog = await screen.findByText(/変更が大きいため保留されています（削除の割合が大きすぎます）/);
     expect(calls(mock, "POST /admin/sources/manuals/approve")).toHaveLength(0);
-    fireEvent.click(within(dialog.closest("[role=dialog]") as HTMLElement).getByRole("button", { name: "承認して反映する" }));
+    fireEvent.click(within(dialog.closest("dialog") as HTMLElement).getByRole("button", { name: "承認して反映する" }));
     expect(await screen.findByText(/承認して反映しました/)).toBeInTheDocument();
     expect(calls(mock, "POST /admin/sources/manuals/approve")[0].body).toEqual({ plan_sha256: SHA });
     const applies = calls(mock, "POST /admin/sources/manuals/apply");
@@ -231,7 +233,7 @@ describe("the sources page: apply, hold and approval", () => {
     page();
     fireEvent.click(await screen.findByRole("button", { name: "反映: manuals" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "承認して反映する" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("承認できませんでした（the plan changed");
+    expect(await screen.findByRole("alert")).toHaveTextContent("承認できませんでした: the plan changed");
     expect(calls(mock, "POST /admin/sources/manuals/apply")).toHaveLength(1);
   });
 });

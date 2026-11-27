@@ -1,0 +1,7 @@
+# pip-audit advisories that CI ignores (scripts/check_audit_ignores.py; policy: docs/operations/ci_gates.md).
+# One advisory per line, tab-separated: id, package, reason, expires (YYYY-MM-DD), reviewer role.
+# An expired entry fails CI: re-review it (extend with a new date and reason) or remove it after upgrading.
+PYSEC-2026-311	chromadb	no fixed release; affects only the Chroma server API (/api/v2/...); the app uses the embedded PersistentClient and never runs or exposes a Chroma server	2027-02-28	security-reviewer
+PYSEC-2026-3813	chromadb	no fixed release; affects only the Chroma server API (/api/v2/...); the app uses the embedded PersistentClient and never runs or exposes a Chroma server	2027-02-28	security-reviewer
+PYSEC-2026-3814	chromadb	no fixed release; affects only the Chroma server API (/api/v2/...); the app uses the embedded PersistentClient and never runs or exposes a Chroma server	2027-02-28	security-reviewer
+PYSEC-2026-3815	chromadb	no fixed release; affects only the Chroma server API (/api/v2/...); the app uses the embedded PersistentClient and never runs or exposes a Chroma server	2027-02-28	security-reviewer

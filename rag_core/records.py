@@ -147,11 +147,26 @@ def _text(value: Any) -> str:
     return mask_emails(str(value or ""))[:MAX_TEXT]
 
 
+# Citation fields kept in a record. Chat citations carry source_pages (schemas.CitationOut); "page" is the legacy
+# single-page form and is still accepted. Free text (supporting_sentences) is not kept.
+_CITATION_FIELDS = (
+    "number", "source_doc", "source_pages", "page", "chunk_id", "member_chunk_ids", "status",
+    "chunk_sha256", "doc_checksum", "index_generation",
+)
+_MAX_CITATION_IDS = 20
+
+
 def _citations(items: Any) -> List[Dict[str, Any]]:
     out = []
     for item in list(items or [])[:MAX_CITATIONS]:
-        if isinstance(item, Mapping):
-            out.append({k: item.get(k) for k in ("source_doc", "page", "chunk_id", "status") if item.get(k) is not None})
+        if not isinstance(item, Mapping):
+            continue
+        kept = {k: item.get(k) for k in _CITATION_FIELDS if item.get(k) is not None}
+        for key in ("source_pages", "member_chunk_ids"):
+            if key in kept:
+                value = kept[key]
+                kept[key] = list(value)[:_MAX_CITATION_IDS] if isinstance(value, (list, tuple)) else [value]
+        out.append(kept)
     return out
 
 

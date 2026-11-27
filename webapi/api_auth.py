@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from fastapi import HTTPException, Request
+
+from rag_core.secure_compare import same_secret
 
 from webapi import metrics_registry
 from webapi.admin_auth import enforce_admin_token
@@ -108,8 +109,7 @@ def _key_fingerprint(key: str) -> str:
 
 
 def _same_secret(a: str, b: str) -> bool:
-    # compare_digest raises TypeError for non-ASCII str (a 500); bytes never do.
-    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+    return same_secret(a, b)
 
 
 def _allowed_tenants_for_key(provided: str, tenant_map: dict[str, frozenset[str]]) -> frozenset[str]:

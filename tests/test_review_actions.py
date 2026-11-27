@@ -14,6 +14,17 @@ def _actions_path(tmp_path):
     return tmp_path / "runs" / "review" / "review_actions.jsonl"
 
 
+@pytest.fixture(autouse=True)
+def _review_queue(monkeypatch, tmp_path):
+    # The action route refuses review ids that are not in the queue (404), so the queued items exist.
+    monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
+    queue = tmp_path / "runs" / "review" / "review_queue.jsonl"
+    queue.parent.mkdir(parents=True, exist_ok=True)
+    rows = [{"review_id": "review-1", "tenant_id": "tenant-a"}]
+    rows += [{"review_id": f"review-{n}", "tenant_id": "default"} for n in range(2, 8)]
+    queue.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
 def test_valid_approve_candidate_action_returns_ok_and_writes_jsonl(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
 
