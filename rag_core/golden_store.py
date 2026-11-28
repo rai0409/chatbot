@@ -40,25 +40,40 @@ def _path(tenant_id: str, *, deleted: bool = False) -> Path:
     return golden_dir() / f"{tenant_id}{'.deleted' if deleted else ''}.jsonl"
 
 
-def _load(path: Path) -> List[Dict[str, Any]]:
+def _load(path: Path, *, for_write: bool = False) -> List[Dict[str, Any]]:
+    """The cases of a file. Reading skips unreadable lines; for_write refuses the file instead (GoldenError), because
+    the rewrite would drop them silently (as approved_qa_store does)."""
     rows: List[Dict[str, Any]] = []
     if not path.exists():
         return rows
+    bad = 0
     for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
         try:
             row = json.loads(line)
         except ValueError:
+            bad += 1
             continue
         if isinstance(row, dict):
             rows.append(row)
+        else:
+            bad += 1
+    if bad and for_write:
+        raise GoldenError(f"the golden question file has {bad} unreadable line(s): fix or restore the file first "
+                          "(nothing was changed)")
     return rows
 
 
 def _save(path: Path, rows: List[Dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text("".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in rows), encoding="utf-8")
-    os.replace(tmp, path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}-{uuid.uuid4().hex}.tmp")  # unique per writer (threads too)
+    try:
+        tmp.write_text("".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in rows), encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def _now(now: Optional[datetime]) -> str:
@@ -92,7 +107,7 @@ def create(tenant_id: str, row: Mapping[str, Any], *, by: str, origin: str = "ma
     case = _checked(data)
     path = _path(tenant_id)
     with audit_log._FileLock(path):
-        rows = _load(path)
+        rows = _load(path, for_write=True)
         if any(r.get("case_id") == case["case_id"] for r in rows):
             raise GoldenError(f"case '{case['case_id']}' already exists")
         stamp = _now(now)
@@ -106,7 +121,7 @@ def update(tenant_id: str, case_id: str, changes: Mapping[str, Any], *, by: str,
            now: Optional[datetime] = None) -> Dict[str, Any]:
     path = _path(tenant_id)
     with audit_log._FileLock(path):
-        rows = _load(path)
+        rows = _load(path, for_write=True)
         index = next((i for i, r in enumerate(rows) if r.get("case_id") == case_id), None)
         if index is None:
             raise GoldenError(f"case '{case_id}' not found")
@@ -125,13 +140,14 @@ def delete(tenant_id: str, case_id: str, *, by: str, now: Optional[datetime] = N
     """Move the case to the tenant's file of deleted cases."""
     path = _path(tenant_id)
     with audit_log._FileLock(path):
-        rows = _load(path)
+        rows = _load(path, for_write=True)
         gone = next((r for r in rows if r.get("case_id") == case_id), None)
         if gone is None:
             raise GoldenError(f"case '{case_id}' not found")
-        _save(path, [r for r in rows if r is not gone])
         trash = _path(tenant_id, deleted=True)
-        _save(trash, _load(trash) + [{**gone, "deleted_by": str(by)[:100], "deleted_at": _now(now)}])
+        deleted = _load(trash, for_write=True)  # read before anything is written: a refused trash file changes nothing
+        _save(trash, deleted + [{**gone, "deleted_by": str(by)[:100], "deleted_at": _now(now)}])
+        _save(path, [r for r in rows if r is not gone])
 
 
 def promote_record(tenant_id: str, record: Mapping[str, Any], *, by: str, case_id: Optional[str] = None,

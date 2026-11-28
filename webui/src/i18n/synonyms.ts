@@ -18,6 +18,8 @@ export const jaSynonyms = {
   colCanonical: "正規形",
   colSynonyms: "同義語候補",
   colMethod: "抽出方法",
+  methods: { embedding: "意味の近さ", normalized_form: "表記ゆれ", cooccurrence: "共起", abbreviation: "略語" } as Record<string, string>,
+  tokenSection: "管理トークンを使う（通常は不要）",
   colStatus: "状態",
   colActions: "操作",
   separator: "、",

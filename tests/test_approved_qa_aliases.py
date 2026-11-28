@@ -166,7 +166,8 @@ def test_alias_chat_mode_audit_and_no_llm_or_retrieval(monkeypatch, tmp_path):
     assert response["retrieved"] == [] and response["retrieval_required"] is False
     assert response["llm_used"] is False
     event = events[0][1]
-    assert event["request_id"] == event["trace_id"] == "trace-alias"
+    # 2026-11-27: the request id is server-generated; the client trace id is kept separately.
+    assert event["trace_id"] == "trace-alias" and event["request_id"] not in {None, "", "trace-alias"}
     assert event["answer_mode"] == "approved_alias_match"
     assert event["normalized_input_question"] == "承認alias?"
     assert event["matched_alias"] == "承認alias？"

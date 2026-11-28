@@ -80,3 +80,12 @@ A release bundle (a tagged git revision) must include:
 - [ ] Mail ingestion runs on a single node when `INGESTION_REGISTRY_BACKEND=postgres` (mail state is node-local).
 - [ ] Conversation clients send `source_docs` with saved turns; `CONVERSATION_RETENTION_DAYS` decided for old turns.
 - [ ] Legacy untyped rows stamped with `scripts/stamp_legacy_types.py` before promotion (not `PROMOTION_ALLOW_UNTYPED`).
+
+## CI and branch protection (2026-11)
+
+- Protect `main`: pull request required, required status check **`test`** (the CI job), branch up to date, no bypass.
+  The job's final step fails when any gated step fails; the step ids, the skip allowlist and the audit-ignore policy
+  are in `docs/operations/ci_gates.md`.
+- A release is cut only from a commit whose `test` check passed. Ignored pip-audit advisories
+  (`security/pip-audit-ignore.txt`) carry an expiry date; an expired entry fails CI and must be re-reviewed before the
+  release.

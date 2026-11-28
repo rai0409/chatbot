@@ -4,7 +4,9 @@ import json
 import os
 import re
 import unicodedata
-from dataclasses import dataclass
+import dataclasses
+import hashlib
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -18,6 +20,25 @@ class Chunk:
     score: Optional[float] = None
     # Ids of the retrieved chunks merged into this one (merge_by_page).
     member_ids: Tuple[str, ...] = ()
+    # Version evidence of the source row (index_generation, doc_checksum, doc_version, collection) when known.
+    # Not part of equality or hashing.
+    meta: Optional[Dict[str, Any]] = field(default=None, compare=False, hash=False)
+
+
+# Retrieval metadata carried to citations as version evidence.
+CHUNK_EVIDENCE_META_KEYS = ("index_generation", "doc_checksum", "doc_version", "collection", "source_row_sha256")
+
+
+def _merged_meta(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    # Keep a value only when both merged chunks agree on it (one page of one document normally does).
+    if not a or not b:
+        return None
+    out = {k: v for k, v in a.items() if b.get(k) == v}
+    return out or None
+
+
+def text_sha256(text: str) -> str:
+    return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
 
 
 def _nfkc(text: str) -> str:
@@ -95,6 +116,7 @@ def merge_by_page(chunks: Sequence[Chunk], max_chars: int = MERGE_MAX_CHARS) -> 
                 source_pages=prev.source_pages,
                 score=score,
                 member_ids=members,
+                meta=_merged_meta(prev.meta, ch.meta),
             )
             continue
         out.append(ch)
@@ -112,7 +134,22 @@ def _neutralize_evidence(text: str) -> str:
     return _FORGED_TAG_RE.sub(lambda m: m.group(0).replace("[", "［").replace("]", "］"), text)
 
 
-def build_evidence_blocks(chunks: Sequence[Chunk], max_chars: int = 1200) -> List[str]:
+EVIDENCE_BLOCK_MAX_CHARS = 1200
+
+
+def truncate_to_evidence(chunks: Sequence[Chunk], max_chars: int = EVIDENCE_BLOCK_MAX_CHARS) -> List[Chunk]:
+    """The chunks cut to what build_evidence_blocks shows the model (same limit), so output validation, grounding
+    verification, supporting sentences and citation hashes never rely on text the model did not see."""
+    out: List[Chunk] = []
+    for ch in chunks:
+        text = ch.text.strip()
+        if len(text) > max_chars:
+            ch = dataclasses.replace(ch, text=text[: max_chars - 1])
+        out.append(ch)
+    return out
+
+
+def build_evidence_blocks(chunks: Sequence[Chunk], max_chars: int = EVIDENCE_BLOCK_MAX_CHARS) -> List[str]:
     blocks = []
     for idx, ch in enumerate(chunks, start=1):
         text = _neutralize_evidence(ch.text.strip().replace("\n", " "))
@@ -435,6 +472,16 @@ def build_citation_payloads(answer: str, chunks: Sequence[Chunk]) -> List[Dict]:
                 # Every retrieved chunk merged into this evidence block.
                 "member_chunk_ids": list(ch.member_ids or (ch.id,)),
                 "supporting_sentences": _supporting_sentences(answer, ch, sid),
+                # Version evidence: the hash of the cited block text and the source row versions when known.
+                "chunk_sha256": text_sha256(ch.text),
+                "doc_checksum": _meta_str(ch, "doc_checksum"),
+                "index_generation": _meta_str(ch, "index_generation"),
+                "collection": _meta_str(ch, "collection"),
             }
         )
     return payloads
+
+
+def _meta_str(ch: Chunk, key: str) -> Optional[str]:
+    value = (ch.meta or {}).get(key)
+    return str(value) if value not in (None, "") else None

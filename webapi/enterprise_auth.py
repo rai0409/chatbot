@@ -25,12 +25,13 @@ from __future__ import annotations
 # Reads process environment via os.getenv (same pattern as webapi.api_auth);
 # it never opens or parses the .env file.
 
-import hmac
 import os
 from collections.abc import Mapping
 from typing import Optional
 
 from fastapi import HTTPException
+
+from rag_core.secure_compare import same_secret
 
 from webapi import metrics_registry
 from webapi.api_auth import (
@@ -106,7 +107,7 @@ def resolve_enterprise_auth(headers: Mapping[str, str] | None) -> Optional[ApiAu
     if not trust:
         _record_auth_rejection("enterprise_trust_missing")
         raise HTTPException(status_code=401, detail="enterprise auth trust signal required")
-    if not hmac.compare_digest(str(trust), configured):
+    if not same_secret(str(trust), configured):
         _record_auth_rejection("enterprise_trust_invalid")
         raise HTTPException(status_code=403, detail="invalid enterprise auth trust signal")
 
@@ -119,7 +120,7 @@ def resolve_enterprise_auth(headers: Mapping[str, str] | None) -> Optional[ApiAu
     tenant_map = _parse_tenant_map(raw_map)
     allowed: frozenset[str] = frozenset()
     for identity_key, tenants in tenant_map.items():
-        if hmac.compare_digest(enterprise_tenant, _normalize_tenant(identity_key)):
+        if same_secret(enterprise_tenant, _normalize_tenant(identity_key)):
             allowed = allowed | tenants
     if not allowed:
         _record_auth_rejection("enterprise_tenant_unmapped")

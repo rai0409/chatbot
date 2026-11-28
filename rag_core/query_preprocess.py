@@ -8,9 +8,19 @@
    a tenant may add rules in configs/query_rules/tenants/<tenant_id>.json.
    Every rule written with 〜 also matches ~ (NORMALIZATION_PROFILE=index)
 3. numeric tokens: handled by the keyword lane (KEYWORD_NUMERIC_TOKENS)
-4. synonym expansion from the tenant's approved RAG profile dictionary only
-   (config/rag_profiles/<id>/exported/synonyms.json, enabled entries); terms
-   of up to 3 characters must be a whole query term, not a substring
+3b. abbreviations (QUERY_ABBREVIATIONS, default off): generic pairs in
+   configs/query_rules/abbreviations_ja.json plus the tenant's "abbreviations"
+   key in configs/query_rules/tenants/<tenant_id>.json (育休 -> 育児休業, and the
+   reverse for bidirectional entries). Short abbreviations must be a whole
+   query term and are ignored inside a longer dictionary term in the query
+4. synonym expansion from the tenant's approved RAG profile dictionary
+   (config/rag_profiles/<id>/exported/synonyms.json, enabled entries); with
+   QUERY_BUSINESS_SYNONYMS (default off) the generic groups of
+   configs/japanese_business_synonyms.json are merged in (a profile group owns
+   its terms) and its negative_mismatch_pairs suppress an expansion that
+   would cross to the opposite intent. Terms of up to 3 characters must be a
+   whole query term, not a substring. Abbreviations and synonyms share one
+   cap of expansions
 5. dictionary typo correction: a query token that is not in the keyword
    index vocabulary OF THE TENANT gets that tenant's index terms at edit
    distance 1 (2 for long tokens)
@@ -24,7 +34,8 @@ expansions weigh less in BM25 and in the embedding).
 
 On by default; config.query_preprocess_enabled() is the single switch
 (QUERY_PREPROCESS_ENABLED=false restores the raw query). Measure on the bench
-slices colloquial / typo / short when changing the rules.
+slices colloquial / abbreviation / typo / short when changing the rules, and
+with scripts/tenant_eval.py --perturb (docs/operations/query_normalization_ja.md).
 """
 
 from __future__ import annotations
@@ -217,10 +228,230 @@ def strip_colloquial(text: str, *, tenant_id: str = "default", rewrite: bool = F
     return out.strip(), applied
 
 
+# --- cached rule files -----------------------------------------------------------------
+
+
+_FILE_CACHE_LOCK = Lock()
+_FILE_CACHE: Dict[Tuple[str, str], Tuple[Tuple, Any]] = {}
+
+
+def _file_state(path: str) -> Tuple:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return ("missing",)
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _cached_file(path: str, parse) -> Any:
+    """parse(path), reused until the file's mtime or size changes (an edited dictionary applies without a restart)."""
+    key = (path, getattr(parse, "__name__", repr(parse)))
+    state = _file_state(path)
+    with _FILE_CACHE_LOCK:
+        hit = _FILE_CACHE.get(key)
+        if hit is not None and hit[0] == state:
+            return hit[1]
+    value = parse(path)
+    with _FILE_CACHE_LOCK:
+        _FILE_CACHE[key] = (state, value)
+    return value
+
+
+def _read_json(path: str) -> Optional[Any]:
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:  # a broken dictionary must not break every query; logged once per file state
+        logger.warning("query dictionary skipped (%s): %s", path, exc)
+        return None
+
+
+# --- 3b. abbreviations -------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Abbreviation:
+    abbr: str
+    expansion: str
+    bidirectional: bool = True
+
+
+def _parse_abbreviation_entries(raw: Any) -> List[Tuple[str, Optional[Abbreviation]]]:
+    """[(abbr, entry or None for a disabled one)] of an "entries" / "abbreviations" list."""
+    out: List[Tuple[str, Optional[Abbreviation]]] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        abbr = normalize_for_index(str(item.get("abbr") or "")).strip()
+        expansion = normalize_for_index(str(item.get("expansion") or "")).strip()
+        if not abbr or len(abbr) < 2:  # 1-character abbreviations are never safe
+            continue
+        if item.get("enabled") is False:
+            out.append((abbr, None))
+            continue
+        if not expansion or expansion == abbr:
+            continue
+        out.append((abbr, Abbreviation(abbr, expansion, bool(item.get("bidirectional", True)))))
+    return out
+
+
+def _parse_abbreviation_file(path: str) -> Tuple[Tuple[str, Optional[Abbreviation]], ...]:
+    data = _read_json(path)
+    if not isinstance(data, dict):
+        return ()
+    # The global file uses "entries"; a tenant's query-rule file uses "abbreviations" next to its colloquial rules.
+    return tuple(_parse_abbreviation_entries(data.get("entries", data.get("abbreviations"))))
+
+
+def abbreviation_files(tenant_id: str = "default") -> List[str]:
+    """The global dictionary, then the tenant's query-rule file (same validation as the colloquial rules)."""
+    return [str(RULES_DIR / "abbreviations_ja.json"), *_rule_files(tenant_id)[1:]]
+
+
+def abbreviation_entries(tenant_id: str = "default") -> Tuple[Abbreviation, ...]:
+    """The effective entries: a tenant entry replaces the global one with the same abbr ({"enabled": false} drops it)."""
+    merged: Dict[Tuple[str, str], Optional[Abbreviation]] = {}
+    for path in abbreviation_files(tenant_id):
+        tenant_file = path != str(RULES_DIR / "abbreviations_ja.json")
+        if tenant_file:
+            overridden = {abbr for abbr, _entry in _cached_file(path, _parse_abbreviation_file)}
+            merged = {k: v for k, v in merged.items() if k[0] not in overridden}
+        for abbr, entry in _cached_file(path, _parse_abbreviation_file):
+            merged[(abbr, entry.expansion if entry else "")] = entry
+    return tuple(entry for entry in merged.values() if entry is not None)
+
+
+def _present_surfaces(query: str, surfaces: Sequence[str], tokens: Optional[Set[str]]) -> Set[str]:
+    """Dictionary surfaces that occur in the query on their own.
+
+    Longer surfaces claim their characters first, so 在宅 inside 在宅勤務 or 時短 inside 時短勤務 is not a separate
+    hit; surfaces of up to 3 characters must also be a whole query term (マイナ is not in マイナス)."""
+    claimed = [False] * len(query)
+    found: Set[str] = set()
+    for surface in sorted(set(s for s in surfaces if s), key=lambda s: (-len(s), s)):
+        start = 0
+        while True:
+            at = query.find(surface, start)
+            if at < 0:
+                break
+            start = at + 1
+            if any(claimed[at : at + len(surface)]):
+                continue
+            if not _surface_at(surface, query, at):
+                continue
+            for i in range(at, at + len(surface)):
+                claimed[i] = True
+            found.add(surface)
+    return found
+
+
+def expand_abbreviations(
+    query: str, *, tenant_id: str = "default", entries: Optional[Sequence[Abbreviation]] = None,
+    limit: Optional[int] = None,
+) -> List[str]:
+    """Expansions for the abbreviations in the query (and abbreviations for expansions, when bidirectional)."""
+    query = normalize_for_index(query or "")
+    entries = abbreviation_entries(tenant_id) if entries is None else entries
+    cap = _MAX_SYNONYM_EXPANSIONS if limit is None else max(0, int(limit))
+    if not entries or not query or cap == 0:
+        return []
+    surfaces = [s for e in entries for s in (e.abbr, e.expansion)]
+    tokens = _query_term_set(query) if any(len(s) <= _SHORT_TERM_MAX_CHARS for s in surfaces) else None
+    present = _present_surfaces(query, surfaces, tokens)
+    out: List[str] = []
+    for entry in entries:
+        if entry.abbr in present and entry.expansion not in query:
+            term = entry.expansion
+        elif entry.bidirectional and entry.expansion in present and entry.abbr not in query:
+            term = entry.abbr
+        else:
+            continue
+        if term not in out:
+            out.append(term)
+        if len(out) >= cap:
+            break
+    return out
+
+
 # --- 4. synonyms ---------------------------------------------------------------------
 
 
-def _synonym_groups(rag_profile_id: Optional[str]) -> List[List[str]]:
+# None: rag_core.japanese_normalizer.DEFAULT_SYNONYM_CONFIG (tests may point this at a fixture).
+BUSINESS_SYNONYMS_PATH: Optional[str] = None
+
+
+def _parse_business_synonyms(path: str) -> Tuple[Tuple[Tuple[str, ...], ...], Tuple[Tuple[Tuple[str, ...], Tuple[str, ...]], ...]]:
+    from rag_core.japanese_normalizer import load_japanese_business_synonyms
+
+    try:
+        cfg = load_japanese_business_synonyms(path)
+    except ValueError as exc:
+        logger.warning("business synonyms skipped: %s", exc)
+        return (), ()
+    # The loader returns only the groups and the pairs; the expansion-only exclusions are read from the file itself.
+    raw = _read_json(path)
+    options = raw.get("query_expansion") if isinstance(raw, dict) else None
+    excluded = {
+        normalize_for_index(str(t)).strip()
+        for t in ((options or {}).get("exclude_terms") or [] if isinstance(options, dict) else [])
+    }
+    groups: List[Tuple[str, ...]] = []
+    for entry in cfg.get("synonym_groups") or []:
+        if not isinstance(entry, dict):
+            continue
+        terms = [entry.get("canonical"), *(entry.get("terms") or [])]
+        normalized = list(dict.fromkeys(normalize_for_index(str(t)).strip() for t in terms if str(t or "").strip()))
+        normalized = [t for t in normalized if t and t not in excluded]
+        if len(normalized) >= 2:
+            groups.append(tuple(normalized))
+    pairs: List[Tuple[Tuple[str, ...], Tuple[str, ...]]] = []
+    for pair in cfg.get("negative_mismatch_pairs") or []:
+        if not isinstance(pair, dict):
+            continue
+        sides = []
+        for key in ("left", "right"):
+            raw = pair.get(key) if isinstance(pair.get(key), list) else []
+            sides.append(tuple(t for t in (normalize_for_index(str(x or "")).strip() for x in raw) if t))
+        if sides[0] and sides[1]:
+            pairs.append((sides[0], sides[1]))
+    return tuple(groups), tuple(pairs)
+
+
+def business_synonyms() -> Tuple[Tuple[Tuple[str, ...], ...], Tuple[Tuple[Tuple[str, ...], Tuple[str, ...]], ...]]:
+    """(groups, negative_mismatch_pairs) of the generic business dictionary, index-normalized, cached by mtime."""
+    from rag_core.japanese_normalizer import DEFAULT_SYNONYM_CONFIG
+
+    return _cached_file(str(BUSINESS_SYNONYMS_PATH or DEFAULT_SYNONYM_CONFIG), _parse_business_synonyms)
+
+
+def merge_synonym_groups(profile_groups: Sequence[Sequence[str]], generic_groups: Sequence[Sequence[str]]) -> List[List[str]]:
+    """Profile groups, then the generic groups that share no term with any profile group (the profile owns its
+    terms: a tenant that grouped 退職 differently is not overridden). Identical groups are kept once."""
+    out = [list(dict.fromkeys(g)) for g in profile_groups]
+    owned = {t for g in out for t in g}
+    seen = {frozenset(g) for g in out}
+    for group in generic_groups:
+        terms = list(dict.fromkeys(t for t in group if t))
+        key = frozenset(terms)
+        if len(terms) < 2 or key in seen or owned & key:
+            continue
+        seen.add(key)
+        out.append(terms)
+    return out
+
+
+def crosses_mismatch(term: str, query: str, pairs) -> bool:
+    """Whether adding term would cross a negative mismatch pair: the term is on one side, the query hits the other
+    side and nothing of the term's side (扶養に入る must not be expanded with 扶養から外れる)."""
+    for left, right in pairs or ():
+        for side, other in ((left, right), (right, left)):
+            if any(s in term for s in side) and any(s in query for s in other) and not any(s in query for s in side):
+                return True
+    return False
+
+
+def _profile_synonym_groups(rag_profile_id: Optional[str]) -> List[List[str]]:
     from rag_core.profile_loader import is_valid_rag_profile_id, load_rag_profile
 
     profile_id = rag_profile_id or "default"
@@ -237,47 +468,96 @@ def _synonym_groups(rag_profile_id: Optional[str]) -> List[List[str]]:
     return groups
 
 
+def _synonym_groups(rag_profile_id: Optional[str]) -> List[List[str]]:
+    groups = _profile_synonym_groups(rag_profile_id)
+    if not _flag("QUERY_BUSINESS_SYNONYMS", False):
+        return groups
+    return merge_synonym_groups(groups, business_synonyms()[0])
+
+
 _SHORT_TERM_MAX_CHARS = 3
 
 
-def _query_term_set(query: str) -> Set[str]:
-    from rag_core import ja_terms
+# ASCII identifiers include punctuation used in product names and versions.
+_ASCII_ID = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._:/-")
+_JAPANESE_WORD = re.compile(r"[一-龥々〆〤ぁ-んァ-ヴー]")
+_LEFT_PARTICLES = frozenset("のをがはにでとへもや")
+_RIGHT_PARTICLES = ("について", "に関して", "から", "まで", "より", "とは", "って", "の", "を", "が", "は", "に", "で", "と", "へ", "も", "や")
 
+
+def _query_term_set(query: str) -> Set[str]:
+    """ASCII tokens for legacy callers; dictionary matching uses explicit boundaries."""
     norm = normalize_for_index(query or "")
-    terms = set(ja_terms.content_terms(norm, "auto"))
-    terms.update(re.findall(r"[a-z0-9][a-z0-9._:/-]*", norm))
-    return terms
+    return set(re.findall(r"[a-z0-9][a-z0-9._:/-]*", norm))
+
+
+def _surface_at(term: str, query: str, at: int) -> bool:
+    end = at + len(term)
+    before = query[at - 1] if at else ""
+    after = query[end] if end < len(query) else ""
+    if term[0].isascii() and term[0].isalnum() and before in _ASCII_ID:
+        return False
+    if term[-1].isascii() and term[-1].isalnum() and after in _ASCII_ID:
+        return False
+    if len(term) <= _SHORT_TERM_MAX_CHARS and not term.isascii():
+        if before and _JAPANESE_WORD.fullmatch(before) and before not in _LEFT_PARTICLES:
+            return False
+        if after and _JAPANESE_WORD.fullmatch(after) and not query[end:].startswith(_RIGHT_PARTICLES):
+            if not ("ぁ" <= term[-1] <= "ん" and re.fullmatch(r"[一-龥々〆〤]", after)):
+                return False
+    return True
 
 
 def term_in_query(term: str, query: str, tokens: Optional[Set[str]] = None) -> bool:
-    """Whether a synonym term occurs in the query.
+    """Match a normalized dictionary surface without invoking a tokenizer.
 
-    Terms of up to 3 characters must be a whole query term (content term or
-    alphanumeric token): a substring test let "it" match "edit" and "pc" match
-    "npc". Longer terms keep the substring test."""
+    Japanese short words require conservative particle or punctuation boundaries;
+    this does not attempt general Japanese word segmentation.
+    """
+    term, query = normalize_for_index(term or ""), normalize_for_index(query or "")
     if not term:
         return False
-    if len(term) > _SHORT_TERM_MAX_CHARS:
-        return term in query
-    if term not in query:
-        return False
-    return term in (tokens if tokens is not None else _query_term_set(query))
+    start = 0
+    while (at := query.find(term, start)) >= 0:
+        if _surface_at(term, query, at):
+            return True
+        start = at + 1
+    return False
 
 
-def expand_synonyms(query: str, *, rag_profile_id: Optional[str] = None) -> List[str]:
+def expand_synonyms(
+    query: str, *, rag_profile_id: Optional[str] = None, limit: Optional[int] = None, exclude: Sequence[str] = (),
+) -> List[str]:
+    """Synonym expansions; limit is the room left in the shared cap, exclude the expansions already made."""
+    cap = _MAX_SYNONYM_EXPANSIONS if limit is None else max(0, min(int(limit), _MAX_SYNONYM_EXPANSIONS))
+    if cap == 0:
+        return []
+    query = normalize_for_index(query or "")
+    business = _flag("QUERY_BUSINESS_SYNONYMS", False)
+    generic, pairs = business_synonyms() if business else ((), ())
+    generic_keys = {frozenset(g) for g in generic}
+    taken = set(exclude)
     expansions: List[str] = []
-    tokens: Optional[Set[str]] = None
-    for group in _synonym_groups(rag_profile_id):
-        if any(t and len(t) <= _SHORT_TERM_MAX_CHARS for t in group) and tokens is None:
-            tokens = _query_term_set(query)
-        if not any(term_in_query(term, query, tokens) for term in group):
+    groups = _synonym_groups(rag_profile_id)
+    present = _present_surfaces(query, [term for group in groups for term in group], None)
+    for group in groups:
+        matched = [term for term in group if term in present]
+        if not matched:
             continue
+        is_generic = frozenset(group) in generic_keys
         for term in group:
-            if term not in query and term not in expansions:
-                expansions.append(term)
-        if len(expansions) >= _MAX_SYNONYM_EXPANSIONS:
+            if term in query or term in expansions or term in taken:
+                continue
+            if pairs and crosses_mismatch(term, query, pairs):
+                continue
+            # A generic group mixes synonyms with narrower compounds (パスワード / パスワード再設定, 精算 / 経費精算);
+            # a compound of the matched term would narrow the question to one of its sub-topics, so it is not added.
+            if is_generic and any(m in term for m in matched):
+                continue
+            expansions.append(term)
+        if len(expansions) >= cap:
             break
-    return expansions[:_MAX_SYNONYM_EXPANSIONS]
+    return expansions[:cap]
 
 
 # --- 5. typo correction ------------------------------------------------------------------
@@ -417,8 +697,20 @@ def preprocess_query(
         {"step": "numeric_tokens", "enabled": bool(getattr(config, "KEYWORD_NUMERIC_TOKENS", False))}
     )
 
+    # Abbreviations and synonyms share one cap (_MAX_SYNONYM_EXPANSIONS); the abbreviation step is only traced
+    # while QUERY_ABBREVIATIONS is on.
+    if _flag("QUERY_ABBREVIATIONS", False):
+        abbreviations = expand_abbreviations(result.query, tenant_id=tenant_id)
+        result.expansions.extend(a for a in abbreviations if a not in result.expansions)
+        result.steps.append({"step": "abbreviations", "added": abbreviations})
+
     if _flag("QUERY_SYNONYM_EXPANSION", True):
-        synonyms = expand_synonyms(result.query, rag_profile_id=rag_profile_id)
+        synonyms = expand_synonyms(
+            result.query,
+            rag_profile_id=rag_profile_id,
+            limit=_MAX_SYNONYM_EXPANSIONS - len(result.expansions),
+            exclude=result.expansions,
+        )
         result.expansions.extend(s for s in synonyms if s not in result.expansions)
         result.steps.append({"step": "synonyms", "added": synonyms})
 

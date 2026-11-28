@@ -7,10 +7,14 @@ import { DetailPanel } from "./contracts/DetailPanel";
 import { ImportPanel } from "./contracts/ImportPanel";
 import { IntegrationOff, daysText, failureText, integrationOffReason, kindText, type Notice } from "./contracts/helpers";
 import "./contracts/contracts.css";
+import { Dialog } from "../components/Dialog";
+import { TenantInput } from "../components/TenantInput";
+import { useTenant } from "../lib/tenant";
 
 export function ContractsPage() {
-  const [tenantInput, setTenantInput] = useState("default");
-  const [tenant, setTenant] = useState("default");
+  const chosen = useTenant().tenant || "default";
+  const [tenantInput, setTenantInput] = useState(chosen);
+  const [tenant, setTenant] = useState(chosen);
   const [selected, setSelected] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);
@@ -60,7 +64,7 @@ export function ContractsPage() {
       <div className="toolbar">
         <label>
           {c.tenant}
-          <input value={tenantInput} onChange={(e) => setTenantInput(e.target.value)} maxLength={64} size={14} autoComplete="off" />
+          <TenantInput value={tenantInput} onChange={(e) => setTenantInput(e.target.value)} size={14} />
         </label>
         <button type="button" onClick={applyTenant}>
           {c.reload}
@@ -115,16 +119,15 @@ export function ContractsPage() {
         </section>
       )}
       {confirmSend && (
-        <div role="dialog" aria-modal="true" aria-labelledby="notify-title" className="dialog">
-          <h2 id="notify-title">{c.notifyConfirmTitle}</h2>
+        <Dialog title={c.notifyConfirmTitle} onCancel={() => setConfirmSend(false)} busy={busy}>
           <p>{c.notifyConfirmBody}</p>
           <button type="button" disabled={busy} onClick={() => void runNotify(false)}>
             {c.notifySend}
           </button>{" "}
-          <button type="button" onClick={() => setConfirmSend(false)}>
+          <button type="button" data-autofocus onClick={() => setConfirmSend(false)}>
             {c.cancel}
           </button>
-        </div>
+        </Dialog>
       )}
       <ImportPanel
         tenant={tenant}

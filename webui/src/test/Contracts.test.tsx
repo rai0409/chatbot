@@ -203,7 +203,7 @@ describe("the reminder notification", () => {
     setup(contractsFetch([(url) => (url.endsWith("/notify") ? jsonResponse({ detail: "boom" }, 500) : undefined)]));
     await screen.findAllByRole("row", { name: /保守契約/ });
     fireEvent.click(screen.getByRole("button", { name: "通知の予定を見る（送らない）" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("実行できませんでした: boom");
+    expect(await screen.findByRole("alert")).toHaveTextContent("実行できませんでした: サーバーでエラーが発生しました"); // a 5xx is said in fixed words (lib/errors.ts)
   });
 });
 

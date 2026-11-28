@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { ApiError } from "../../api/client";
 import { overviewApi } from "../../api/overview";
 import { jaOverview } from "../../i18n/overview";
+import { Dialog } from "../../components/Dialog";
 
 const r = jaOverview.revoke;
 const VALID = /^[A-Za-z0-9_-]{6,64}$/;
@@ -64,16 +65,15 @@ export function RevokeIdentity() {
         </p>
       )}
       {asking && (
-        <div role="dialog" aria-modal="true" aria-labelledby="revoke-dialog-title" className="dialog">
-          <h2 id="revoke-dialog-title">{r.title}</h2>
+        <Dialog title={r.title} onCancel={() => setAsking(false)} busy={busy}>
           <p>{r.confirm(value.trim())}</p>
-          <button type="button" disabled={busy} onClick={revoke}>
+          <button type="button" className="danger" disabled={busy} onClick={revoke}>
             {r.ask}
           </button>
-          <button type="button" disabled={busy} onClick={() => setAsking(false)}>
+          <button type="button" data-autofocus disabled={busy} onClick={() => setAsking(false)}>
             {jaOverview.common.cancel}
           </button>
-        </div>
+        </Dialog>
       )}
     </section>
   );

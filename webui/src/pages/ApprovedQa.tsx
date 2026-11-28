@@ -4,10 +4,12 @@ import { PAGE_SIZE, type QaFilter, type QaHistoryRow, type QaRecord, type QaRow,
 import { ReasonActorDialog } from "../components/ReasonActorDialog";
 import { ErrorState, Loading } from "../components/Feedback";
 import { jaApprovedQa as q } from "../i18n/approvedQa";
+import { describeError } from "../lib/errors";
 import { dateTime, number } from "../lib/format";
 import { useLoad } from "../lib/useLoad";
 import { ImportPanel } from "./approvedQa/ImportPanel";
 import { RecordForm } from "./approvedQa/RecordForm";
+import { TenantInput } from "../components/TenantInput";
 
 const FIRST: QaFilter = { tenant: "", status: "", query: "", offset: 0 };
 
@@ -15,13 +17,13 @@ type Dialog = { kind: "status"; row: QaRow; status: QaStatus } | { kind: "delete
 type Panel = { kind: "form"; record: QaRecord | null; history: QaHistoryRow[] } | { kind: "import" } | null;
 
 function failure(e: unknown): string {
-  if (e instanceof ApiError) {
-    if (e.status === 409) return q.conflict;
-    if (e.status === 404) return q.notFound;
-    if (e.status === 403) return q.forbidden;
-    if (e.status === 400 && e.detail) return q.failedWith(e.detail);
-  }
-  return q.failed;
+  return describeError(e, q.failed, {
+    409: q.conflict,
+    404: q.notFound,
+    403: q.forbidden,
+    400: (err) => (err.detail ? q.failedWith(err.detail) : q.failed),
+    422: (err) => (err.detail ? q.failedWith(err.detail) : q.failed),
+  });
 }
 
 const preview = (text: string, n = 60) => (text.length > n ? `${text.slice(0, n)}…` : text);
@@ -137,7 +139,7 @@ export function ApprovedQaPage() {
       <form className="toolbar" onSubmit={apply}>
         <label>
           {q.tenant}
-          <input value={tenantInput} onChange={(e) => setTenantInput(e.target.value)} maxLength={64} size={14} aria-describedby="qa-tenant-hint" />
+          <TenantInput value={tenantInput} onChange={(e) => setTenantInput(e.target.value)} size={14} aria-describedby="qa-tenant-hint" />
         </label>
         <label>
           {q.status}

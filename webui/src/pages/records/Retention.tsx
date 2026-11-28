@@ -3,6 +3,7 @@ import { recordsApi, type PurgeResult } from "../../api/records";
 import { jaRecords } from "../../i18n/records";
 import { number } from "../../lib/format";
 import { failureText } from "./errors";
+import { Dialog } from "../../components/Dialog";
 
 const r = jaRecords.retention;
 
@@ -105,17 +106,13 @@ export function Retention() {
       )}
 
       {confirming && (
+        <Dialog title={r.confirmTitle} onCancel={() => setConfirming(false)} busy={busy}>
         <form
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="purge-title"
-          className="dialog"
           onSubmit={(e) => {
             e.preventDefault();
             if (understood) void run(false);
           }}
         >
-          <h2 id="purge-title">{r.confirmTitle}</h2>
           <p>{r.confirmBody}</p>
           <p>
             <strong>{r.confirmAction(r.actionNames[action])}</strong>
@@ -124,14 +121,15 @@ export function Retention() {
             <input type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} /> {r.confirmUndo}
           </label>
           <p>
-            <button type="submit" disabled={busy || !understood}>
+            <button type="submit" className="danger" disabled={busy || !understood}>
               {r.confirmRun}
             </button>{" "}
-            <button type="button" onClick={() => setConfirming(false)}>
+            <button type="button" data-autofocus onClick={() => setConfirming(false)}>
               {jaRecords.common.cancel}
             </button>
           </p>
         </form>
+        </Dialog>
       )}
     </div>
   );

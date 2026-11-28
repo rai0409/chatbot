@@ -50,6 +50,8 @@ def test_the_event_records_who_acted():
 
 def test_the_route_stores_the_actor(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "RUNS_DIR", str(tmp_path / "runs"))
+    # The route refuses ids that are not in the review queue (404): the item is queued first.
+    _write(tmp_path / "runs" / "review" / "review_queue.jsonl", [{"review_id": "review-a", "tenant_id": "default"}])
     main.admin_review_action(main.ReviewActionRequest(review_id="review-a", action_type="mark_ignored"))
     line = (tmp_path / "runs" / "review" / "review_actions.jsonl").read_text(encoding="utf-8").splitlines()[0]
     assert json.loads(line)["actor"] == {"admin_scope": "installation"}

@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 import config
-from rag_core import ingest_settings, runtime_settings
+from rag_core import ingest_input_guard, ingest_settings, runtime_settings
 from rag_core.retrieval import normalize_tenant_id
 from webapi import admin_common
 from webapi import ingestion_jobs
@@ -69,22 +69,16 @@ def ingestion_page(_admin_auth: None = Depends(require_admin_auth)):
 
 
 def _check_upload_tenant(inputs: List[str], expected_tenant: Optional[str]) -> None:
-    """A file under uploads/<tenant>/ may only be ingested for that tenant: otherwise an administrator of
-    one tenant could pull another tenant's uploaded document into their own collection."""
+    """Uploads and source mirrors belong to one tenant: an administrator of one tenant must not pull another
+    tenant's documents into their own collection, directly or through an ancestor folder (see ingest_input_guard)."""
     try:
-        upload_root = _upload_dir()
+        upload_root: Optional[Path] = _upload_dir()
     except HTTPException:
-        return  # no upload folder configured: nothing of this kind exists
-    own = _tenant_segment(expected_tenant)
-    for raw in inputs:
-        try:
-            resolved = ingestion_jobs.resolve_ingest_input(raw)
-        except ValueError:
-            continue  # outside the roots / symlink: the job refuses it with its own message
-        if resolved.is_relative_to(upload_root):
-            parts = resolved.relative_to(upload_root).parts
-            if not parts or parts[0] != own:
-                raise HTTPException(status_code=403, detail="input belongs to another tenant's upload folder")
+        upload_root = None  # not usable for uploads: the guard still protects the default location
+    try:
+        ingest_input_guard.check_paths(inputs, expected_tenant, upload=upload_root)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
 
 @router.post("/admin/ingestion/dry-run")
@@ -271,6 +265,8 @@ def ingestion_mail_delete(req: MailDeleteRequest, request: Request = None,
         return report
     except collection_admin.ConversationRedactionError as exc:
         raise HTTPException(status_code=500, detail="conversation redaction failed") from exc
+    except ingestion_jobs.MaintenanceBusy as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "30"})
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except LookupError as exc:
@@ -421,7 +417,49 @@ def _prepare_upload_dir(upload_root: Path, tenant_segment: str) -> tuple[Path, i
     if not target_dir.resolve().is_relative_to(upload_root):
         raise HTTPException(status_code=400, detail="invalid tenant")
     target_dir.mkdir(parents=True, exist_ok=True)
-    return target_dir, _dir_bytes(upload_root / tenant_segment)
+    return target_dir, _committed_bytes(upload_root / tenant_segment)
+
+
+def _is_partial(path: Path) -> bool:
+    return path.name.startswith(".") and path.name.endswith(".part")
+
+
+def _committed_bytes(directory: Path) -> int:
+    """Stored uploads of a tenant: finished files only (uploads still in flight are counted when they commit)."""
+    total = 0
+    if directory.is_dir():
+        for path in directory.rglob("*"):
+            try:
+                if path.is_file() and not _is_partial(path):
+                    total += path.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _commit_upload(partial: Path, target: Path, tenant_dir: Path, size: int, quota: int) -> None:
+    """Move a received upload into place, re-checking the tenant quota under a per-tenant lock.
+
+    The quota seen when the upload started is stale once several uploads of the tenant run at once; the
+    re-check and the move happen together under an exclusive file lock (shared by every worker process),
+    so concurrent uploads cannot jointly exceed the quota. Blocking: run off the event loop."""
+    import fcntl
+
+    with open(tenant_dir / ".quota.lock", "a+") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            if quota > 0 and _committed_bytes(tenant_dir) + size > quota:
+                raise HTTPException(status_code=413, detail="tenant upload quota exceeded")
+            os.replace(partial, target)
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _discard_partial(partial: Path) -> None:
+    try:
+        partial.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _public_path(target: Path) -> str:
@@ -445,14 +483,15 @@ async def ingestion_upload(
     scope = _request_scope(request)
     tenant_id = normalize_tenant_id(tenant)
     require_scope(scope, tenant_id)
-    ingest_settings.sync_environ()  # limits changed in the console (by any worker process) apply to this upload
+    # Limits changed in the console (by any worker process) apply to this upload. File IO: off the event loop.
+    await asyncio.to_thread(ingest_settings.sync_environ)
     name = Path(str(filename or "")).name
     suffix = Path(name).suffix.lower()
     if suffix not in _UPLOAD_SUFFIXES:
         raise HTTPException(status_code=400, detail="unsupported file type (pdf, docx, xlsx, xlsm, pptx, csv, tsv, eml)")
     safe_name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", name)[-120:] or f"upload{suffix}"
     tenant_segment = _tenant_segment(tenant)
-    upload_root = _upload_dir()
+    upload_root = await asyncio.to_thread(_upload_dir)
     max_active = _env_int("INGEST_UPLOAD_MAX_CONCURRENT", 4)
     if max_active > 0 and _UPLOAD_ACTIVE["n"] >= max_active:
         raise HTTPException(status_code=429, detail="too many uploads in progress")
@@ -489,12 +528,11 @@ async def _receive_upload(request, scope, tenant_id, name, safe_name, suffix, te
         if size == 0:
             raise HTTPException(status_code=400, detail="empty file")
         await asyncio.to_thread(_validate_upload, partial, suffix, head)
-        os.replace(partial, target)
+        await asyncio.to_thread(_commit_upload, partial, target, upload_root / tenant_segment, size, quota)
     finally:
-        if partial.exists():
-            partial.unlink()
-    _audit_admin(scope, "ingestion_upload", tenant_id=tenant_id, filename=name, bytes=size,
-                 sha256=digest.hexdigest())
+        await asyncio.to_thread(_discard_partial, partial)
+    await asyncio.to_thread(_audit_admin, scope, "ingestion_upload", tenant_id=tenant_id, filename=name, bytes=size,
+                            sha256=digest.hexdigest())
     return {"path": _public_path(target), "filename": name, "bytes": size, "sha256": digest.hexdigest()}
 
 

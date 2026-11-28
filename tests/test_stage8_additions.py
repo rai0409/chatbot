@@ -275,7 +275,7 @@ def test_migration_copies_vectors_without_reembedding(monkeypatch, tmp_path):
 
     monkeypatch.setattr(config, "VECTORSTORE_DIR", str(tmp_path / "vs"))
     monkeypatch.setenv("QDRANT_PATH", str(tmp_path / "qdrant"))
-    vector_backend._CLIENT.clear()
+    vector_backend.close_clients()
     source = chromadb.PersistentClient(path=str(tmp_path / "vs")).get_or_create_collection(
         "mig", metadata={"hnsw:space": "cosine", "embed_model": "m"}
     )

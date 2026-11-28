@@ -45,7 +45,7 @@ def oidc_callback(request: Request, code: Optional[str] = None, state: Optional[
     session = oidc_auth.complete_login(code=code, state=state, txn_cookie=txn_cookie)
     resp = RedirectResponse(url="/chat-ui", status_code=302)
     resp.set_cookie(
-        oidc_auth.SESSION_COOKIE, session, max_age=3600, httponly=True,
+        oidc_auth.SESSION_COOKIE, session, max_age=oidc_auth.session_ttl_seconds(), httponly=True,
         samesite="lax", secure=oidc_auth.cookie_secure(), path="/",
     )
     resp.delete_cookie(oidc_auth.TXN_COOKIE, path="/auth/oidc")

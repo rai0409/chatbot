@@ -39,6 +39,8 @@ REGISTRY: Tuple[Knob, ...] = (
     Knob("MULTI_QUERY_RRF_K", "int", "query", lo=1, hi=200, description="rank constant of the variant fusion"),
     Knob("MULTI_QUERY_VARIANT_PENALTY", "float", "query", lo=0.0, hi=0.3, description="distance added to variant-only chunks"),
     Knob("QUERY_ROUTING_ENABLED", "bool", "query", description="lane weights of the fusion by query type"),
+    Knob("QUERY_ABBREVIATIONS", "bool", "query", description="expand generic and tenant abbreviations (育休 -> 育児休業)"),
+    Knob("QUERY_BUSINESS_SYNONYMS", "bool", "query", description="add the generic business synonyms to the query expansion"),
     Knob("GROUNDING_VERIFY_ENABLED", "bool", "answer", description="drop generated sentences the evidence does not support"),
     Knob("GROUNDING_MIN_COVERAGE", "float", "answer", lo=0.0, hi=1.0, description="share of a sentence's terms the evidence must hold"),
     Knob("KEYWORD_BOOST_ENABLED", "bool", "boost", description="keyword boost for exact lookups"),

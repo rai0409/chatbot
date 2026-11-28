@@ -5,6 +5,7 @@ import { jaRecords } from "../../i18n/records";
 import { dateTime } from "../../lib/format";
 import { useLoad } from "../../lib/useLoad";
 import { RecordDetail, modeText } from "./RecordDetail";
+import { TenantInput } from "../../components/TenantInput";
 
 const r = jaRecords;
 const DAYS = [1, 7, 30, 90];
@@ -49,7 +50,7 @@ export function RecordList() {
         </label>
         <label>
           {r.list.tenant}
-          <input value={draft.tenant_id} onChange={(e) => set("tenant_id", e.target.value)} />
+          <TenantInput value={draft.tenant_id} onChange={(e) => set("tenant_id", e.target.value)} />
         </label>
         <label>
           {r.list.answerMode}

@@ -257,6 +257,70 @@ def _meta_matches_where(meta: Dict, where: Dict) -> bool:
     return True
 
 
+_APPROVED_QA_DOC_TYPE = "approved_qa_pair"
+_LIVE_QA_LOCK = Lock()
+# (approved-QA path, tenant) -> (file version, live qa_ids). The version (mtime, size) makes a store change visible on
+# the next request, as in the chat route's approved-QA cache.
+_LIVE_QA_CACHE: Dict[Tuple[str, str], Tuple[Any, FrozenSet[str]]] = {}
+_UNSET = object()
+
+
+def _live_approved_qa_ids(tenant_id: str) -> Optional[FrozenSet[str]]:
+    """qa_ids approved right now for the tenant in the live approved-QA file, or None when approved QA is off.
+
+    Fails closed: a file that cannot be read yields an empty set, so no approved-QA pair row is served.
+    """
+    if not getattr(config, "APPROVED_QA_ENABLED", False):
+        return None
+    path = str(getattr(config, "APPROVED_QA_PATH", "") or "")
+    tenant = normalize_tenant_id(tenant_id)
+    try:
+        stat = os.stat(path)
+        version: Any = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        version = None
+    key = (path, tenant)
+    with _LIVE_QA_LOCK:
+        entry = _LIVE_QA_CACHE.get(key)
+        if entry is not None and entry[0] == version:
+            return entry[1]
+    try:
+        from rag_core.approved_qa import load_approved_qa  # lazy: approved_qa is not needed by plain retrieval
+
+        ids = frozenset(str(record.qa_id) for record in load_approved_qa(path, tenant_id=tenant).records)
+    except Exception as exc:  # noqa: BLE001  fail closed: an unreadable approved-QA file serves no QA rows
+        logger.warning("approved_qa_live_ids_unavailable %s", type(exc).__name__)
+        ids = frozenset()
+    with _LIVE_QA_LOCK:
+        _LIVE_QA_CACHE[key] = (version, ids)
+    return ids
+
+
+class _ApprovedQaGate:
+    """Drops approved-QA pair rows that are no longer approved (same rule as the approved-similar search).
+
+    A row stating a status other than "approved" is dropped; with the live approved-QA file enabled, a row whose
+    qa_id is not an approved record there (rejected, returned to draft or deleted after ingest) is dropped too.
+    Every other row passes unchanged. The live ids are read lazily, once per retrieval call.
+    """
+
+    def __init__(self, tenant_id: str):
+        self._tenant_id = tenant_id
+        self._live: Any = _UNSET
+
+    def allows(self, meta: Optional[Dict]) -> bool:
+        meta = meta or {}
+        if str(meta.get("doc_type") or "") != _APPROVED_QA_DOC_TYPE:
+            return True
+        if str(meta.get("status") or "approved").strip() != "approved":
+            return False
+        if self._live is _UNSET:
+            self._live = _live_approved_qa_ids(self._tenant_id)
+        if self._live is None:
+            return True
+        return str(meta.get("qa_id") or "") in self._live
+
+
 def _child_role_values() -> set[str]:
     raw = getattr(config, "CHILD_CHUNK_ROLE_VALUES", ["child", "leaf"])
     vals = [str(v).strip().lower() for v in raw if str(v).strip()]
@@ -881,6 +945,7 @@ def vector_retrieve(
         if "type" not in where:
             where["type"] = {"$ne": "email"}
     embedding = _resolve_query_embedding(question, client, query_embedding)
+    qa_gate = _ApprovedQaGate(tenant_id)
     oversample = max(1, int(getattr(config, "CHILD_RETRIEVAL_OVERSAMPLE", 2)))
     n_results = max(top_k, top_k * oversample)
 
@@ -890,7 +955,7 @@ def vector_retrieve(
         if columns is None:
             return 0, []
         rows = [(row_id, text, meta, dist) for row_id, text, meta, dist in zip(*columns)
-                if public_vector_row(row_id, meta)]
+                if public_vector_row(row_id, meta) and qa_gate.allows(meta)]
         return len(columns[0]), rows
 
     fetched = n_results
@@ -913,6 +978,7 @@ def vector_retrieve(
     out: List[RetrievedChunk] = []
     for row_id, text, meta, dist in rows:
         m = dict(meta, id=row_id)
+        m.pop("_evidence_source_row_sha256", None)  # vector rows are not the source API store
         m["retrieval_source"] = "vector"
         # Raw cosine distance survives fusion so the guard can use real
         # semantic evidence instead of rank-derived pseudo-distances.
@@ -961,12 +1027,13 @@ def keyword_retrieve(
         scores = np.asarray(index.bm25.get_scores(query_tokens), dtype=np.float64)
         matched = np.arange(len(scores))
     exact_terms, quoted_terms, id_terms = _query_match_terms(question)
+    qa_gate = _ApprovedQaGate(tenant_id)
 
     def precise(candidates) -> List[Tuple]:
         out_ranked = []
         for idx, bm25_score in candidates:
             meta = index.metas[idx]
-            if is_private_mail_record(meta) or not _meta_matches_where(meta, where):
+            if is_private_mail_record(meta) or not _meta_matches_where(meta, where) or not qa_gate.allows(meta):
                 continue
             norm_text = index.norm_docs[idx]
             quoted_hits = sum(1 for t in quoted_terms if t and t in norm_text)
@@ -1000,6 +1067,7 @@ def keyword_retrieve(
     for rank, (_, idx, bm25_score, quoted_hits, id_hits, exact_hits) in enumerate(ranked[:top_k], start=1):
         m = dict(index.metas[idx] or {})
         m["retrieval_source"] = "keyword"
+        m["_evidence_source_row_sha256"] = hashlib.sha256(index.texts[idx].encode("utf-8")).hexdigest()
         m["bm25_score"] = bm25_score
         # Exact-match evidence feeds the separate exact lane in hybrid fusion.
         m["exact_quoted_hits"] = quoted_hits
@@ -1024,10 +1092,12 @@ def keyword_retrieve(
             if len(out) >= top_k:
                 break
             meta = index.metas[idx]
-            if idx in present or tenant_ids[idx] != tenant or is_private_mail_record(meta) or not _meta_matches_where(meta, where):
+            if (idx in present or tenant_ids[idx] != tenant or is_private_mail_record(meta)
+                    or not _meta_matches_where(meta, where) or not qa_gate.allows(meta)):
                 continue
             m = dict(meta or {})
             m["retrieval_source"] = "keyword_reading"
+            m["_evidence_source_row_sha256"] = hashlib.sha256(index.texts[idx].encode("utf-8")).hexdigest()
             m["bm25_score"] = float(score)
             out.append(
                 RetrievedChunk(
@@ -1432,7 +1502,12 @@ def expand_parent_chunks(
     char_limit = max_parent_context_chars or int(getattr(config, "MAX_PARENT_CONTEXT_CHARS", 2400))
 
     out: List[RetrievedChunk] = []
+    # Position in `out` of every parent section already in the context, whether
+    # it was expanded from a child or hit directly (a parent row retrieved
+    # itself, or added as a neighbor). Keyed by the parent's own chunk id, so a
+    # section enters the context once.
     parent_positions: Dict[str, int] = {}
+    expanded_parents = 0
     total_parent_chars = 0
 
     for ch in chunks:
@@ -1440,6 +1515,16 @@ def expand_parent_chunks(
         child_id = str(meta.get("id") or "").strip()
         parent_id = str(meta.get("parent_chunk_id") or "").strip()
         if not parent_id or parent_id == child_id:
+            if child_id and _is_parent_chunk(meta):
+                if child_id in parent_positions:
+                    # The section is already in the context (expanded from one
+                    # of its children, or a duplicate hit): keep the better score.
+                    pos = parent_positions[child_id]
+                    prev = out[pos]
+                    if float(ch.score) < float(prev.score):
+                        out[pos] = RetrievedChunk(text=prev.text, metadata=dict(prev.metadata or {}), score=float(ch.score))
+                    continue
+                parent_positions[child_id] = len(out)
             out.append(ch)
             continue
 
@@ -1457,7 +1542,15 @@ def expand_parent_chunks(
                 child_ids.append(child_id)
             prev_meta["child_chunk_ids"] = child_ids
             if float(ch.score) < float(prev.score):
+                # Preserve the generation of the parent text before switching
+                # the citation metadata to the highest-ranked child.
+                if "_evidence_parent_generation" not in prev_meta:
+                    prev_meta["_evidence_parent_generation"] = prev_meta.get("index_generation")
                 prev_meta["primary_child_chunk_id"] = child_id
+                for key in ("_evidence_source_row_sha256", "index_generation", "doc_checksum", "doc_version", "collection"):
+                    prev_meta.pop(key, None)
+                    if key in meta:
+                        prev_meta[key] = meta[key]
                 # Commercial fix F7: the cited pages stay the parent's own pages (the
                 # text shown is the parent's); the best child's pages are kept apart.
                 prev_meta["primary_child_source_pages"] = meta.get("source_pages") or []
@@ -1467,7 +1560,7 @@ def expand_parent_chunks(
                 out[pos] = RetrievedChunk(text=prev.text, metadata=prev_meta, score=float(prev.score))
             continue
 
-        if len(parent_positions) >= parent_limit:
+        if expanded_parents >= parent_limit:
             out.append(ch)
             continue
 
@@ -1482,10 +1575,16 @@ def expand_parent_chunks(
             continue
 
         merged_meta = dict(parent_meta)
+        # The citation identifies the child, not the parent body passed to the model.
+        for key in ("_evidence_source_row_sha256", "index_generation", "doc_checksum", "doc_version", "collection"):
+            merged_meta.pop(key, None)
+            if key in meta:
+                merged_meta[key] = meta[key]
         merged_meta["retrieval_source"] = meta.get("retrieval_source") or merged_meta.get("retrieval_source")
         merged_meta["parent_chunk_id"] = parent_id
         merged_meta["chunk_role"] = "parent"
         merged_meta["expanded_from_parent"] = 1
+        merged_meta["_evidence_parent_generation"] = parent_meta.get("index_generation")
         merged_meta["retrieved_child_chunk_id"] = child_id
         merged_meta["primary_child_chunk_id"] = child_id or merged_meta.get("primary_child_chunk_id")
         merged_meta["child_chunk_ids"] = [child_id] if child_id else list(merged_meta.get("child_chunk_ids") or [])
@@ -1507,6 +1606,7 @@ def expand_parent_chunks(
         )
         parent_positions[parent_id] = len(out)
         out.append(parent_chunk)
+        expanded_parents += 1
         total_parent_chars += len(parent_text)
 
     return out
@@ -1523,26 +1623,46 @@ def add_neighbor_chunks(
 
     One vector-store request per batch of positions instead of one per seed
     and offset; failures are logged (they used to be swallowed silently).
+
+    A neighbor must pass the same base filter as a retrieved row (searchable,
+    tenant, approved-QA status), so header/footer rows (searchable=0) are never
+    added. A child seed only gets siblings of its own section (same
+    parent_chunk_id): the next section's parent row or children sit at the
+    adjacent chunk_index but are another section. A parent seed already holds
+    its whole section and gets no neighbors; a seed outside the parent/child
+    layout never gets a parent row as a neighbor.
     """
     seeds = [ch for ch in seeds if not is_private_mail_record(ch.metadata)]
     out = list(seeds)
     wanted: Dict[Tuple[str, int], float] = {}
+    # The parent_chunk_id a neighbor at the key may have ("" = no parent, i.e. a
+    # flat chunk); a key wanted by several seeds accepts each seed's section.
+    wanted_parents: Dict[Tuple[str, int], set] = {}
     for seed in seeds:
-        doc_id = seed.metadata.get("doc_id")
-        idx = seed.metadata.get("chunk_index")
+        seed_meta = seed.metadata or {}
+        doc_id = seed_meta.get("doc_id")
+        idx = seed_meta.get("chunk_index")
         if doc_id is None or idx is None:
+            continue
+        if _is_parent_chunk(seed_meta):
             continue
         try:
             idx = int(idx)
         except (TypeError, ValueError):
             continue
+        seed_parent = str(seed_meta.get("parent_chunk_id") or "").strip()
+        if seed_parent and seed_parent == str(seed_meta.get("id") or "").strip():
+            seed_parent = ""
         for delta in range(-window, window + 1):
             if delta == 0:
                 continue
             key = (str(doc_id), idx + delta)
             wanted[key] = min(wanted.get(key, float("inf")), float(seed.score) + 0.01)
+            wanted_parents.setdefault(key, set()).add(seed_parent)
     if not wanted:
         return out
+    base_where = _build_base_where(tenant_id=tenant_id)
+    qa_gate = _ApprovedQaGate(tenant_id)
     try:
         collection = store.get_vectorstore(
             collection_name=collection_name,
@@ -1567,12 +1687,22 @@ def add_neighbor_chunks(
         for row_id, text, meta in zip(*columns):
             if not public_vector_row(row_id, meta) or not _tenant_matches(meta, tenant_id):
                 continue
+            if not _meta_matches_where(meta or {}, base_where) or not qa_gate.allows(meta):
+                continue
             m = dict(meta, id=row_id)
+            m.pop("_evidence_source_row_sha256", None)
             try:
                 key = (str(m.get("doc_id")), int(m.get("chunk_index")))
             except (TypeError, ValueError):
                 continue
             if key not in wanted:
+                continue
+            if _is_parent_chunk(m):
+                continue
+            neighbor_parent = str(m.get("parent_chunk_id") or "").strip()
+            if neighbor_parent == str(row_id or "").strip():
+                neighbor_parent = ""
+            if neighbor_parent not in wanted_parents.get(key, set()):
                 continue
             m["retrieval_source"] = "vector"
             out.append(

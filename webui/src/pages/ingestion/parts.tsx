@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
-import { ApiError } from "../../api/client";
+import { Dialog } from "../../components/Dialog";
 import type { Report } from "../../api/ingestion";
 import { ji } from "../../i18n/ingestion";
+import { describeError, formatDetail } from "../../lib/errors";
 
 /** The outcome of a request: the report, or the message of the failure. */
 export interface Outcome {
@@ -11,13 +11,11 @@ export interface Outcome {
 
 /** The message for a failed change: the permission and conflict cases get their own words, the rest shows the server's reason. */
 export function failureMessage(e: unknown, fallback: string): string {
-  if (e instanceof ApiError) {
-    if (e.status === 403) return ji.common.forbidden;
-    if (e.status === 409) return `${ji.common.conflict}（${e.detail}）`;
-    if (e.status === 404) return `${ji.common.notFound}（${e.detail}）`;
-    return `${fallback}（${e.detail}）`;
-  }
-  return fallback;
+  return describeError(e, fallback, {
+    403: ji.common.forbidden,
+    409: (err) => `${ji.common.conflict}（${err.detail}）`,
+    404: (err) => `${ji.common.notFound}（${err.detail}）`,
+  });
 }
 
 export function lines(text: string): string[] {
@@ -39,18 +37,15 @@ export function StatusBadge({ status }: { status: string }) {
 
 /** A confirmation before something that cannot be undone or changes the served data. Focus starts on the safe button. */
 export function ConfirmDialog({ title, busy, confirmLabel = ji.common.confirm, onConfirm, onCancel }: { title: string; busy?: boolean; confirmLabel?: string; onConfirm: () => void; onCancel: () => void }) {
-  const cancel = useRef<HTMLButtonElement>(null);
-  useEffect(() => cancel.current?.focus(), []);
   return (
-    <div role="dialog" aria-modal="true" aria-labelledby="confirm-title" className="dialog">
-      <h2 id="confirm-title">{title}</h2>
-      <button type="button" disabled={busy} onClick={onConfirm}>
+    <Dialog title={title} onCancel={onCancel} busy={busy}>
+      <button type="button" className="danger" disabled={busy} onClick={onConfirm}>
         {confirmLabel}
       </button>
-      <button type="button" ref={cancel} onClick={onCancel}>
+      <button type="button" data-autofocus onClick={onCancel}>
         {ji.common.cancel}
       </button>
-    </div>
+    </Dialog>
   );
 }
 
@@ -64,7 +59,7 @@ export function ResultView({ outcome, label }: { outcome: Outcome | null; label:
         .slice(0, 12)
     : [];
   const raw = res?.error || res?.detail;
-  const problem = outcome.error ?? (raw ? (typeof raw === "string" ? raw : JSON.stringify(raw)) : "");
+  const problem = outcome.error ?? (raw ? formatDetail(raw) : "");
   const finished = res && ["succeeded", "completed"].includes(String(res.status)) ? true : Boolean(res?.ok);
   return (
     <div className="result" role="region" aria-label={label}>

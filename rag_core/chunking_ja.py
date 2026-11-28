@@ -383,8 +383,11 @@ def _build_faq_sections(text: str, *, title: str) -> List[Dict[str, Any]]:
             for line in lines[1:]:
                 a_match = _FAQ_ANSWER_RE.match(line)
                 if a_match:
+                    # A later answer marker continues the same answer (e.g. a
+                    # note between two "A." paragraphs); it never discards the
+                    # answer text collected so far.
                     in_answer = True
-                    answer_lines = [a_match.group(1)]
+                    answer_lines.append(a_match.group(1))
                 elif in_answer:
                     answer_lines.append(line)
                 else:
@@ -396,7 +399,8 @@ def _build_faq_sections(text: str, *, title: str) -> List[Dict[str, Any]]:
             head, tail = re.split(r"[:：]", lines[0], maxsplit=1)
             if 1 <= len(head.strip()) <= 80:
                 question = head.strip()
-                answer = tail.strip()
+                # The answer continues on the following lines of the block.
+                answer = _join_wrapped([tail.strip(), *lines[1:]])
                 term_aliases.append(question)
         if not question:
             first = lines[0]

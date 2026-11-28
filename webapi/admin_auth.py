@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
 
+from rag_core.secure_compare import same_secret
+
 
 _ENABLED_VALUES = {"1", "true", "yes", "on"}
 
@@ -75,7 +77,7 @@ def _tenant_tokens() -> dict:
 
 
 def _same(a: str, b: str) -> bool:
-    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+    return same_secret(a, b)
 
 
 def token_scope(provided: str) -> Tuple[bool, AdminScope]:
@@ -192,7 +194,7 @@ def _valid_admin_session(cookie: str | None, expected: str, now: float | None = 
     current = int(time.time() if now is None else now)
     if expires_at < current or expires_at - issued_ms // 1000 > admin_session_ttl_seconds():
         return False
-    if not hmac.compare_digest(signature, _session_signature(expected, sid, issued_ms, expires_at, scope)):
+    if not same_secret(signature, _session_signature(expected, sid, issued_ms, expires_at, scope)):
         return False
     from webapi import state_backend
 
@@ -233,7 +235,7 @@ def _enforce_csrf(headers: Mapping[str, str] | None, cookie: str) -> None:
         raise HTTPException(status_code=403, detail="cross-origin admin request refused")
     provided = _header(headers, CSRF_HEADER) or _header(headers, "X-CSRF-Token")
     expected = csrf_token_for(cookie)
-    if not provided or not expected or not hmac.compare_digest(provided, expected):
+    if not provided or not expected or not same_secret(provided, expected):
         raise HTTPException(status_code=403, detail="csrf token missing or invalid")
 
 

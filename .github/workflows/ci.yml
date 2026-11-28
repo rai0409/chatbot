@@ -10,6 +10,8 @@ jobs:
     env:
       # A missing optional package (anthropic, redis) is a failure here, never a silent skip.
       REQUIRE_OPTIONAL_DEPS: "1"
+    # Branch protection: require the status check of this job ("test"); every gated step
+    # below is folded into its final step (docs/operations/ci_gates.md).
     services:
       postgres:
         image: postgres:16
@@ -83,12 +85,15 @@ jobs:
         continue-on-error: true
         run: |
           python -m pip install pip-audit
-          # The whole pinned set. Ignored: chromadb advisories with no fixed
-          # release, all in the Chroma server API (/api/v2/...); the app uses the
-          # embedded PersistentClient and never runs or exposes a Chroma server.
-          python -m pip_audit --disable-pip --no-deps -r constraints/linux-py312.txt \
-            --ignore-vuln PYSEC-2026-311 --ignore-vuln PYSEC-2026-3813 \
-            --ignore-vuln PYSEC-2026-3814 --ignore-vuln PYSEC-2026-3815
+          # Ignored advisories live in security/pip-audit-ignore.txt (id, package,
+          # reason, expiry, reviewer role); an expired or malformed entry fails here.
+          IGNORES=$(python scripts/check_audit_ignores.py --print-args)
+          # What is installed: the hash-locked sets of the API image / CI
+          # (requirements.lock.txt, which also pins the docextract [light] extras)
+          # and of the embedding image (requirements-embedding.lock.txt).
+          # --disable-pip is valid because every requirement is pinned with hashes.
+          python -m pip_audit --require-hashes --disable-pip -r requirements.lock.txt $IGNORES
+          python -m pip_audit --require-hashes --disable-pip -r requirements-embedding.lock.txt $IGNORES
 
       - name: Security static check (bandit, product code, medium or higher)
         id: bandit
@@ -172,6 +177,39 @@ jobs:
         working-directory: webui
         run: npm run build
 
+      - name: Console (webui) - bundle size budget (gzip; entry <= 120000 B, all JS <= 220000 B)
+        id: webui_bundle_budget
+        if: ${{ steps.webui_build.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: webui
+        run: |
+          python - <<'PY'
+          import gzip
+          import re
+          import sys
+          from pathlib import Path
+
+          ENTRY_BUDGET, TOTAL_BUDGET = 120000, 220000
+          dist = Path('dist')
+          html = (dist / 'index.html').read_text(encoding='utf-8')
+          # Initial load = the entry module plus the chunks index.html preloads.
+          refs = re.findall(r'<script[^>]+type="module"[^>]+src="([^"]+\.js)"', html)
+          refs += re.findall(r'<link[^>]+rel="modulepreload"[^>]+href="([^"]+\.js)"', html)
+          if not refs:
+              sys.exit('no entry script in dist/index.html')
+
+          def gz(path):
+              return len(gzip.compress(path.read_bytes(), compresslevel=9, mtime=0))
+
+          entry = sorted({dist / 'assets' / Path(ref).name for ref in refs})
+          entry_size = sum(gz(p) for p in entry)
+          total_size = sum(gz(p) for p in sorted((dist / 'assets').glob('*.js')))
+          print(f'entry JS (gzip): {entry_size} B / {ENTRY_BUDGET} B  {[p.name for p in entry]}')
+          print(f'all JS (gzip):   {total_size} B / {TOTAL_BUDGET} B')
+          if entry_size > ENTRY_BUDGET or total_size > TOTAL_BUDGET:
+              sys.exit('webui bundle over budget: split routes (React.lazy) or drop dependencies')
+          PY
+
       - name: Console (webui) - npm audit
         id: webui_audit
         if: ${{ steps.webui_install.outcome == 'success' }}
@@ -199,7 +237,8 @@ jobs:
       - name: Stage 10 - install extraction backends
         id: stage10_install
         continue-on-error: true
-        run: python -m pip install -e "libs/docextract[light]"
+        # Constrained to the audited pins (the [light] extras are in requirements.lock.txt).
+        run: python -m pip install -e "libs/docextract[light]" -c constraints/linux-py312.txt
 
       - name: Stage 10 - extraction tests
         id: stage10_tests
@@ -221,12 +260,19 @@ jobs:
           LLM_QUOTA_TEST_DSN: "host=127.0.0.1 port=5432 dbname=quota_test user=quota_test password=quota_test"  # pragma: allowlist secret
         run: python -m pytest -q tests/test_llm_quota_store_pg.py
 
-      - name: Run full test suite (with a coverage report; not a gate)
+      # Gated (listed in the final gate). The coverage report is informational only.
+      # A skip whose reason is not in tests/skip_allowlist.txt fails the run
+      # (a missing package must not hide as a skip). tests/e2e runs in playwright_e2e.
+      # No per-test timeout: pytest-timeout is not in constraints/linux-py312.txt;
+      # the step timeout bounds a hung test.
+      - name: Run full test suite (gate; unexpected skips fail; coverage report)
         id: full_suite
         continue-on-error: true
+        env:
+          CI_FAIL_ON_UNEXPECTED_SKIP: "1"
         run: |
           python -m pip install pytest-cov
-          python -m pytest -q --ignore=tests/test_llm_quota_store_pg.py --cov=rag_core --cov=webapi --cov=docextract --cov-report=term-missing:skip-covered
+          python -m pytest -q --ignore=tests/test_llm_quota_store_pg.py --ignore=tests/e2e --cov=rag_core --cov=webapi --cov=docextract --cov-report=term-missing:skip-covered
         timeout-minutes: 10
 
       - name: Diagnostic summary and mandatory failure gate
@@ -240,7 +286,7 @@ jobs:
           import sys
 
           steps = json.loads(os.environ['CI_STEPS_JSON'])
-          ids = ['product_readiness', 'normalization', 'stage_regression', 'hardening', 'dependency_audit', 'bandit', 'secret_scan', 'production_guard', 'retrieval_gate', 'stage8', 'pyflakes', 'ruff_broad_except', 'node_unit', 'postgres', 'full_suite', 'webui_install', 'webui_typecheck', 'webui_tests', 'webui_build', 'webui_audit', 'playwright_package', 'playwright_browser', 'playwright_e2e', 'stage10_install', 'stage10_tests', 'stage10_check']
+          ids = ['product_readiness', 'normalization', 'stage_regression', 'hardening', 'dependency_audit', 'bandit', 'secret_scan', 'production_guard', 'retrieval_gate', 'stage8', 'pyflakes', 'ruff_broad_except', 'node_unit', 'postgres', 'full_suite', 'webui_install', 'webui_typecheck', 'webui_tests', 'webui_build', 'webui_bundle_budget', 'webui_audit', 'playwright_package', 'playwright_browser', 'playwright_e2e', 'stage10_install', 'stage10_tests', 'stage10_check']
           rows = ['| Check | Outcome |', '|---|---|']
           failed = []
           for key in ids:

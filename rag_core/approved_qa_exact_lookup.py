@@ -92,10 +92,70 @@ _SOURCE_DOC_EXISTS: Optional[Callable[[str, str], Optional[bool]]] = None
 def set_source_doc_exists_check(check: Optional[Callable[[str, str], Optional[bool]]]) -> None:
     """Register `check(tenant_id, source_doc) -> True / False / None (unknown)`; None unregisters it.
 
-    False drops a hit that cites that document; None (or no check registered) keeps it. TODO: register a check
-    backed by the served corpus once retrieval exposes its document set per tenant (no cheap accessor yet)."""
+    False drops a hit that cites that document; None (or no check registered) keeps it. The production check is
+    served_source_doc_exists (install_default_source_doc_exists_check)."""
     global _SOURCE_DOC_EXISTS
     _SOURCE_DOC_EXISTS = check
+
+
+# (tenant, source_doc) pairs of the served keyword index, rebuilt when retrieval swaps in a new index object
+# (a changed corpus file or generation switch gives a new object). Keyed by the index object's identity.
+_DOCS_LOCK = threading.Lock()
+_DOCS_CACHE: dict[str, Any] = {"index": None, "docs": None}
+
+
+def _served_doc_set() -> Optional[frozenset]:
+    from rag_core import retrieval
+
+    index = retrieval._load_keyword_index()
+    metas = getattr(index, "metas", None)
+    if not metas:
+        return None  # no served corpus (missing file, still building): unknown
+    with _DOCS_LOCK:
+        if _DOCS_CACHE["index"] is index and _DOCS_CACHE["docs"] is not None:
+            return _DOCS_CACHE["docs"]
+    tenants = list(getattr(index, "tenant_ids", None) or [])
+    pairs = set()
+    for idx, meta in enumerate(metas):
+        meta = meta or {}
+        tenant = tenants[idx] if idx < len(tenants) else retrieval.normalize_tenant_id(meta.get("tenant_id"))
+        for field in ("source_doc", "doc"):
+            doc = str(meta.get(field) or "").strip()
+            if doc:
+                pairs.add((tenant, doc))
+    docs = frozenset(pairs)
+    with _DOCS_LOCK:
+        _DOCS_CACHE["index"] = index
+        _DOCS_CACHE["docs"] = docs
+    return docs
+
+
+def served_source_doc_exists(tenant_id: str, source_doc: str) -> Optional[bool]:
+    """Whether source_doc is in the served keyword corpus of tenant_id; None when the corpus is unknown."""
+    from rag_core.retrieval import normalize_tenant_id
+
+    doc = str(source_doc or "").strip()
+    if not doc:
+        return None
+    try:
+        docs = _served_doc_set()
+    except Exception:  # noqa: BLE001  an unreadable corpus is "unknown", never a false "missing"; logged
+        logger.warning("approved QA: served corpus document set unavailable", exc_info=True)
+        return None
+    if docs is None:
+        return None
+    return (normalize_tenant_id(tenant_id), doc) in docs
+
+
+def install_default_source_doc_exists_check() -> None:
+    """Register served_source_doc_exists as the citation existence check (called once at application start)."""
+    set_source_doc_exists_check(served_source_doc_exists)
+
+
+def clear_served_doc_cache() -> None:
+    with _DOCS_LOCK:
+        _DOCS_CACHE["index"] = None
+        _DOCS_CACHE["docs"] = None
 
 
 def _hit_citation_docs(hit: dict) -> list[str]:

@@ -7,6 +7,8 @@ import { jaOverview } from "../i18n/overview";
 import { number, percent } from "../lib/format";
 import { useLoad } from "../lib/useLoad";
 import { Block } from "./overview/Block";
+import { Dialog } from "../components/Dialog";
+import { StatusBadge } from "./ingestion/parts";
 
 const d = jaOverview.dashboard;
 
@@ -158,16 +160,15 @@ function Session() {
         {d.logoutAll}
       </button>
       {asking && (
-        <div role="dialog" aria-modal="true" aria-labelledby="logout-title" className="dialog">
-          <h2 id="logout-title">{d.logoutAll}</h2>
+        <Dialog title={d.logoutAll} onCancel={() => setAsking(false)} busy={busy}>
           <p>{d.logoutConfirm}</p>
-          <button type="button" disabled={busy} onClick={end}>
+          <button type="button" className="danger" disabled={busy} onClick={end}>
             {d.logoutDo}
           </button>
-          <button type="button" disabled={busy} onClick={() => setAsking(false)}>
+          <button type="button" data-autofocus disabled={busy} onClick={() => setAsking(false)}>
             {jaOverview.common.cancel}
           </button>
-        </div>
+        </Dialog>
       )}
     </section>
   );
@@ -258,7 +259,7 @@ export function DashboardPage() {
                   {res.jobs.slice(0, 8).map((job, i) => (
                     <tr key={job.job_id ?? i}>
                       <th scope="row">{String(job.job_id ?? "").slice(0, 8)}</th>
-                      <td>{job.status}</td>
+                      <td>{job.status ? <StatusBadge status={job.status} /> : "—"}</td>
                       <td>{job.collection ?? ""}</td>
                     </tr>
                   ))}

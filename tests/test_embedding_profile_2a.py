@@ -96,6 +96,15 @@ def test_embedding_dim_is_checked_and_stamped_once_known():
 
 
 _COUNTER = iter(range(1_000_000))
+# In-memory clients of the running test, closed after it (no close left to interpreter teardown).
+_OPEN_CLIENTS = []
+
+
+@pytest.fixture(autouse=True)
+def _close_memory_clients():
+    yield
+    while _OPEN_CLIENTS:
+        _OPEN_CLIENTS.pop().close()
 
 
 def _qdrant_collection(name):
@@ -103,7 +112,9 @@ def _qdrant_collection(name):
     from rag_core.vector_backend import QdrantCollection
 
     # Unique name: "exists" is cached per (client id, name) and ids of freed in-memory clients are reused.
-    return QdrantCollection(f"{name}_{next(_COUNTER)}", client=qdrant_client.QdrantClient(":memory:"))
+    client = qdrant_client.QdrantClient(":memory:")
+    _OPEN_CLIENTS.append(client)
+    return QdrantCollection(f"{name}_{next(_COUNTER)}", client=client)
 
 
 def test_ingest_stamps_the_profile_and_refuses_another_dimension(monkeypatch, tmp_path):

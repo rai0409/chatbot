@@ -22,6 +22,8 @@ left (verify_chain starts from the anchor). Free text written by users
 (search queries, feedback comments, review notes, rewritten questions) is
 treated like the question.
 Write failures are counted (write_failure_count) for metrics and alerts.
+Kind "evidence" (rag_core/answer_evidence.py, AUDIT_EVIDENCE_ENABLED) has its own file, evidence_events.jsonl;
+it holds ids and hashes only.
 """
 
 import hashlib
@@ -86,6 +88,11 @@ def _audit_path(kind: str) -> Path | None:
         if not getattr(config, "AUDIT_SEARCH_DEBUG_ENABLED", True):
             return None
         return Path(config.RUNS_DIR) / "audit" / "search_debug_events.jsonl"
+    if kind == "evidence":
+        # Answer evidence (rag_core/answer_evidence.py): ids and hashes only, its own chain.
+        if str(os.getenv("AUDIT_EVIDENCE_ENABLED", "1")).strip().lower() in {"0", "false", "no", "off"}:
+            return None
+        return Path(config.RUNS_DIR) / "audit" / "evidence_events.jsonl"
     return Path(config.RUNS_DIR) / "audit" / "events.jsonl"
 
 
@@ -309,17 +316,26 @@ def _record_failure() -> None:
 
 
 def append_audit_event(kind: str, event: dict) -> None:
+    _append_audit_event(kind, event)
+
+
+def _append_audit_event(kind: str, event: dict) -> bool:
     try:
         path = _audit_path(kind)
         if path is None:
-            return
+            return False
         payload = _bounded(dict(event or {}))
         payload["timestamp"] = datetime.now(timezone.utc).isoformat()
         payload["kind"] = kind
         _write(path, payload)
+        return True
     except Exception:
         _record_failure()
-        return
+        return False
+
+
+def append_evidence_audit_event(event: dict) -> bool:
+    return _append_audit_event("evidence", event)
 
 
 def append_product_preview_chat_audit_event(event: dict) -> bool:

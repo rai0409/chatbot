@@ -9,7 +9,10 @@ with a dev/test split (eval/bench/dataset.py). This turns the first into the sec
             expected_top_chunk_id / expected_top_source_doc. A case without any label is skipped and counted.
   slices    "cat:<category>" plus heuristic tags found in the query text (auto_slices). The tags are for
             looking at results per kind of question (year, amount, negation, condition, code, katakana
-            term, short query); they are not gold labels.
+            term, short query, colloquial wording, a dictionary abbreviation); they are not gold labels.
+            "colloquial" uses the style detector of the query router (rag_core/query_route.detect_style);
+            "abbreviation" means the query holds an abbreviation of configs/query_rules/abbreviations_ja.json
+            (the same whole-term check as QUERY_ABBREVIATIONS), so the slice shows what that flag can change.
 
   python -m eval.bench from-cases --cases eval/cases/semantic_challenge_cases.jsonl --out runs/eval_set.jsonl
 """
@@ -47,7 +50,30 @@ def auto_slices(query: str) -> List[str]:
             tags.append(name)
     if len(text.strip()) <= _SHORT_QUERY_CHARS:
         tags.append("short")
+    if _is_colloquial(text):
+        tags.append("colloquial")
+    if _has_abbreviation(text):
+        tags.append("abbreviation")
     return tags
+
+
+def _is_colloquial(text: str) -> bool:
+    from rag_core.query_route import detect_style
+
+    return detect_style(text) == "colloquial"
+
+
+def _has_abbreviation(text: str) -> bool:
+    from rag_core import query_preprocess
+    from rag_core.ja_text import normalize_for_index
+
+    norm = normalize_for_index(text)
+    entries = query_preprocess.abbreviation_entries("default")
+    abbrs = {e.abbr for e in entries}
+    if not norm or not any(a in norm for a in abbrs):
+        return False
+    surfaces = [s for e in entries for s in (e.abbr, e.expansion)]
+    return bool(abbrs & query_preprocess._present_surfaces(norm, surfaces, query_preprocess._query_term_set(norm)))
 
 
 def _slug(text: str) -> str:

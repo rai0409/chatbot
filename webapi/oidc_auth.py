@@ -32,6 +32,7 @@ with _warnings.catch_warnings():
 from fastapi import HTTPException
 
 import config as app_config  # this module has its own config() function
+from rag_core.secure_compare import same_secret
 from webapi import metrics_registry, oidc_hardening, state_backend
 from webapi.api_auth import (
     ApiAuthContext,
@@ -80,6 +81,11 @@ def _session_ttl() -> int:
         return max(300, int(_env("OIDC_SESSION_TTL_SECONDS") or _SESSION_TTL))
     except ValueError:
         return _SESSION_TTL
+
+
+def session_ttl_seconds() -> int:
+    """How long an OIDC session is valid (OIDC_SESSION_TTL_SECONDS): the signed expiry and the cookie max-age."""
+    return _session_ttl()
 
 
 def _clock_skew() -> int:
@@ -291,7 +297,7 @@ def complete_login(*, code: str, state: str, txn_cookie: str) -> str:
     if not txn:
         _record_auth_rejection("oidc_state_invalid")
         raise HTTPException(status_code=400, detail="invalid or expired oidc transaction")
-    if not state or not secrets.compare_digest(str(state), str(txn.get("state") or "")):
+    if not state or not same_secret(str(state), str(txn.get("state") or "")):
         _record_auth_rejection("oidc_state_invalid")
         raise HTTPException(status_code=400, detail="oidc state mismatch")
 

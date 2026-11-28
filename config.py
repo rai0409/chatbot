@@ -299,6 +299,11 @@ MULTI_QUERY_RRF_K = int(getenv_first("MULTI_QUERY_RRF_K", default="60"))
 MULTI_QUERY_VARIANT_PENALTY = _get_float("MULTI_QUERY_VARIANT_PENALTY", default=0.05)
 # Pick the weights of the hybrid lanes by query type (rag_core/query_route.py). Off until evaluated.
 QUERY_ROUTING_ENABLED = _get_bool("QUERY_ROUTING_ENABLED", default=False)
+# Japanese query normalization (rag_core/query_preprocess.py, docs/operations/query_normalization_ja.md). Both off
+# until evaluated with scripts/tenant_eval.py. BUSINESS_SYNONYMS merges configs/japanese_business_synonyms.json into
+# the profile synonym groups; ABBREVIATIONS expands configs/query_rules/abbreviations_ja.json (and tenant entries).
+QUERY_BUSINESS_SYNONYMS = _get_bool("QUERY_BUSINESS_SYNONYMS", default=False)
+QUERY_ABBREVIATIONS = _get_bool("QUERY_ABBREVIATIONS", default=False)
 # Where an LLM may be used (rag_core/llm.py). LLM_ENABLED unset: the historical switch decides (CHAT_GENERATION_MODE=llm
 # is on); LLM_ENABLED=false is a kill switch. Tenant lists: empty allowlist = every tenant. LLM_FEATURES: what may use it
 # (generate | rewrite | verify | judge). In production an external endpoint needs LLM_EXTERNAL_ALLOWED=true.

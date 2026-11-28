@@ -284,8 +284,15 @@ def test_chat_stream_cache_hit_is_recorded_like_the_chat_route(monkeypatch, tmp_
               "guard_reason": None, "used_fallback": False}
     monkeypatch.setattr(chat_router.answer_cache, "enabled", lambda: True)
     def read_cache(key):
+        from rag_core import answer_evidence
         assert key[-2:] == ("profile-validation-v1", "mail-quarantine-v2")
-        return dict(cached)
+        evidence = answer_evidence.build_evidence(
+            request_id="cache-origin", tenant_id="default", payload=cached,
+            cache_key_digest=chat_router.answer_cache.key_digest(key),
+            access_scope=chat_router.answer_cache.access_scope_digest(None),
+        )
+        assert answer_evidence.record_evidence(evidence)
+        return chat_router._cache_entry(cached, evidence=evidence)
 
     monkeypatch.setattr(chat_router.answer_cache, "get", read_cache)
     monkeypatch.setattr(chat_router, "_cache_validation_passed", lambda payload: True)
@@ -297,6 +304,11 @@ def test_chat_stream_cache_hit_is_recorded_like_the_chat_route(monkeypatch, tmp_
 
     assert [name for name, _ in events] == ["final"]
     assert len(recorded) == 1 and recorded[0]["source"] == "cache"
+    from rag_core import answer_evidence
+    hit_id = events[0][1]["request_id"]
+    saved = answer_evidence.lookup_evidence(hit_id, "default", access_scope="")
+    assert saved is not None and saved["origin_request_id"] == "cache-origin"
+    assert saved["streamed"] is True
 
 
 @pytest.mark.parametrize("question,mode,source", [

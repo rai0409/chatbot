@@ -3,6 +3,8 @@ import type { QaCitation, QaHistoryRow, QaRecord, QaSave } from "../../api/appro
 import { jaApprovedQa as q } from "../../i18n/approvedQa";
 import { rememberActor, storedActor } from "../../lib/actor";
 import { dateTime } from "../../lib/format";
+import { TenantInput } from "../../components/TenantInput";
+import { useTenant } from "../../lib/tenant";
 
 interface Props {
   tenantDefault: string;
@@ -27,7 +29,8 @@ function toInputs(record: QaRecord | null): CitationInput[] {
 
 /** Create or edit one QA. Saving needs a reason and a name; the server decides whether the edit takes an approved record back to draft. */
 export function RecordForm({ tenantDefault, record, history, busy, problem, onSave, onClose }: Props) {
-  const [tenant, setTenant] = useState(record?.tenant_id ?? tenantDefault);
+  const chosen = useTenant().tenant;
+  const [tenant, setTenant] = useState(record?.tenant_id ?? (tenantDefault || chosen));
   const [question, setQuestion] = useState(record?.question ?? "");
   const [answer, setAnswer] = useState(record?.approved_answer ?? "");
   const [aliases, setAliases] = useState((record?.approved_aliases?.length ? record.approved_aliases : record?.proposed_aliases ?? []).join("\n"));
@@ -74,7 +77,7 @@ export function RecordForm({ tenantDefault, record, history, busy, problem, onSa
       <div className="toolbar">
         <label>
           {q.tenant}
-          <input value={tenant} onChange={(e) => setTenant(e.target.value)} maxLength={64} disabled={!!record} />
+          <TenantInput value={tenant} onChange={(e) => setTenant(e.target.value)} disabled={!!record} />
         </label>
         <label>
           {q.docVersion}

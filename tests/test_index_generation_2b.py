@@ -55,7 +55,10 @@ def env(monkeypatch, tmp_path):
             index_manifest.write_manifest(index_manifest.build_manifest(collection, **manifest_kwargs))
         return cols[collection]
 
-    return SimpleNamespace(build=build, name=name, cols=cols, tmp=tmp_path, ingest=ingest)
+    try:
+        yield SimpleNamespace(build=build, name=name, cols=cols, tmp=tmp_path, ingest=ingest)
+    finally:
+        client.close()
 
 
 def _failed(excinfo):

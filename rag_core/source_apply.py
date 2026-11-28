@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 import config
-from rag_core import change_ledger, source_registry as registry, source_sync
+from rag_core import change_ledger, ingest_input_guard, source_registry as registry, source_sync
 from rag_core.source_registry import SourceError
 from rag_core.source_scan import diff_manifests, document_name, name_conflicts
 
@@ -175,6 +175,8 @@ def _apply_locked(
     ingest = ingest or default_ingest
     delete = delete or default_delete
     root, tenant, collection = registry.root_of(record), record["tenant_id"], record["collection"]
+    # PermissionError: the source covers another tenant's uploads or mirrors (registered before the rule existed).
+    ingest_input_guard.check_path(root, tenant)
     observed = registry.load_manifest(source_id, "observed")
     applied = dict(registry.load_manifest(source_id, "applied"))
     failed: List[Dict[str, str]] = []

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import socket
@@ -37,6 +38,8 @@ from rag_core.retrieval import keyword_index_path_for_collection
 from scripts.ingest_canonical_jsonl import ingest_canonical_rows, new_generation_id, write_keyword_rows
 from scripts.import_manifest import build_manifest
 
+
+logger = logging.getLogger(__name__)
 
 _LOCK = threading.Lock()
 _DEFAULT_MAX_FILES = 100
@@ -767,6 +770,10 @@ def run_raw_document_job(
     ingest_settings.sync_environ()
 
     paths = _resolve_inputs(inputs)
+    from rag_core import ingest_input_guard
+
+    # Another tenant's uploads or source mirrors are refused here too, whatever path led to this job.
+    ingest_input_guard.check_paths(paths, tenant)
     owner = get_collection(target)
     if owner is not None and owner["owner_tenant"] != tenant:
         raise PermissionError("collection is owned by another tenant")
@@ -1029,18 +1036,68 @@ def recover_interrupted_jobs(clock=time.time) -> int:
     return recovered
 
 
-def shutdown(wait: bool = False) -> None:
-    """Application shutdown: stop taking jobs and stop the conversion workers."""
-    pool = _EXECUTOR.get("pool")
-    if pool is not None:
-        pool.shutdown(wait=wait, cancel_futures=True)
+# Default grace for running jobs at shutdown; kept below the container stop grace
+# period (docker-compose stop_grace_period: 60s) so the process still exits cleanly.
+_DEFAULT_SHUTDOWN_GRACE_SECONDS = 20.0
+_MAX_SHUTDOWN_GRACE_SECONDS = 55.0
+
+
+def shutdown_grace_seconds() -> float:
+    """INGEST_SHUTDOWN_GRACE_SECONDS: how long shutdown waits for running jobs (0 = none)."""
+    raw = str(os.getenv("INGEST_SHUTDOWN_GRACE_SECONDS", "")).strip()
+    if not raw:
+        return _DEFAULT_SHUTDOWN_GRACE_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_SHUTDOWN_GRACE_SECONDS
+    if value != value or value < 0:  # NaN or negative
+        return _DEFAULT_SHUTDOWN_GRACE_SECONDS
+    return min(value, _MAX_SHUTDOWN_GRACE_SECONDS)
+
+
+def shutdown(wait: bool = False, grace_seconds: Optional[float] = None) -> Dict[str, int]:
+    """Application shutdown: stop taking jobs and stop the conversion workers.
+
+    Queued jobs are cancelled at once. Running jobs get a bounded grace period
+    (grace_seconds, default INGEST_SHUTDOWN_GRACE_SECONDS = 20) so an upsert in
+    progress finishes before the vector store clients are closed; wait=True
+    waits for them without a limit (tests, CLIs). A job still running after the
+    grace period is left to recover_interrupted_jobs() at the next start.
+    Returns {"cancelled": n, "unfinished": n}.
+    """
+    from concurrent.futures import wait as wait_futures
+
+    with _LOCK:
+        pool = _EXECUTOR.get("pool")
         _EXECUTOR["pool"] = None
+        futures = list(_FUTURES)
+    result = {"cancelled": 0, "unfinished": 0}
+    if pool is not None:
+        # cancel_futures cancels the jobs that have not started; running ones continue.
+        pool.shutdown(wait=False, cancel_futures=True)
+        result["cancelled"] = sum(1 for f in futures if f.cancelled())
+        running = [f for f in futures if not f.done()]
+        if wait:
+            pool.shutdown(wait=True)
+        elif running:
+            grace = shutdown_grace_seconds() if grace_seconds is None else max(0.0, float(grace_seconds))
+            _done, pending = wait_futures(running, timeout=grace)
+            result["unfinished"] = len(pending)
+            if pending:
+                logger.warning(
+                    "ingestion shutdown: %d job(s) still running after %.0fs; they are marked interrupted at the next start",
+                    len(pending), grace,
+                )
     isolated.shutdown()
+    return result
 
 
 # --- asynchronous jobs (6) ------------------------------------------------------
 
 _EXECUTOR = {"pool": None}
+# Futures of submitted jobs that have not finished yet (for the shutdown grace period).
+_FUTURES: set = set()
 
 
 def _executor():
@@ -1110,5 +1167,14 @@ def submit_raw_document_job(
             failed.update({"status": "error", "ok": False, "error_type": type(exc).__name__, "finished_at": clock()})
             _save_job(failed)
 
-    _executor().submit(_run)
+    future = _executor().submit(_run)
+    if hasattr(future, "add_done_callback"):  # an inline executor (tests) returns no future
+        with _LOCK:
+            _FUTURES.add(future)
+        future.add_done_callback(_forget_future)
     return dict(record)
+
+
+def _forget_future(future) -> None:
+    with _LOCK:
+        _FUTURES.discard(future)

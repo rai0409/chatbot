@@ -1,0 +1,11 @@
+# Skips that are allowed when CI_FAIL_ON_UNEXPECTED_SKIP=1 (see docs/operations/ci_gates.md).
+# Format: <nodeid glob> TAB <reason regex> TAB <why it is allowed>. Lines starting with # are comments.
+# Never list a missing package (qdrant_client, sudachipy, pdfplumber, pypdfium2, PIL, pyflakes, chromadb,
+# anthropic, redis, ...): that is a broken install and must fail CI.
+# The browser tests (tests/e2e) are not listed: the full suite runs with --ignore=tests/e2e and the
+# separate playwright_e2e step runs them with KURADEN_E2E_REQUIRED=1 (a skip there is a failure).
+tests/test_real_vector_quality_baseline.py::*	^Real-vector evidence is a release gate	needs real embedding models and a measured report; runs in the release gate (CHATBOT_REAL_VECTOR_RELEASE_GATE=1)
+libs/docextract/tests/test_docextract.py::test_pp_ocrv6_reads_japanese	^model test \(downloads PaddleOCR models\)	downloads OCR models from the network; opt-in with DOCEXTRACT_RUN_MODEL_TESTS=1
+tests/test_stage12_additions.py::*	^one CPU: parallel conversion is not used	depends on the runner CPU count, not on the install
+tests/test_stage1_security.py::*	^symlinks not available	depends on the file system (no symlink permission on some runners)
+tests/test_bench_jqara.py::*	^could not import 'pyarrow'	benchmark-only extra (requirements-bench.txt), not part of the product lock

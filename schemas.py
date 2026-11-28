@@ -15,6 +15,12 @@ class CitationOut:
     # Commercial fix F10: the evidence sentences that support the bullets citing this
     # block (up to 2), so a reader can verify the answer without opening the page.
     supporting_sentences: List[str] = field(default_factory=list)
+    # 2026-11-27 version evidence (None when unknown): sha256 of the cited block text, and the checksum, index
+    # generation and collection of the source row.
+    chunk_sha256: Optional[str] = None
+    doc_checksum: Optional[str] = None
+    index_generation: Optional[str] = None
+    collection: Optional[str] = None
 
 
 @dataclass(frozen=True)

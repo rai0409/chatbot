@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
+import { t } from "../i18n/ja";
+import { isNetworkError } from "./errors";
+
+/** The text of a failed load: the screen's own sentence, with the reason when it is one the administrator can act on. */
+export function loadFailureText(e: unknown, failureText: string): string {
+  const base = failureText.replace(/。$/, "");
+  if (e instanceof ApiError && e.status === 403) return `${base}: ${t.errors.forbidden}`;
+  if (isNetworkError(e)) return `${base}: ${t.errors.network}`;
+  return failureText;
+}
 
 export interface Loaded<T> {
   data: T | null;
@@ -24,7 +34,7 @@ export function useLoad<T>(load: () => Promise<T>, deps: ReadonlyArray<unknown>,
     run()
       .then((value) => mine === seq.current && setData(value))
       .catch((e) => {
-        if (mine === seq.current && !(e instanceof ApiError && e.status === 401)) setError(failureText);
+        if (mine === seq.current && !(e instanceof ApiError && e.status === 401)) setError(loadFailureText(e, failureText));
       })
       .finally(() => mine === seq.current && setLoading(false));
   }, [run, failureText]);

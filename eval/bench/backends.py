@@ -14,6 +14,7 @@ memory footprint (vectors + HNSW links: n * m * 2 * 4 bytes, an estimate).
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -21,6 +22,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from eval.bench.encoders import DenseIndex
+
+logger = logging.getLogger(__name__)
 
 _BATCH = 1000
 
@@ -227,12 +230,19 @@ class QdrantBackend:
         }
 
     def close(self) -> None:
-        if self.client is not None and self.collection:
+        client, self.client = self.client, None
+        if client is None:
+            return
+        try:
+            if self.collection:
+                client.delete_collection(self.collection)
+        except Exception:  # noqa: BLE001 - best-effort cleanup of a benchmark collection
+            logger.debug("deleting benchmark collection %s failed", self.collection, exc_info=True)
+        finally:
             try:
-                self.client.delete_collection(self.collection)
-            except Exception:
-                pass
-        self.client = None
+                client.close()
+            except Exception:  # noqa: BLE001 - closing must not mask the benchmark result
+                logger.debug("closing the benchmark Qdrant client failed", exc_info=True)
 
 
 _BACKENDS = {"exact": ExactBackend, "chroma": ChromaBackend, "qdrant": QdrantBackend}

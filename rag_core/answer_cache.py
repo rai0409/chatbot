@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import os
 import re
 import time
@@ -203,6 +204,7 @@ _SETTING_NAMES = (
     "RAG_SOFT_DIST_RESET", "RAG_SOFT_DIST_CHANGE", "RAG_SOFT_DIST_PROCEDURE",
     "CROSS_ENCODER_TOP_N", "CROSS_ENCODER_MAX_LENGTH", "CROSS_ENCODER_SKIP_MARGIN",
     "OPENAI_BASE_URL", "CHAT_COMPLETION_MAX_TOKENS",
+    "QUERY_BUSINESS_SYNONYMS", "QUERY_ABBREVIATIONS",
 )
 _SETTING_ENV_NAMES = (
     "QUERY_SYNONYM_EXPANSION", "QUERY_TYPO_CORRECTION",
@@ -260,6 +262,8 @@ def _profile_state_uncached(tenant_id: str, rag_profile_id: str) -> Tuple:
         profile_files = []
         pinned = ""
     rule_files = query_preprocess._rule_files(tenant_id)
+    # The global abbreviation dictionary (QUERY_ABBREVIATIONS); the business synonyms file is in _config_files_state.
+    rule_files = [*rule_files, str(query_preprocess.RULES_DIR / "abbreviations_ja.json")]
     return (
         profile,
         pinned,
@@ -304,6 +308,60 @@ def build_key(
         int(max_context_chars),
         str(principal_digest or ""),
     )
+
+
+# --- caller access scope (2026-11-27) -------------------------------------------------------------------------------
+# Retrieval today is scoped by tenant only (the tenant is in the key) and mail is excluded for everyone, so the scope
+# digest is "" and the whole tenant shares one entry. Once retrieval is filtered per caller (MAIL_SEARCH_ENABLED, or
+# RETRIEVAL_ACL_SCOPED=1 for another ACL'd corpus) the caller's principals become part of the key; a caller whose
+# principals cannot be determined is never cached (fail closed).
+_PRINCIPAL_ATTRS = ("acl_principals", "principals", "groups")
+
+
+def acl_scoped_retrieval_enabled() -> bool:
+    from rag_core import mail_access
+
+    if bool(getattr(mail_access, "MAIL_SEARCH_ENABLED", False)):
+        return True
+    return str(os.getenv("RETRIEVAL_ACL_SCOPED", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def caller_principals(api_auth: Any) -> Tuple[str, ...]:
+    """The ACL principals / groups an auth context carries (duck-typed; none on today's ApiAuthContext)."""
+    found: set = set()
+    for attr in _PRINCIPAL_ATTRS:
+        value = getattr(api_auth, attr, None)
+        if isinstance(value, str):
+            value = [value]
+        if isinstance(value, (list, tuple, set, frozenset)):
+            found.update(str(item).strip() for item in value if str(item or "").strip())
+    return tuple(sorted(found))
+
+
+def access_scope_digest(api_auth: Any) -> Optional[str]:
+    """The principal_digest of build_key for this caller.
+
+    "" when retrieval is not filtered per caller; "acl:<digest>" of the caller's principals when it is; None when it
+    is filtered but the caller has no principal: the answer must then neither be read from nor written to the cache."""
+    if not acl_scoped_retrieval_enabled():
+        return ""
+    principals = caller_principals(api_auth)
+    if not principals:
+        return None
+    return "acl:" + hashlib.sha256("\n".join(principals).encode("utf-8")).hexdigest()[:32]
+
+
+def key_digest(key: Tuple) -> str:
+    """A stable digest of a cache key, for evidence records (the key itself holds the question)."""
+    return hashlib.sha256(repr(key).encode("utf-8")).hexdigest()[:32]
+
+
+# Internal provenance stored with each entry (origin request, generation, key digest); never sent to a client.
+ORIGIN_FIELD = "_origin"
+
+
+def strip_internal(value: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in value.items() if k != ORIGIN_FIELD}
 
 
 def _redis_backend() -> bool:
@@ -354,7 +412,7 @@ def get(key: Tuple) -> Optional[Dict[str, Any]]:
             _CACHE.pop(key, None)
             return None
         _CACHE.move_to_end(key)
-        return value
+        return copy.deepcopy(value)
 
 
 def put(key: Tuple, value: Dict[str, Any]) -> None:
@@ -373,7 +431,7 @@ def put(key: Tuple, value: Dict[str, Any]) -> None:
             state_backend.warn_degraded("redis_answer_cache", exc)
         return
     with _LOCK:
-        _CACHE[key] = (time.time() + _ttl_seconds(), value)
+        _CACHE[key] = (time.time() + _ttl_seconds(), copy.deepcopy(value))
         _CACHE.move_to_end(key)
         while len(_CACHE) > _max_entries():
             _CACHE.popitem(last=False)

@@ -5,7 +5,7 @@ import os
 import re
 import time
 import uuid
-from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import config
 from rag_core import embedding_provider, ja_terms, query_preprocess
@@ -21,7 +21,7 @@ from rag_core.question_types import detect_question_type
 from rag_core.reranker import rerank_chunks
 from rag_core.retrieval import QueryEmbeddingBatch, RetrievedChunk, add_neighbor_chunks, expand_parent_chunks, fusion_scale, hybrid_retrieve, keyword_index_path_for_collection, normalize_tenant_id, vector_retrieve
 from rag_core.utils import ensure_openai_client
-from rag_grounded import Chunk, build_citation_payloads, build_evidence_blocks, build_messages, drop_empty_shortage_lines, extractive_fallback, merge_by_page, rewrite_query, strip_reference_block, strip_source_tags, to_footnotes, validate_output
+from rag_grounded import CHUNK_EVIDENCE_META_KEYS, Chunk, truncate_to_evidence, build_citation_payloads, build_evidence_blocks, build_messages, drop_empty_shortage_lines, extractive_fallback, merge_by_page, rewrite_query, strip_reference_block, strip_source_tags, to_footnotes, validate_output
 from schemas import AnswerResult, CitationOut, RetrievedChunkOut
 
 logger = logging.getLogger(__name__)
@@ -628,9 +628,22 @@ def _to_grounded(chunks: Sequence[RetrievedChunk]) -> List[Chunk]:
                 source_doc=str(meta.get("source_doc") or meta.get("doc") or "unknown"),
                 source_pages=pages,
                 score=ch.score,
+                meta=_evidence_meta(meta),
             )
         )
     return out
+
+
+def _evidence_meta(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The version evidence of a retrieved row (rag_grounded.CHUNK_EVIDENCE_META_KEYS) for its citation."""
+    out = {key: str(meta[key]) for key in CHUNK_EVIDENCE_META_KEYS if key != "source_row_sha256" and meta.get(key) not in (None, "")}
+    if meta.get("_evidence_source_row_sha256"):
+        out["source_row_sha256"] = str(meta["_evidence_source_row_sha256"])
+    if meta.get("expanded_from_parent") or "_evidence_parent_generation" in meta:
+        child_generation = meta.get("index_generation")
+        parent_generation = meta.get("_evidence_parent_generation")
+        out["_context_generation"] = child_generation if child_generation and child_generation == parent_generation else None
+    return out or None
 
 
 def _page_diversity(chunks: Sequence[Chunk], max_per_page: int = 3) -> List[Chunk]:
@@ -1201,7 +1214,7 @@ def _to_retrieved_out(chunks: Sequence[RetrievedChunk]) -> List[RetrievedChunkOu
         out.append(
             RetrievedChunkOut(
                 text=ch.text,
-                metadata=meta,
+                metadata={k: v for k, v in meta.items() if k not in {"_evidence_source_row_sha256", "_evidence_parent_generation"}},
                 score=float(ch.score),
                 source_doc=str(meta.get("source_doc") or meta.get("doc") or "unknown"),
                 source_pages=[int(p) for p in pages] if pages else [],
@@ -1452,7 +1465,8 @@ def _retrieve_and_rerank(
 
     base_retrieve = _vector if staging_mode else _hybrid
     # Step 3-3: lane weights by query type (QUERY_ROUTING_ENABLED, default off); not for a vector-only staging pass.
-    route = None if staging_mode else query_route.route_for(query_type)
+    # The question lets a colloquial / paraphrase style pick its route (exact lookups and identifiers keep theirs).
+    route = None if staging_mode else query_route.route_for(query_type, question=question)
     if route is not None and stats is not None:
         stats["route"] = {"name": route["name"], "scale": dict(route["scale"])}
     if staging_mode and stats is not None:
@@ -1622,6 +1636,10 @@ def _set_final_trace(
     trace["final_used_fallback"] = used_fallback
     trace["answer_mode"] = answer_mode
     trace["selected_context_chunk_ids"] = [ch.id for ch in answer_chunks]
+    trace["cited"] = [{"chunk_id": ch.id, **(ch.meta or {})} for ch in answer_chunks]
+    generations = [(ch.meta or {}).get("_context_generation") if "_context_generation" in (ch.meta or {})
+                   else (ch.meta or {}).get("index_generation") for ch in answer_chunks]
+    trace["active_generation_id"] = generations[0] if generations and all(g and g == generations[0] for g in generations) else None
     trace["selected_context_chars"] = sum(len(ch.text) for ch in answer_chunks)
     trace["selected_context_preview"] = [ch.text[:160] for ch in answer_chunks[:3]]
     trace["citations_count"] = citations_count
@@ -1674,7 +1692,9 @@ def _build_retrieval_trace(
         )
         retrieval_q = pre.query or q
         expansions = list(pre.expansions)
-        synonym_expansions = [str(t) for step in pre.steps if step.get("step") == "synonyms" for t in step.get("added") or []]
+        # Synonym and abbreviation expansions both reach the rerank expansions.
+        synonym_expansions = [str(t) for step in pre.steps if step.get("step") in {"synonyms", "abbreviations"}
+                              for t in step.get("added") or []]
         preprocess_trace = pre.to_trace()
     rewritten = rewrite_query(retrieval_q)
     augmented = _compose_query(rewritten, intent, definition=definition)
@@ -1936,7 +1956,9 @@ def _answer_query_impl(
         )
         return result, trace
 
-    messages = build_messages(q, build_evidence_blocks(grounded), tenant_id)
+    # Validation, grounding and citations use exactly the evidence text the model is shown (blocks are truncated).
+    seen = truncate_to_evidence(grounded)
+    messages = build_messages(q, build_evidence_blocks(seen), tenant_id)
     generation_started = time.perf_counter()
     try:
         if client is None and not llm_profiles.configured():
@@ -1980,10 +2002,10 @@ def _answer_query_impl(
     generated_raw = resp.choices[0].message.content or ""
     shortage_only = _is_shortage_only_answer(generated_raw)
     raw, used_fallback = _finalize_generated_answer(
-        generated_raw, q, grounded, intent,
+        generated_raw, q, seen, intent,
         tenant_id=tenant_id, client=client if hasattr(client, "chat") else None,
     )
-    answer_chunks = grounded
+    answer_chunks = seen
     result = _build_answer_result(
         raw,
         answer_chunks,
@@ -2167,7 +2189,9 @@ def answer_query_stream(
     enforce = bool(not stream_profile.get("warnings") and stream_rule and stream_rule.get("fallback_if_failed") is True)
     buffered_chars = 0
     max_buffer_chars = 1_000_000
-    messages = build_messages(q, build_evidence_blocks(grounded), tenant_id)
+    # Validation, grounding and citations use exactly the evidence text the model is shown (blocks are truncated).
+    seen = truncate_to_evidence(grounded)
+    messages = build_messages(q, build_evidence_blocks(seen), tenant_id)
     pieces: List[str] = []
     generation_started = time.perf_counter()
     try:
@@ -2220,12 +2244,12 @@ def answer_query_stream(
     generated_raw = "".join(pieces)
     shortage_only = _is_shortage_only_answer(generated_raw)
     raw, used_fallback = _finalize_generated_answer(
-        generated_raw, q, grounded, state.intent,
+        generated_raw, q, seen, state.intent,
         tenant_id=tenant_id, client=client if hasattr(client, "chat") else None,
     )
     result = _build_answer_result(
         raw,
-        grounded,
+        seen,
         intent=state.intent,
         guard_reason="insufficient_evidence" if shortage_only else None,
         used_fallback=used_fallback,

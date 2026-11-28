@@ -5,9 +5,12 @@ import { type ApplyResult, type ChangeEntry, type CreateBody, type ScanResult, t
 import { ErrorState, Loading } from "../components/Feedback";
 import { reasonText } from "../i18n/ja";
 import { js } from "../i18n/sources";
+import { describeError } from "../lib/errors";
 import { dateTime } from "../lib/format";
 import { useLoad } from "../lib/useLoad";
 import { ConfirmDialog } from "./ingestion/parts";
+import { TenantInput } from "../components/TenantInput";
+import { useTenant } from "../lib/tenant";
 
 type Panel =
   | { type: "scan"; id: string; result: ScanResult }
@@ -30,13 +33,20 @@ function guardText(reasons: string[]): string {
 
 /** The failure of a request in words: 403 and 409 and 404 have their own text, the rest shows the server's reason. */
 function failure(e: unknown, prefix: string): string {
-  if (e instanceof ApiError) {
-    if (e.status === 403) return js.msg.forbidden;
-    if (e.status === 409) return `${js.msg.conflict}（${e.detail}）`;
-    if (e.status === 404) return js.msg.notFound;
-    return `${prefix}（${e.detail}）`;
-  }
-  return prefix;
+  return describeError(e, prefix, { 403: js.msg.forbidden, 409: (err) => `${js.msg.conflict}（${err.detail}）`, 404: js.msg.notFound });
+}
+
+/** A plan's fingerprint, shortened for reading (the whole value is in the title and is what the server compares). */
+function shortSha(sha: string | null | undefined): string {
+  return sha ? `${sha.slice(0, 12)}…` : "—";
+}
+
+/** The summary of a history entry as "key: value / …" rather than raw JSON. */
+function summaryText(summary: Record<string, unknown> | null): string {
+  if (!summary) return "";
+  return Object.entries(summary)
+    .map(([k, v]) => `${k}: ${v !== null && typeof v === "object" ? JSON.stringify(v) : String(v)}`)
+    .join(" / ");
 }
 
 function IntegrationOff({ reason }: { reason: string }) {
@@ -126,7 +136,7 @@ function PanelView({ panel, onClose }: { panel: Panel; onClose: () => void }) {
           {js.panel.appliedFiles}: {p.applied_files} ・ {js.panel.total}: {p.total_files}
         </p>
         <p className="muted">
-          {js.msg.planSha}: <code>{p.plan_sha256}</code>
+          {js.msg.planSha}: <code title={p.plan_sha256}>{shortSha(p.plan_sha256)}</code>
         </p>
         {p.guard.hold && (
           <p role="note" className="warn">
@@ -168,9 +178,9 @@ function PanelView({ panel, onClose }: { panel: Panel; onClose: () => void }) {
               <tr key={`${e.seq}-${e.run_id}`}>
                 <th scope="row">{e.seq}</th>
                 <td>{dateTime(e.at)}</td>
-                <td>{e.kind}</td>
+                <td>{js.changeKinds[e.kind] ?? e.kind}</td>
                 <td>
-                  <code>{e.summary ? JSON.stringify(e.summary) : ""}</code>
+                  <code>{summaryText(e.summary)}</code>
                 </td>
               </tr>
             ))}
@@ -205,7 +215,8 @@ function PanelView({ panel, onClose }: { panel: Panel; onClose: () => void }) {
 
 function CreateForm({ onCreate, busy }: { onCreate: (body: CreateBody) => Promise<boolean>; busy: boolean }) {
   const [id, setId] = useState("");
-  const [tenant, setTenant] = useState("default");
+  const chosenTenant = useTenant().tenant;
+  const [tenant, setTenant] = useState(chosenTenant || "default");
   const [kind, setKind] = useState("folder");
   const [path, setPath] = useState("");
   const [drive, setDrive] = useState("");
@@ -247,7 +258,7 @@ function CreateForm({ onCreate, busy }: { onCreate: (body: CreateBody) => Promis
           </label>
           <label>
             {js.form.tenant}
-            <input value={tenant} onChange={(e) => setTenant(e.target.value)} maxLength={64} />
+            <TenantInput value={tenant} onChange={(e) => setTenant(e.target.value)} />
           </label>
           <label>
             {js.form.kind}
@@ -336,7 +347,7 @@ export function SourcesPage() {
     act(js.msg.planFailed, async () => {
       const result = await sourcesApi.plan(id);
       setPanel({ type: "plan", id, plan: result });
-      return `${js.msg.planSha}: ${result.plan_sha256}`;
+      return `${js.msg.planSha}: ${shortSha(result.plan_sha256)}`;
     });
 
   const changes = (id: string) =>

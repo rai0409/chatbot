@@ -21,6 +21,16 @@ export const jaSources = {
     actions: "操作",
   },
   kinds: { folder: "フォルダ", sharepoint: "SharePoint" } as Record<string, string>,
+  // The kinds of the change history (rag_core/change_ledger.py callers); an unknown kind is shown as it is.
+  changeKinds: {
+    scan: "走査",
+    scan_failed: "走査の失敗",
+    hold: "保留",
+    approve: "承認",
+    apply: "反映",
+    apply_failed: "反映の失敗",
+    reingest: "再取込",
+  } as Record<string, string>,
   disabledSuffix: "（無効）",
   notScanned: "（未走査）",
   pendingText: (added: number, modified: number, deleted: number) => `追加 ${added} / 更新 ${modified} / 削除 ${deleted}`,

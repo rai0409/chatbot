@@ -92,12 +92,15 @@ def main() -> int:
     if "config" in sys.modules or any(name == "rag_core" or name.startswith("rag_core.") for name in sys.modules):
         raise SystemExit("isolated evaluation requires a fresh process before application modules are loaded")
     work_base = Path(args.work).resolve()
-    external = (ROOT / "data" / "external").resolve()
+    # Repository-internal work areas (runs/ and data/external/, both gitignored) are
+    # preferred; /tmp is kept only for existing callers.
     allowed = [Path("/tmp").resolve()]
-    if external.is_relative_to(ROOT.resolve()):
-        allowed.append(external)
+    for internal in (ROOT / "runs", ROOT / "data" / "external"):
+        resolved = internal.resolve()
+        if resolved.is_relative_to(ROOT.resolve()):
+            allowed.append(resolved)
     if not any(work_base == base or work_base.is_relative_to(base) for base in allowed):
-        raise SystemExit("--work must be under /tmp or data/external")
+        raise SystemExit("--work must be under runs/, data/external/ or /tmp")
     work_base.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="jagov-run-", dir=work_base))
     collection = "jagov_" + uuid.uuid4().hex

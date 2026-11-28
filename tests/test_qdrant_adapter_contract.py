@@ -6,12 +6,23 @@ from rag_core.vector_backend import QdrantCollection
 
 
 _COUNTER = iter(range(1_000_000))
+# In-memory clients of the running test, closed after it (no close left to interpreter teardown).
+_OPEN_CLIENTS = []
+
+
+@pytest.fixture(autouse=True)
+def _close_memory_clients():
+    yield
+    while _OPEN_CLIENTS:
+        _OPEN_CLIENTS.pop().close()
 
 
 def _collection(name="contract"):
     # A unique name per call: QdrantCollection caches "exists" per (client id, name), and
     # ids of garbage-collected in-memory clients are reused by later tests.
-    return QdrantCollection(f"{name}_{next(_COUNTER)}", client=qdrant_client.QdrantClient(":memory:"))
+    client = qdrant_client.QdrantClient(":memory:")
+    _OPEN_CLIENTS.append(client)
+    return QdrantCollection(f"{name}_{next(_COUNTER)}", client=client)
 
 
 def _seed(col):

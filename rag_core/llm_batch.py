@@ -243,7 +243,7 @@ def _record_usage(job: Dict[str, Any], results: Dict[str, BatchResult], now: Opt
             feature=job["feature"], tenant_id=job["tenant_id"], profile=profile.name, model=profile.model, host=profile.host,
             location=profile.location, outcome="ok" if not result.error else "error", input_tokens=result.input_tokens,
             output_tokens=result.output_tokens, error_type=result.error, cost=profile.cost(result.input_tokens, result.output_tokens) * factor,
-            now=now, batch=True,
+            now=now, batch=True, actor=job.get("caller") or {},  # who submitted the batch, not who collects it
         )
         if not result.error:
             llm_quota.note(job["tenant_id"], (job.get("caller") or {}).get("key_fingerprint"),

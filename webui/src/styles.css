@@ -20,7 +20,7 @@ table { width: 100%; border-collapse: collapse; margin: 8px 0; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 thead th { color: var(--muted); font-weight: 600; font-size: 13px; }
 button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
-button:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+button:focus-visible, textarea:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 button:disabled { opacity: .55; cursor: not-allowed; }
 textarea { width: 100%; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
 .muted { color: var(--muted); }
@@ -29,8 +29,14 @@ textarea { width: 100%; font: inherit; padding: 8px; border: 1px solid var(--lin
 .warn { background: var(--warn-bg); color: var(--warn); border-radius: 10px; padding: 8px 14px; }
 .error { background: var(--err-bg); color: var(--err); border-radius: 10px; padding: 8px 14px; }
 .notice { color: var(--ok); }
-.dialog { position: fixed; inset: auto 16px 16px auto; width: min(420px, calc(100vw - 32px)); padding: 16px; border-radius: 12px;
-          background: var(--bg); border: 1px solid var(--line); box-shadow: 0 8px 28px rgba(0, 0, 0, .25); }
+/* A modal dialog (components/Dialog.tsx, the native <dialog> opened with showModal()). */
+dialog.dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; padding: 16px 20px; border-radius: 12px;
+                background: var(--bg); color: var(--fg); border: 1px solid var(--line); box-shadow: 0 8px 28px rgba(0, 0, 0, .25); }
+dialog.dialog::backdrop { background: rgba(10, 16, 24, .55); }
+dialog.dialog h2 { margin-top: 0; }
+dialog.dialog button + button { margin-left: 8px; }
+button.danger { background: #b3261e; border-color: #b3261e; color: #fff; }
+button.danger:disabled { opacity: .55; }
 @media (max-width: 640px) { .main { padding: 12px; } th, td { padding: 6px 4px; } }
 
 /* Layout of the shell: a top bar and a side menu. */
@@ -56,3 +62,8 @@ input, select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); 
 .kpi b { display: block; font-size: 22px; } .kpi span { color: var(--muted); font-size: 13px; }
 .panel { border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin: 12px 0; background: var(--panel); }
 .empty { color: var(--muted); padding: 16px 0; }
+
+/* The tenant picker in the top bar and the error state of a screen that could not be shown. */
+.topbar .tenant-picker { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.topbar .tenant-picker input, .topbar .tenant-picker select { padding: 2px 6px; font-size: 13px; max-width: 180px; }
+.screen-error { margin: 16px 0; }
