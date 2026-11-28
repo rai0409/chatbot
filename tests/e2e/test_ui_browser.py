@@ -267,7 +267,12 @@ def test_upload_and_csrf(page, server):
     rows = page.locator("#files .file")
     expect(rows.filter(has_text="手順書.pdf").locator(".st.ok")).to_be_visible()
     expect(rows.filter(has_text="memo.txt").locator(".st.ng")).to_have_text("対応していない形式です")
-    stored = [p for p in Path(server.ingest_root).rglob("*") if p.is_file()]
+    quota_lock = Path(server.ingest_root) / "uploads" / "default" / ".quota.lock"
+    assert quota_lock.is_file()
+    stored = [
+        p for p in Path(server.ingest_root).rglob("*")
+        if p.is_file() and p != quota_lock
+    ]
     assert len(stored) == 1 and stored[0].name.endswith("_手順書.pdf")
     # The same request without the CSRF header is refused even with a valid session.
     status = page.evaluate(
